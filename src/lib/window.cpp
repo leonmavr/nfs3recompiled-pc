@@ -72,6 +72,12 @@ static WindowClass* s_class;
 
 static bool s_keyDown[256];
 
+#ifndef __ANDROID__
+/* The Return key-up of an Alt+Enter that toggled fullscreen: the game never saw
+ * its key-down, so it must not see the release either. */
+static bool s_swallowReturnUp = false;
+#endif
+
 bool Window::isKeyDown(int vkCode)
 {
     return vkCode >= 0 && vkCode < 256 && s_keyDown[vkCode];
@@ -122,16 +128,94 @@ SDL_WindowFlags requestGlContext()
 #endif
 }
 
+#ifndef __ANDROID__
+/* A desktop window's size.  The game asks for 800x600, a monitor's size in
+ * 1998; a desktop has more screen than that.  1280x720 is the smallest 16:9
+ * the Graphics menu offers (tools/apply_widescreen.py) and what a race draws
+ * at by default -- and, since Dynamic Fullscreen takes its size from the
+ * window, what a race is then drawn at too.  A display with no room for it
+ * gets it shrunk, keeping its shape.  NFS_WINDOW=WIDTHxHEIGHT picks another. */
+void desktopWindowSize(int& w, int& h)
+{
+    int width = 1280, height = 720;
+    const char* requested = SDL_getenv("NFS_WINDOW");
+    if (requested && *requested)
+    {
+        int askedW = 0, askedH = 0;
+        if (SDL_sscanf(requested, "%dx%d", &askedW, &askedH) == 2 && askedW >= 320 && askedH >= 240)
+        {
+            w = askedW;
+            h = askedH;
+            return;
+        }
+        SDL_Log("window: NFS_WINDOW=\"%s\" is not WIDTHxHEIGHT", requested);
+    }
+    if (const SDL_DisplayMode* display = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay()))
+    {
+        if (display->w > 0 && display->h > 0)
+        {
+            const int mostW = display->w * 9 / 10, mostH = display->h * 9 / 10;
+            if (width > mostW || height > mostH)
+            {
+                width = SDL_min(width, mostW) & ~3;
+                height = width * 9 / 16;
+                if (height > mostH)
+                {
+                    height = mostH & ~1;
+                    width = (height * 16 / 9) & ~3;
+                }
+            }
+        }
+    }
+    w = width;
+    h = height;
+}
+
+/* Alt+Enter: the window between the desktop and a borderless fullscreen, the
+ * fullscreen mode being the display's own.  Nothing else changes: the renderer
+ * letterboxes whatever the game draws into the new size, and Dynamic Fullscreen
+ * measures the window again when the next race opens its mode. */
+bool toggleFullscreen(SDL_Window* window)
+{
+    if (!window)
+        return false;
+    const bool fullscreen = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0;
+    if (!SDL_SetWindowFullscreen(window, !fullscreen))
+    {
+        SDL_Log("[SCREEN] fullscreen: %s", SDL_GetError());
+        return false;
+    }
+    SDL_Log("[SCREEN] %s", fullscreen ? "windowed" : "fullscreen");
+    return true;
+}
+#endif
+
 }
 
 Window::Window(const char *title, int /*x*/, int /*y*/, int w, int h)
-    :   m_window(SDL_CreateWindow(title, w, h, requestGlContext()))
+    :   m_window(nullptr)
 {
+#ifndef __ANDROID__
+    desktopWindowSize(w, h);
+#endif
+    m_window = SDL_CreateWindow(title, w, h, requestGlContext());
     if (!m_window)
     {
         SDL_LogError(SDL_LOG_CATEGORY_VIDEO, "Failed to create window: %s", SDL_GetError());
         return;
     }
+#ifndef __ANDROID__
+    SDL_SetWindowPosition(m_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    /* NFS_FULLSCREEN=1 starts on the whole screen, as Alt+Enter would. */
+    if (const char* fullscreen = SDL_getenv("NFS_FULLSCREEN"))
+    {
+        if (*fullscreen && SDL_strcmp(fullscreen, "0") != 0)
+            toggleFullscreen(m_window);
+    }
+    int openedW = 0, openedH = 0;
+    SDL_GetWindowSizeInPixels(m_window, &openedW, &openedH);
+    SDL_Log("[SCREEN] window %dx%d", openedW, openedH);
+#endif
 }
 
 Window::~Window()
@@ -220,6 +304,29 @@ x86::reg32 Window::getMessageImpl(const x86::CPU& cpu, MSG* result, Window *wind
                     {
                         SDL_Scancode scancode = event.key.scancode;
                         SDL_Keycode sym = event.key.key;
+
+#ifndef __ANDROID__
+                        /* Alt+Enter: fullscreen, as a desktop expects.  Both
+                         * halves of the press are eaten -- the game's menus
+                         * would take a Return they have no key-down for as a
+                         * confirm. */
+                        if (sym == SDLK_RETURN || sym == SDLK_KP_ENTER)
+                        {
+                            if (event.type == SDL_EVENT_KEY_DOWN && (event.key.mod & SDL_KMOD_ALT))
+                            {
+                                if (!event.key.repeat)
+                                    toggleFullscreen(SDL_GetWindowFromID(event.key.windowID));
+                                s_swallowReturnUp = true;
+                                continue;
+                            }
+                            if (s_swallowReturnUp)
+                            {
+                                if (event.type == SDL_EVENT_KEY_UP)
+                                    s_swallowReturnUp = false;
+                                continue;
+                            }
+                        }
+#endif
 
                         BOOL isWMChar = false;
 

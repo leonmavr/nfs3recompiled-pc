@@ -11,6 +11,7 @@
 #include "native_thrash.h"
 #include "dynamic_fullscreen.h"
 #include <SDL3/SDL.h>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <string>
@@ -37,6 +38,16 @@ void moviePlaying(bool playing)
 {
     s_movieSkip.store(false, std::memory_order_release);
     s_moviePlaying.store(playing, std::memory_order_release);
+#ifndef __ANDROID__
+    /* NFS_SKIP_MOVIES=1: every movie ends as it starts.  A desktop has no
+     * launcher and the intro's three films come before the first menu. */
+    if (playing)
+    {
+        const char* skip = SDL_getenv("NFS_SKIP_MOVIES");
+        if (skip && *skip && SDL_strcmp(skip, "0") != 0)
+            s_movieSkip.store(true, std::memory_order_release);
+    }
+#endif
 }
 
 bool movieSkipRequested()
@@ -1047,13 +1058,17 @@ void musicStreamFile(win32::WinApplication* app, x86::reg32 path)
  * it the first time it runs -- or none it would take, the game starts its
  * settings over (sub_472980, sub_4723f0), and the first time the front end
  * comes up it chooses what suits the machine (sub_472d10, View Distance among
- * it).  Right after that the phone's go over them: NFS3Activity.onFirstSettings
- * lays them on the block the game keeps, 0x20f0 bytes at 0x6fbb40 that are the
- * file word for word, as an import writes them into a settings file that came
- * with the data.  Returns whether it did, for the caller to have the game take
- * up the new bindings and save the file. */
+ * it).  Right after that the port's go over them: on Android NFS3Activity's
+ * onFirstSettings lays them on the block the game keeps, 0x20f0 bytes at
+ * 0x6fbb40 that are the file word for word, as an import writes them into a
+ * settings file that came with the data; on a desktop this function writes
+ * the two fields itself.  Returns whether anything changed, for the caller to
+ * have the game take up the new bindings and save the file. */
 bool firstSettings(win32::WinApplication* app)
 {
+    /* The settings block the game loads and saves. */
+    constexpr x86::reg32 kSettings = 0x6fbb40;
+
     bool laid = false;
 #ifdef __ANDROID__
     const jsize kSize = 0x20f0;
@@ -1066,7 +1081,7 @@ bool firstSettings(win32::WinApplication* app)
         jbyteArray config = method ? env->NewByteArray(kSize) : nullptr;
         if (config)
         {
-            void* block = &app->getMemory<void>(0x6fbb40);
+            void* block = &app->getMemory<void>(kSettings);
             env->SetByteArrayRegion(config, 0, kSize, static_cast<const jbyte*>(block));
             laid = env->CallBooleanMethod(activity, method, config) == JNI_TRUE && !env->ExceptionCheck();
             if (laid)
@@ -1082,9 +1097,29 @@ bool firstSettings(win32::WinApplication* app)
         env->DeleteLocalRef(activity);
     }
 #else
-    (void)app;
+    /* The two fields a new desktop game gets, at the offsets ControlProfile.java
+     * uses: Screen Size, kept as a width, and View Distance, Full to Close as
+     * 0 to 3.
+     *
+     * Dynamic Fullscreen, which is the window's own size: a race fills the
+     * window at whatever size it was opened or resized to.  View Distance at
+     * Full: a desktop has the memory and the pixels for the whole track.
+     *
+     * The HUD is left as the game arranged it.  The phone's corner layout
+     * (ControlProfile.java's hudDefaults) is laid out for a small touch
+     * screen; a monitor shows the game's own 640x480 arrangement, scaled. */
+    constexpr x86::reg32 kScreenWidth = kSettings + 0xD8;
+    constexpr x86::reg32 kViewDistance = kSettings + 0xE8;
+    app->getMemory<x86::reg32>(kScreenWidth) = nfs3hp::kDynamicFullscreenWidth;
+    app->getMemory<x86::reg32>(kViewDistance) = 0;
+    laid = true;
 #endif
+#ifdef __ANDROID__
     SDL_Log("[SETTINGS] a new player's settings: %s", laid ? "the phone's, over the game's" : "the game's own");
+#else
+    SDL_Log("[SETTINGS] a new player's settings: %s",
+            laid ? "Dynamic Fullscreen and View Distance Full, over the game's" : "the game's own");
+#endif
     return laid;
 }
 
@@ -2040,6 +2075,34 @@ void scriptTick()
     queueScreenTouch(kTouchDown, s_scriptX, s_scriptY);
     s_scriptLift = 3;
 }
+
+/* A key ends a movie, as a tap does on a phone.  The generated player's frame
+ * loop asks movieSkipRequested(), which only the Android UI thread could set
+ * before this, so a desktop's intro movies could only be watched out.  Escape,
+ * Return or Space, and only the press that starts with the movie already
+ * playing -- a key still down from the screen before skips nothing unasked.
+ *
+ * This is an event watch rather than a tick because a movie never swaps: the
+ * game's own frame loop is inside the MAD player, so nothing of the port's own
+ * runs until it ends, while an event watch runs wherever the queue is pumped. */
+bool SDLCALL movieKeyWatch(void*, SDL_Event* event)
+{
+    if (event->type != SDL_EVENT_KEY_DOWN || event->key.repeat)
+        return true;
+    switch (event->key.key)
+    {
+    case SDLK_ESCAPE:
+    case SDLK_RETURN:
+    case SDLK_KP_ENTER:
+    case SDLK_SPACE:
+        if (nfs3hp::requestMovieSkip())
+            SDL_Log("[MAD] skipped from the keyboard");
+        break;
+    default:
+        break;
+    }
+    return true;
+}
 #endif
 
 /* Which of the two on-screen layouts belongs on the screen, told to the Android
@@ -2336,6 +2399,35 @@ Uint32 SDLCALL pressEscape(void*, SDL_TimerID, Uint32)
 bool SDLCALL backgroundWatch(void* userdata, SDL_Event* event)
 {
     win32::WinApplication* app = static_cast<win32::WinApplication*>(userdata);
+#ifndef __ANDROID__
+    /* A desktop has no background, only focus: another window in front is the
+     * same thing to the game, which goes on running -- a race under it at that
+     * -- with nothing to draw to.  Same handling as a phone's background, and
+     * for the same reasons (see above): the game's time stops, and a race
+     * being driven comes back paused. */
+    static bool s_lostFocus = false;
+    if (event->type == SDL_EVENT_WINDOW_FOCUS_LOST)
+    {
+        s_lostFocus = true;
+        s_pauseOnReturn = playerDriving(app) && !nfs3hp::loadingScreenUp()
+                       && app->getMemory<x86::reg32>(0x6fd3b0) < 2;
+        win32::suspendTime(true);
+        SDL_Log("[TIME] focus lost%s", s_pauseOnReturn ? "; the race comes back paused" : "");
+    }
+    else if (event->type == SDL_EVENT_WINDOW_FOCUS_GAINED)
+    {
+        if (!s_lostFocus)
+            return true;
+        s_lostFocus = false;
+        win32::suspendTime(false);
+        SDL_Log("[TIME] focus back");
+        if (s_pauseOnReturn)
+        {
+            s_pauseOnReturn = false;
+            SDL_AddTimer(50, pressEscape, nullptr);
+        }
+    }
+#endif
     if (event->type == SDL_EVENT_WILL_ENTER_BACKGROUND)
     {
         s_pauseOnReturn = playerDriving(app) && !nfs3hp::loadingScreenUp()
@@ -2374,6 +2466,136 @@ static std::string getExeDirectory(const char* argv0)
     return "./";
 }
 
+#ifndef __ANDROID__
+/* Whether `root` holds an entry called `name`, whatever its case: the disc
+ * writes FEDATA and GAMEDATA, the game asks for fedata and gamedata, and the
+ * port's file layer matches them either way -- this only has to say whether
+ * the data is there at all. */
+static bool hasEntry(const std::string& root, const char* name)
+{
+    struct Search
+    {
+        const char* name;
+        bool found;
+    } search{ name, false };
+    SDL_EnumerateDirectory(root.c_str(), [](void* userdata, const char*, const char* entry) {
+        Search& search = *static_cast<Search*>(userdata);
+        if (SDL_strcasecmp(entry, search.name) == 0)
+        {
+            search.found = true;
+            return SDL_ENUM_SUCCESS;
+        }
+        return SDL_ENUM_CONTINUE;
+    }, &search);
+    return search.found;
+}
+
+/* Said before the game starts, because what it does instead is not much help:
+ * with no gamedata it enumerates an empty directory twice and exits without a
+ * word about why.  It is the one thing a desktop run has that a phone's does
+ * not -- a folder the player assembles -- so it is the one thing likely to be
+ * wrong.  Nothing is stopped here; the game decides that itself. */
+static void checkGameData(const char* root)
+{
+    const std::string folder(root ? root : ".");
+    const bool fedata = hasEntry(folder, "fedata");
+    const bool gamedata = hasEntry(folder, "gamedata");
+    const bool install = hasEntry(folder, "install.win");
+    if (fedata && gamedata && install)
+    {
+        SDL_Log("[DATA] %s", folder.c_str());
+        return;
+    }
+    SDL_Log("[DATA] %s is not a game folder: %s missing", folder.c_str(),
+            !fedata && !gamedata && !install ? "fedata/, gamedata/ and install.win"
+            : !fedata ? (gamedata ? "fedata/" : "fedata/")
+            : !gamedata ? "gamedata/"
+            : "install.win");
+    SDL_Log("[DATA] it holds fedata/, gamedata/, install.win and the four executables from nfs3hp/");
+    SDL_Log("[DATA] copy FEDATA and GAMEDATA from your disc there; see TECHNICAL.md, Desktop (Linux)");
+}
+
+/* Where the game keeps its settings, as the file it reads at the front end. */
+static bool settingsPath(const std::string& root, std::string& path)
+{
+    for (const char* name : { "fedata/config/config.dat", "FEDATA/CONFIG/CONFIG.DAT" })
+    {
+        path = root + name;
+        if (SDL_GetPathInfo(path.c_str(), nullptr))
+            return true;
+    }
+    return false;
+}
+
+/* A desktop with no pad attached drives on the keyboard, and says so by having
+ * the arrows bound to the car.  A settings file written by another build of the
+ * port need not: a control set for a pad binds player one's steering and pedals
+ * to the first pad's axes, which on a machine with no pad is a stick that is
+ * always centred and a pedal that is never pressed -- a car that does not move
+ * however many keys are pressed.  So the four driving entries of the two tables
+ * player one uses go back to the keys the game itself gives them, before the
+ * front end reads the file.
+ *
+ * Only when it is an axis that is bound and no pad is attached: a file that
+ * binds keys already, and a machine with a pad plugged in, are left alone.
+ *
+ * The settings are 0x20f0 bytes at 0x6fbb40 in the game, and its tables are at
+ * 0x16CC (one player) and 0x1700 (split screen's first player), thirteen
+ * dwords each, in this order: steer right, steer left, accelerate, brake, then
+ * the nine functions that stay keys.  A key's dword is 4 | scan code << 8 |
+ * character << 24; an axis's low byte is 1.  The arrows' scan codes are their
+ * Win32 virtual-key codes' -- 0x4D right, 0x4B left, 0x48 up, 0x50 down -- as
+ * ControlProfile.java writes them. */
+static void keyboardDrivingIfNoPad(const std::string& root)
+{
+    int pads = 0;
+    if (SDL_JoystickID* ids = SDL_GetJoysticks(&pads))
+        SDL_free(ids);
+    if (pads > 0)
+        return;
+
+    std::string path;
+    if (!settingsPath(root, path))
+        return;
+    size_t size = 0;
+    void* loaded = SDL_LoadFile(path.c_str(), &size);
+    if (!loaded)
+        return;
+    if (size != 0x20f0)
+    {
+        SDL_free(loaded);
+        return;
+    }
+
+    struct { x86::reg32 offset, steerRight, steerLeft, accelerate, brake; } tables[] = {
+        { 0x16CC, 0x4D04, 0x4B04, 0x4804, 0x5004 },  // one player
+        { 0x1700, 0x4D04, 0x4B04, 0x4804, 0x5004 },  // split screen, first player
+    };
+    auto* bytes = static_cast<unsigned char*>(loaded);
+    bool changed = false;
+    for (const auto& table : tables)
+    {
+        x86::reg32* entries = reinterpret_cast<x86::reg32*>(bytes + table.offset);
+        // Low byte 1 is an axis; anything else already names a key.
+        if ((entries[0] & 0xff) != 1)
+            continue;
+        entries[0] = table.steerRight;
+        entries[1] = table.steerLeft;
+        entries[2] = table.accelerate;
+        entries[3] = table.brake;
+        changed = true;
+    }
+    if (changed)
+    {
+        if (SDL_SaveFile(path.c_str(), bytes, size))
+            SDL_Log("[SETTINGS] no pad attached: the arrows steer and work the pedals (%s)", path.c_str());
+        else
+            SDL_Log("[SETTINGS] no pad attached, and %s could not be rewritten: %s", path.c_str(), SDL_GetError());
+    }
+    SDL_free(loaded);
+}
+#endif
+
 int main(int argc, char* argv[])
 {
 #ifdef __ANDROID__
@@ -2390,22 +2612,31 @@ int main(int argc, char* argv[])
     win32::File::setDataDirectory(dataPath);
     win32::File::setCdDirectory(dataPath);
 #else
+    std::string dataRoot;
     if (argc >= 3)
     {
         win32::File::setDataDirectory(argv[1]);
         win32::File::setCdDirectory(argv[2]);
+        checkGameData(argv[1]);
+        dataRoot = argv[1];
     }
     else if (argc == 2)
     {
         win32::File::setDataDirectory(argv[1]);
         win32::File::setCdDirectory(argv[1]);
+        checkGameData(argv[1]);
+        dataRoot = argv[1];
     }
     else
     {
         std::string exeDir = getExeDirectory(argv[0]);
         win32::File::setDataDirectory(exeDir.c_str());
         win32::File::setCdDirectory(exeDir.c_str());
+        checkGameData(exeDir.c_str());
+        dataRoot = exeDir;
     }
+    if (dataRoot.empty() || dataRoot.back() != '/')
+        dataRoot += '/';
 #endif
     nfs3hp::installMenuData();
     /* The game pumps its message queue from a guest thread, which is not
@@ -2465,6 +2696,9 @@ int main(int argc, char* argv[])
      * burning most of a core inside SDL with zero game code on it. */
     SDL_SetJoystickEventsEnabled(false);
     SDL_SetGamepadEventsEnabled(false);
+#ifndef __ANDROID__
+    keyboardDrivingIfNoPad(dataRoot);
+#endif
     {
         /* nfs3.exe's own version resource (StringFileInfo 040904b0,
          * FileVersion): the version a network race checks between machines. */
@@ -2563,6 +2797,9 @@ int main(int argc, char* argv[])
 #endif
         win32::glide2x::setSwapObserver(onSwap);
         SDL_AddEventWatch(backgroundWatch, static_cast<win32::WinApplication*>(&app));
+#ifndef __ANDROID__
+        SDL_AddEventWatch(movieKeyWatch, nullptr);
+#endif
 
         /* The screen sizes the Graphics menu offers.  The Voodoo2 driver's mode
          * table (0xa92018, 40 bytes a mode: width, height, depth, LFB format,

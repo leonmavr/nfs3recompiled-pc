@@ -37,3 +37,10 @@ plan.md
 # Notes handed between the assistants working on this port -- same category as
 # the above, and there is now more than one of them.
 *_HANDOFF.md
+
+# The game's own data, from the player's disc: never committed.  A desktop run
+# keeps fedata/ and gamedata/ beside the binary (see TECHNICAL.md, Desktop
+# (Linux)); the disc's packed archives are unpacked in place by
+# tools/extract_viv.py, so the extracted files are covered here too.
+/fedata/
+/gamedata/

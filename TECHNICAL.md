@@ -609,6 +609,91 @@ cd android
 The APK lands in `android/app/build/outputs/apk/debug/`. `assembleRelease`
 builds unsigned, so align and sign it yourself with `zipalign` and `apksigner`.
 
+### Desktop (Linux)
+
+CMake ≥ 3.15, a C++17 compiler, and SDL3 3.4 development files. On Debian and
+Ubuntu that is `libsdl3-dev` (universe); everything else — OpenGL — is normally
+already installed:
+
+```bash
+sudo apt install build-essential cmake ninja-build libsdl3-dev libgl-dev
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j"$(nproc)"
+```
+
+The binary is `build/nfs3hp`. It wants a display: there is no headless mode.
+If SDL3 is installed somewhere CMake does not search, point it there with
+`-DCMAKE_PREFIX_PATH=/path/to/sdl3`.
+
+A game folder is `fedata/`, `gamedata/`, `install.win` and the four executables
+from `nfs3hp/` (`nfs3.exe`, `eacsnd.dll`, `softtria.dll`, `voodoo2a.dll`). The
+executables and `install.win` are in the repository — `install.win` is the copy
+under `android/app/src/main/assets/gamefiles/` — so only the game's own data has
+to come from your disc:
+
+```bash
+mkdir -p build/game
+cp nfs3hp/* build/game/
+cp android/app/src/main/assets/gamefiles/install.win build/game/
+cp -r /path/to/disc/FEDATA /path/to/disc/GAMEDATA build/game/   # case-insensitive
+python3 tools/extract_viv.py build/game                          # unpack the cars
+./build/nfs3hp build/game
+```
+
+The disc keeps some of its data packed, and the game only asks for it unpacked:
+every car is a `BIGF` archive, `gamedata/carmodel/<car>/car.viv`, holding that
+car's model (`car.fce`), texture, text and sounds, and `fedata/art` packs its
+showcase pictures the same way. The retail installer unpacks them; a folder
+copied off the disc has only the `.viv`. Without that step the game starts with
+44 `unable to open file .../car.fec` lines and no car models —
+`tools/extract_viv.py` does what the installer did, in place, leaving the
+archives alone and never overwriting a file that is already there (`--force`
+overwrites).
+
+With two arguments the second is the CD path, for data split between an install
+directory and the disc.
+
+The window opens at 1280x720, centred, and can be resized; a display too small
+for that gets a smaller one of the same shape. `NFS_WINDOW=1600x900` picks
+another, and `NFS_FULLSCREEN=1` starts on the whole screen. **Alt+Enter**
+toggles borderless fullscreen at the display's size.
+
+Losing focus — another window in front — stops the game's clock, and a race
+being driven comes back paused, as a phone's background does: the game's own
+pause menu, opened by its own key. A network race is not paused; no one player
+may stop it.
+
+**Escape, Return or Space** ends a movie. The intro's films come before the
+first menu and a desktop had no way past them — the skip was the Android UI
+thread's to ask for. `NFS_SKIP_MOVIES=1` ends every movie as it starts.
+
+If the folder is not a game folder, the log says which part is missing before
+the game starts; the game itself only enumerates an empty directory and exits.
+
+A settings file written by another build of the port can bind player one's
+steering and pedals to the first pad's **axes**. On a desktop with no pad
+attached that is a stick which is always centred and a pedal that is never
+pressed, so the car does not move however many keys are pressed. When no pad is
+attached and those entries name an axis, the port puts the arrows back in both
+tables player one uses, before the front end reads them, and says so in the log
+(`[SETTINGS] no pad attached: the arrows steer and work the pedals`). A file
+that already binds keys, and a machine with a pad plugged in, are left alone.
+
+A new game — no `fedata/config/config.dat` of its own, which is what data
+straight off the disc looks like — gets the port's screen settings instead of
+the ones the game picks for itself: Screen Size **Dynamic Fullscreen**, which
+is the window's own size, so a race fills it at whatever size it was opened or
+resized to, and View Distance **Full**. The HUD is left as the game arranged
+it: the phone's corner layout is laid out for a touch screen, and a monitor
+shows the game's own 640x480 arrangement, scaled. The game saves the file at
+the first front end, and from then on it is the player's — delete it to get
+these back.
+
+Keys are the game's own 1998 defaults: the arrows steer and work the pedals,
+Escape is back, Enter confirms; the mouse is the game's pointer, races included.
+A pad is `NFS Gamepad 1` / `2` with X steering and Y as both pedals, its buttons
+sending keys chosen with `NFS_GAMEPAD<n>_<BUTTON>` (see Environment variables).
+
 ### Desktop (Windows)
 
 Uses the prebuilt SDL3 in `sdl3/`. CMake ≥ 3.15 and a C++17 compiler:
@@ -648,6 +733,8 @@ from the phone; the rest matter for a desktop run.
 | Variable | Default | Description |
 |---|---|---|
 | `NFS_FPS_CAP` | `30` | Frame rate the renderer paces presents to. The game's logic is tuned for 30 Hz. |
+| `NFS_WINDOW` | unset | Desktop only: the window's size as `WIDTHxHEIGHT`, e.g. `1600x900`. Unset, 1280x720 fitted to the display. |
+| `NFS_FULLSCREEN` | unset | Desktop only: `1` starts fullscreen, as Alt+Enter would. |
 | `NFS_GAMMA`, `NFS_BRIGHTNESS`, `NFS_CONTRAST` | `1.0` | Applied to the finished frame in the final blit, so menus and movies are covered as well as a race. |
 | `NFS_ORIENTATION` | unset | `auto` allows both landscape directions; anything else pins one. Must be set before `SDL_Init`. |
 | `NFS_CAR_DETAIL_FULL` | on | With Car Detail at High, every car keeps its detailed model and the player's texture size out to the draw distance, in every view, and the limit on how many are drawn at once is lifted. `0` restores the original. |
