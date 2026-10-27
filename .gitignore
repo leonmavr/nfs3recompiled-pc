@@ -44,3 +44,6 @@ plan.md
 # tools/extract_viv.py, so the extracted files are covered here too.
 /fedata/
 /gamedata/
+
+# Debug build (RelWithDebInfo, -g) for gdb work on the generated code.
+build-dbg/
