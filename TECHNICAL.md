@@ -733,6 +733,23 @@ lookup that would read through the null the missing archive left behind, and
 the port's C runtime answers a null `FILE*` with an error instead of a
 segfault (`src/nfs3hp/native_watcom.cpp`).
 
+**Fifty cars is the ceiling**, and it is not the one it looks like. The table
+`sub_439a50` memoises the loaded cars in — 50 pointers at `0x5f3c00`, with the
+car count in the dword straight after it — is now the port's, 256 entries in
+host memory (`src/nfs3hp/native_car_slots.cpp`, `tools/apply_car_slots.py`),
+because that one could not be made longer where it lies. It was not the limit:
+with it raised, 50 cars still load and the 51st crashes. The ceiling is a block
+of per-car tables the scan fills as it walks `carmodel` — roughly
+`0x554f00`–`0x555300`, about 650 references across nine of the generated files
+— and the 51st car writes past the end of them, so the next path it builds is
+made of whatever it landed on (the run that crashed asked for
+`carmodel/0008/car.viv`, which is not a folder anyone made). Lifting that means
+relocating and enlarging the whole block, not raising one bound.
+
+So the retail 23 cars plus 27 more can be added; past 50 the game has to be
+taken apart further. The `car_slots` work stands on its own as the first of
+those limits removed, and changes nothing below 50.
+
 ### Desktop (Windows)
 
 Uses the prebuilt SDL3 in `sdl3/`. CMake ≥ 3.15 and a C++17 compiler:

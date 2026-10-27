@@ -1,8 +1,12 @@
 #include "nfs3hp.h"
+#include "car_slots.h"
 #include <lib/thread.h>
 
 namespace nfs3hp
 {
+// Port (tools/apply_car_slots.py): defined in native_car_slots.cpp.
+x86::reg32 carSlotRecord(x86::reg32 index);
+void setCarSlotRecord(x86::reg32 index, x86::reg32 record);
 // Port (tools/apply_native_frontend.py): defined in native_frontend_options.cpp.
 bool audioSpeechMoved(win32::WinApplication* app, x86::CPU& cpu);
 // Port (tools/apply_native_frontend.py): defined in native_frontend_options.cpp.
@@ -11333,7 +11337,7 @@ void Application::sub_439a50(WinApplication* __restrict app, x86::CPU& cpu_)
     cpu.edx = cpu.eax;
     // 00439a5b  31c9                   -xor ecx, ecx
     cpu.ecx ^= x86::reg32(x86::sreg32(cpu.ecx));
-    // 00439a5d  83f831                 +cmp eax, 0x31
+    // 00439a5d  83f831                 +cmp eax, kCarSlots - 1
     {
         x86::reg32 tmp1 = cpu.eax;
         x86::reg32 tmp2 = x86::reg32(x86::sreg32(49 /*0x31*/));
@@ -11358,7 +11362,7 @@ L_0x00439a66:
     // 00439a66  c1e002                 -shl eax, 2
     cpu.eax <<= 2 /*0x2*/ % 32;
     // 00439a69  8b98003c5f00           -mov ebx, dword ptr [eax + 0x5f3c00]
-    cpu.ebx = app->getMemory<x86::reg32>(cpu.eax + x86::reg32(6241280) /* 0x5f3c00 */);
+    cpu.ebx = carSlotRecord(cpu.eax >> 2);
     // 00439a6f  85db                   +test ebx, ebx
     cpu.clear_co();
     cpu.set_szp(static_cast<x86::reg32>(cpu.ebx & cpu.ebx));
@@ -11439,7 +11443,7 @@ L_0x00439a84:
     goto L_0x00439a84;
 L_0x00439a97:
     // 00439a97  890495003c5f00         -mov dword ptr [edx*4 + 0x5f3c00], eax
-    app->getMemory<x86::reg32>(x86::reg32(6241280) /* 0x5f3c00 */ + cpu.edx * 4) = cpu.eax;
+    setCarSlotRecord(cpu.edx, cpu.eax);
 L_0x00439a9e:
     // 00439a9e  89ec                   -mov esp, ebp
     cpu.esp = cpu.ebp;
