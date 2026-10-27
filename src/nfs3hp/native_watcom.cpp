@@ -3791,12 +3791,33 @@ void flush(win32::WinApplication* app, x86::CPU& cpu)
     returns(cpu, result);
 }
 
+/* A stream that failed to open is a null FILE*, and the game does not always
+ * check before using one.  A car folder with no car.viv did exactly that: the
+ * archive's fopen answered NULL, and the game went on to seek, read and close a
+ * stream that was never there, which crashed the port.  The C runtime answers a
+ * null stream with an error instead -- 0 items for a read or a write, -1 for a
+ * seek, a tell or a close -- which is what a program holding one has to be able
+ * to survive.  Returns whether it was one. */
+bool nullStream(win32::WinApplication* app, x86::CPU& cpu, x86::reg32 fp)
+{
+    if (fp)
+        return false;
+    setThreadWord(app, cpu, kErrno, kEINVAL);
+    return true;
+}
+
 /* fputc (clib/streamio/c/fputc.c, 0x5097b0): eax's character to the stream
  * at edx. */
 void fputc(win32::WinApplication* app, x86::CPU& cpu)
 {
     const Kept kept(cpu);
     x86::reg32 result;
+    if (nullStream(app, cpu, cpu.edx))
+    {
+        kept.back(cpu);
+        returns(cpu, 0xffffffff);
+        return;
+    }
     if (!putChar(app, cpu, cpu.eax, cpu.edx, result))
         return;
     kept.back(cpu);
@@ -3821,6 +3842,12 @@ void fwrite(win32::WinApplication* app, x86::CPU& cpu)
 {
     const Kept kept(cpu);
     x86::reg32 result;
+    if (nullStream(app, cpu, cpu.ecx))
+    {
+        kept.back(cpu);
+        returns(cpu, 0);
+        return;
+    }
     if (!writeStream(app, cpu, cpu.eax, cpu.edx, cpu.ebx, cpu.ecx, result))
         return;
     kept.back(cpu);
@@ -3909,6 +3936,12 @@ void fgetc(win32::WinApplication* app, x86::CPU& cpu)
 {
     const Kept kept(cpu);
     x86::reg32 result;
+    if (nullStream(app, cpu, cpu.eax))
+    {
+        kept.back(cpu);
+        returns(cpu, 0xffffffff);
+        return;
+    }
     if (!getChar(app, cpu, cpu.eax, result))
         return;
     kept.back(cpu);
@@ -3921,6 +3954,12 @@ void fread(win32::WinApplication* app, x86::CPU& cpu)
 {
     const Kept kept(cpu);
     x86::reg32 result;
+    if (nullStream(app, cpu, cpu.ecx))
+    {
+        kept.back(cpu);
+        returns(cpu, 0);
+        return;
+    }
     if (!readStream(app, cpu, cpu.eax, cpu.edx, cpu.ebx, cpu.ecx, result))
         return;
     kept.back(cpu);
@@ -3933,6 +3972,12 @@ void fgets(win32::WinApplication* app, x86::CPU& cpu)
 {
     const Kept kept(cpu);
     x86::reg32 result;
+    if (nullStream(app, cpu, cpu.ebx))
+    {
+        kept.back(cpu);
+        returns(cpu, 0);
+        return;
+    }
     if (!getString(app, cpu, cpu.eax, cpu.edx, cpu.ebx, result))
         return;
     kept.back(cpu);
@@ -3945,6 +3990,12 @@ void fseek(win32::WinApplication* app, x86::CPU& cpu)
 {
     const Kept kept(cpu);
     x86::reg32 result;
+    if (nullStream(app, cpu, cpu.eax))
+    {
+        kept.back(cpu);
+        returns(cpu, 0xffffffff);
+        return;
+    }
     if (!seekStream(app, cpu, cpu.eax, cpu.edx, cpu.ebx, result))
         return;
     kept.back(cpu);
@@ -3957,6 +4008,12 @@ void ftell(win32::WinApplication* app, x86::CPU& cpu)
 {
     const Kept kept(cpu);
     x86::reg32 result;
+    if (nullStream(app, cpu, cpu.eax))
+    {
+        kept.back(cpu);
+        returns(cpu, 0xffffffff);
+        return;
+    }
     if (!tellStream(app, cpu, cpu.eax, result))
         return;
     kept.back(cpu);
@@ -4142,6 +4199,12 @@ void fclose(win32::WinApplication* app, x86::CPU& cpu)
 {
     const Kept kept(cpu);
     x86::reg32 result;
+    if (nullStream(app, cpu, cpu.eax))
+    {
+        kept.back(cpu);
+        returns(cpu, 0xffffffff);
+        return;
+    }
     if (!closeStream(app, cpu, cpu.eax, result))
         return;
     kept.back(cpu);

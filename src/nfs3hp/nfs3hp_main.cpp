@@ -2495,6 +2495,8 @@ static bool hasEntry(const std::string& root, const char* name)
  * word about why.  It is the one thing a desktop run has that a phone's does
  * not -- a folder the player assembles -- so it is the one thing likely to be
  * wrong.  Nothing is stopped here; the game decides that itself. */
+static void checkCarArchives(std::string folder);
+
 static void checkGameData(const char* root)
 {
     const std::string folder(root ? root : ".");
@@ -2504,6 +2506,7 @@ static void checkGameData(const char* root)
     if (fedata && gamedata && install)
     {
         SDL_Log("[DATA] %s", folder.c_str());
+        checkCarArchives(folder);
         return;
     }
     SDL_Log("[DATA] %s is not a game folder: %s missing", folder.c_str(),
@@ -2513,6 +2516,44 @@ static void checkGameData(const char* root)
             : "install.win");
     SDL_Log("[DATA] it holds fedata/, gamedata/, install.win and the four executables from nfs3hp/");
     SDL_Log("[DATA] copy FEDATA and GAMEDATA from your disc there; see TECHNICAL.md, Desktop (Linux)");
+}
+
+/* Every car the game finds is loaded from its own archive, `<folder>/car.viv`,
+ * and a folder without one is a car that cannot load: the game would read
+ * through the null it got for the missing archive (tools/apply_car_archive_guard.py
+ * is what keeps that from crashing).  Naming the folders here is what turns
+ * "a car I added is not in the list" into something to fix, so it is said
+ * before the game starts rather than left to be worked out. */
+static void checkCarArchives(std::string folder)
+{
+    if (folder.empty() || folder.back() != '/')
+        folder += '/';
+    const std::string carmodel = folder + "gamedata/carmodel/";
+    std::vector<std::string> missing;
+    SDL_EnumerateDirectory(carmodel.c_str(), [](void* userdata, const char* dir, const char* entry) {
+        auto& missing = *static_cast<std::vector<std::string>*>(userdata);
+        if (entry[0] == '.')
+            return SDL_ENUM_CONTINUE;
+        const std::string car = std::string(dir) + entry;
+        SDL_PathInfo info;
+        if (!SDL_GetPathInfo(car.c_str(), &info) || info.type != SDL_PATHTYPE_DIRECTORY)
+            return SDL_ENUM_CONTINUE;
+        /* traffic is not a car: it holds one folder per body, each with its
+         * own archive. */
+        if (SDL_strcasecmp(entry, "traffic") == 0)
+            return SDL_ENUM_CONTINUE;
+        const std::string archive = car + "/car.viv";
+        if (!SDL_GetPathInfo(archive.c_str(), nullptr))
+            missing.push_back(entry);
+        return SDL_ENUM_CONTINUE;
+    }, &missing);
+    if (missing.empty())
+        return;
+    SDL_Log("[DATA] %zu car folder%s without car.viv, and so not loaded:", missing.size(),
+            missing.size() == 1 ? "" : "s");
+    for (const std::string& car : missing)
+        SDL_Log("[DATA]   gamedata/carmodel/%s", car.c_str());
+    SDL_Log("[DATA] every car is loaded from its <folder>/car.viv; tools/extract_viv.py unpacks the disc's");
 }
 
 /* Where the game keeps its settings, as the file it reads at the front end. */

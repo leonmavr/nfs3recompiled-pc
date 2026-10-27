@@ -776,6 +776,10 @@ if __name__ == '__main__':
     from tools.apply_hide_download import apply as apply_hide_download
     apply_hide_download(Path(__file__).resolve().parent)
 
+    # A car folder with no car.viv: skipped rather than crashed on.
+    from tools.apply_car_archive_guard import apply as apply_car_archive_guard
+    apply_car_archive_guard(Path(__file__).resolve().parent)
+
     # RaceNet, Modem and Serial: off the connection screen, EA's server being
     # gone and a phone having neither of the others.
     from tools.apply_hide_connections import apply as apply_hide_connections

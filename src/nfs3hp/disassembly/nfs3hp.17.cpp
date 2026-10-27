@@ -10191,6 +10191,11 @@ void Application::sub_4679f0(WinApplication* __restrict app, x86::CPU& cpu_)
   x86::Local cpu(cpu_);
   NFS2_USE(cpu);
   NFS2_USE(app);
+  /* Port (tools/apply_car_archive_guard.py): no archive for this car -- the
+   * folder it came from has no car.viv.  Answer "not found" rather than read
+   * through a null table. */
+  if (!cpu.eax)
+    return;
     // 004679f0  56                     -push esi
     app->getMemory<x86::reg32>(cpu.esp-4) = cpu.esi;
     cpu.esp -= 4;

@@ -694,6 +694,45 @@ Escape is back, Enter confirms; the mouse is the game's pointer, races included.
 A pad is `NFS Gamepad 1` / `2` with X steering and Y as both pedals, its buttons
 sending keys chosen with `NFS_GAMEPAD<n>_<BUTTON>` (see Environment variables).
 
+### Adding a car
+
+The game does not carry a list of car names: it lists `gamedata/carmodel` and
+loads every folder it finds, so a new car is a new folder — not a replaced one.
+Three things make a folder a car.
+
+- **`car.viv`**, the car's archive, and it is the one file that matters: the
+  model (`car.fce`), the texture (`fedata.fsh`), the text (`fedata.eng` and the
+  other languages), the sounds and the dashboard are all read from inside it.
+  The loose copies `tools/extract_viv.py` unpacks are for the game's later
+  lookups, not for loading. A folder without a `car.viv` is not loaded, and the
+  log says so before the game starts.
+- **The ID in `fedata.eng`**, one byte at offset `0x18` of the archive's
+  `fedata.eng` — the retail cars use 2 to 49, all distinct. The game compares
+  this byte across every car as it starts and refuses to run on a repeat:
+
+      Duplicate cars found in carmodel folder!
+
+  A copied car repeats it. Change this byte, and the copy becomes a car of its
+  own. `carp.txt`'s `Serial Number` is a different field and is not the one
+  checked. The value is compared as a byte, and the game addresses cars by it,
+  so keep it within 0 to 49 and unused: the slot table it indexes has 50
+  entries (`sub_439a50`, which rejects anything past `0x31`).
+- **A name.** The display name is in the same `fedata.eng`; two cars may share
+  one, as the game's own (Bonus) cars do, but the car list is sorted by it.
+
+Then the car is in the list, selectable and drivable — verified by adding a
+copy of the Corvette under a new folder with its ID changed to 20 and its name
+to `ZZZ TESTER`, and finding it in the Player Car screen. Showcase art
+(`fedata/art/showcase/h<car>.qfs`) and the compare picture
+(`fedata/art/compare.fsh`) are cosmetic: a car without them still appears, with
+whatever the game draws in their place.
+
+A folder that is not a car — a half-made one, or a stray copy — is skipped
+rather than crashing the game: `tools/apply_car_archive_guard.py` stops the
+lookup that would read through the null the missing archive left behind, and
+the port's C runtime answers a null `FILE*` with an error instead of a
+segfault (`src/nfs3hp/native_watcom.cpp`).
+
 ### Desktop (Windows)
 
 Uses the prebuilt SDL3 in `sdl3/`. CMake ≥ 3.15 and a C++17 compiler:
