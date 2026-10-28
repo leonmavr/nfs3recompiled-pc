@@ -733,6 +733,24 @@ lookup that would read through the null the missing archive left behind, and
 the port's C runtime answers a null `FILE*` with an error instead of a
 segfault (`src/nfs3hp/native_watcom.cpp`).
 
+An archive that is there but incomplete is the same kind of thing. With an
+entry taken out of `car.viv` the game hands the model builder a pointer that is
+not a model — FM50 without its `fedata.fsh` arrives with a header a byte along
+(0x45000 triangles instead of its 1104), the heap is asked for 37 MB, the heap
+answers nothing, and the records are written through the null. `modelWalkable`
+in `src/nfs3hp/native_loading.cpp` checks the header against the block it came
+from and the part ranges against its own counts before anything is read, and a
+model that fails is a car with no body instead of a crash:
+
+    [FCE] a car's model is not an FCE at 04aa3a90: no body for it (is its car.viv complete?)
+
+An archive with no `car.fce` in it at all is named before the game starts
+(`checkCarArchives`, `src/nfs3hp/nfs3hp_main.cpp`), the way a folder with no
+archive is:
+
+    [DATA] 1 car archive without a model (car.fce), and so drawn with no body:
+    [DATA]   gamedata/carmodel/<car>/car.viv
+
 **Up to 256 cars, and it used to be fifty.** Three separate limits stood in
 the way, all of them "fifty because the retail game has 23":
 

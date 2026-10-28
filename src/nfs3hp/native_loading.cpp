@@ -543,6 +543,59 @@ void alpha565Native(win32::WinApplication* app, x86::CPU& cpu)
  * FCE
  * ------------------------------------------------------------------------ */
 
+/* Port: is the model this was handed one the record builder can walk?  The game
+ * asks for a car's art when it draws it, and hands over the pointer its archive
+ * reader left -- which is not an FCE when the art is incomplete.  FM50 with its
+ * texture taken out of car.viv arrives here with a header a byte along: 0x45000
+ * triangles and 0x33500 vertices in place of its 1104 and 821, the heap asked
+ * for 37 MB, the heap answering nothing, and the record loop writing through
+ * the null.  Checked the way an FCE can be checked without its file -- every
+ * table the header names, and every part's range, inside the guest block the
+ * model was loaded into, and counts a model can have -- so that a model that is
+ * not one is skipped and named instead. */
+bool modelWalkable(win32::WinApplication* app, x86::reg32 fce)
+{
+    const x86::reg8* m = guest(app);
+    const std::pair<x86::reg32, x86::reg32> block = win32::MemMap::blockOf(fce);
+    if (!fce || block.second == 0)
+        return false;
+    const x86::reg32 end = block.first + block.second;
+    if (fce > end || end - fce < 0x1f04)
+        return false;
+    const x86::reg32 triangles = read32(m, fce + 4);
+    const x86::reg32 vertices = read32(m, fce + 8);
+    const x86::reg32 parts = read32(m, fce + 0xf8);
+    const x86::reg32 data = fce + 0x1f04;
+    const x86::reg32 room = end - data;
+    const auto tableFits = [&](x86::reg32 at, x86::reg32 stride, x86::reg32 count) {
+        const x86::reg32 offset = read32(m, fce + at);
+        return offset <= room && count <= (room - offset) / stride;
+    };
+    /* The tables the record builder reads, and the records it builds from them:
+     * both have to be inside the block the model came from, because the counts
+     * are read as sizes and a header a byte out asks the heap for a thousand
+     * times the model. */
+    if (!tableFits(0x18, 0x38, triangles)      // the triangles
+        || !tableFits(0x1c, 0x20, vertices)    // the records the renderer works in
+        || triangles > room / 0x84             // the records...
+        || vertices > room / 4)                // ...and a word each vertex
+        return false;
+    if (x86::sreg32(parts) <= 0)  // no parts to walk, as the generated loop finds
+        return true;
+    if (parts > 64)  // the header holds 64 part slots
+        return false;
+    for (x86::reg32 part = 0; part != parts; ++part)
+    {
+        const x86::reg32 firstVertex = read32(m, fce + 0x3fc + part * 4);
+        const x86::reg32 firstTriangle = read32(m, fce + 0x5fc + part * 4);
+        if (firstVertex > vertices || read32(m, fce + 0x4fc + part * 4) > vertices - firstVertex)
+            return false;
+        if (firstTriangle > triangles || read32(m, fce + 0x6fc + part * 4) > triangles - firstTriangle)
+            return false;
+    }
+    return true;
+}
+
 /* sub_49cfa0: an NFS3 FCE in memory at eax turned into the game's polygon
  * records.  The header is OpenNFS's FCE::NFS3::HEADER, 0x1f04 bytes:
  *   +0x04 triangles, +0x08 vertices, +0x18 the triangle table, +0x1c the
@@ -559,10 +612,26 @@ void fceRecordsNative(win32::WinApplication* app, x86::CPU& cpu)
     const Saved saved(cpu);
     const x86::reg32 entryEsp = cpu.esp;
     const x86::reg32 fce = cpu.eax;
+    /* Port (modelWalkable): no body for this car rather than a crash.  Answer 0
+     * as the caller takes it -- the car's records stay unbuilt, so nothing is
+     * drawn for it -- and say which car, once. */
+    if (!modelWalkable(app, fce))
+    {
+        static x86::reg32 said = 0;
+        if (said != fce)
+        {
+            said = fce;
+            SDL_Log("[FCE] a car's model is not an FCE at %08x: no body for it "
+                    "(is its car.viv complete?)", unsigned(fce));
+        }
+        saved.restore(cpu);
+        cpu.eax = 0;
+        ret(cpu);
+        return;
+    }
     const x86::reg32 data = fce + 0x1f04;
     const x86::reg32 frame = entryEsp - 0x18;  // ebp after six pushes
     const x86::reg32 size = read32(m, fce + 4) * 0x84 + read32(m, fce + 8) * 4;
-
     write32(m, frame - 0x10, data);
     cpu.ebp = frame;
     cpu.esp = frame - 0x14;

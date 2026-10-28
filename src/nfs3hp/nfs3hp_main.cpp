@@ -2518,10 +2518,46 @@ static void checkGameData(const char* root)
     SDL_Log("[DATA] copy FEDATA and GAMEDATA from your disc there; see TECHNICAL.md, Desktop (Linux)");
 }
 
+/* The entry names a car's archive holds.  The layout is the game's BIGF, the
+ * same one tools/extract_viv.py and tools/car_perf.py read: "BIGF", its size,
+ * then the entry count and each entry's offset and size big-endian before a
+ * NUL-terminated name.  False when the file cannot be read, which the caller
+ * takes as "nothing known" rather than "nothing there". */
+static bool archiveEntries(const std::string& path, std::vector<std::string>& names)
+{
+    SDL_IOStream* file = SDL_IOFromFile(path.c_str(), "rb");
+    if (!file)
+        return false;
+    unsigned char header[12];
+    const size_t read = SDL_ReadIO(file, header, sizeof header);
+    bool ok = read == sizeof header && std::memcmp(header, "BIGF", 4) == 0;
+    const unsigned count = ok ? (unsigned(header[8]) << 24 | unsigned(header[9]) << 16
+                              | unsigned(header[10]) << 8 | unsigned(header[11])) : 0;
+    for (unsigned i = 0; ok && i != count; ++i)
+    {
+        unsigned char entry[8];
+        if (SDL_ReadIO(file, entry, sizeof entry) != sizeof entry)
+        {
+            ok = false;
+            break;
+        }
+        std::string name;
+        char c;
+        while (SDL_ReadIO(file, &c, 1) == 1 && c != '\0')
+            name += c;
+        names.push_back(name);
+    }
+    SDL_CloseIO(file);
+    return ok;
+}
+
 /* Every car the game finds is loaded from its own archive, `<folder>/car.viv`,
  * and a folder without one is a car that cannot load: the game would read
  * through the null it got for the missing archive (tools/apply_car_archive_guard.py
- * is what keeps that from crashing).  Naming the folders here is what turns
+ * is what keeps that from crashing).  So is an archive without `car.fce` in it:
+ * every car and every traffic body keeps its model there, and one that does not
+ * is drawn with no body at all (native_loading.cpp, modelWalkable, says when it
+ * happens; this says which folder).  Naming the folders here is what turns
  * "a car I added is not in the list" into something to fix, so it is said
  * before the game starts rather than left to be worked out. */
 static void checkCarArchives(std::string folder)
@@ -2529,9 +2565,13 @@ static void checkCarArchives(std::string folder)
     if (folder.empty() || folder.back() != '/')
         folder += '/';
     const std::string carmodel = folder + "gamedata/carmodel/";
-    std::vector<std::string> missing;
+    struct Found
+    {
+        std::vector<std::string> noArchive;
+        std::vector<std::string> noModel;
+    } found;
     SDL_EnumerateDirectory(carmodel.c_str(), [](void* userdata, const char* dir, const char* entry) {
-        auto& missing = *static_cast<std::vector<std::string>*>(userdata);
+        Found& found = *static_cast<Found*>(userdata);
         if (entry[0] == '.')
             return SDL_ENUM_CONTINUE;
         const std::string car = std::string(dir) + entry;
@@ -2544,16 +2584,35 @@ static void checkCarArchives(std::string folder)
             return SDL_ENUM_CONTINUE;
         const std::string archive = car + "/car.viv";
         if (!SDL_GetPathInfo(archive.c_str(), nullptr))
-            missing.push_back(entry);
+        {
+            found.noArchive.push_back(entry);
+            return SDL_ENUM_CONTINUE;
+        }
+        std::vector<std::string> names;
+        if (!archiveEntries(archive, names))
+            return SDL_ENUM_CONTINUE;
+        for (const std::string& name : names)
+            if (SDL_strcasecmp(name.c_str(), "car.fce") == 0)
+                return SDL_ENUM_CONTINUE;
+        found.noModel.push_back(entry);
         return SDL_ENUM_CONTINUE;
-    }, &missing);
-    if (missing.empty())
-        return;
-    SDL_Log("[DATA] %zu car folder%s without car.viv, and so not loaded:", missing.size(),
-            missing.size() == 1 ? "" : "s");
-    for (const std::string& car : missing)
-        SDL_Log("[DATA]   gamedata/carmodel/%s", car.c_str());
-    SDL_Log("[DATA] every car is loaded from its <folder>/car.viv; tools/extract_viv.py unpacks the disc's");
+    }, &found);
+    if (!found.noArchive.empty())
+    {
+        SDL_Log("[DATA] %zu car folder%s without car.viv, and so not loaded:", found.noArchive.size(),
+                found.noArchive.size() == 1 ? "" : "s");
+        for (const std::string& car : found.noArchive)
+            SDL_Log("[DATA]   gamedata/carmodel/%s", car.c_str());
+        SDL_Log("[DATA] every car is loaded from its <folder>/car.viv; tools/extract_viv.py unpacks the disc's");
+    }
+    if (!found.noModel.empty())
+    {
+        SDL_Log("[DATA] %zu car archive%s without a model (car.fce), and so drawn with no body:",
+                found.noModel.size(), found.noModel.size() == 1 ? "" : "s");
+        for (const std::string& car : found.noModel)
+            SDL_Log("[DATA]   gamedata/carmodel/%s/car.viv", car.c_str());
+        SDL_Log("[DATA] a car.viv holds carp.txt, car.fce and the car's art; tools/extract_viv.py unpacks the disc's");
+    }
 }
 
 /* Where the game keeps its settings, as the file it reads at the front end. */

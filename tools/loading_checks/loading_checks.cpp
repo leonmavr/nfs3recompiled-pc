@@ -101,6 +101,15 @@ void MemMap::usedRanges(std::vector<std::pair<x86::reg32, x86::reg32>>& ranges)
     ranges.assign(1, {0, kMemory});
 }
 
+/* The whole of this harness's memory is one block: what the game's heap hands
+ * out here is an offset into it (native_loading.cpp's modelWalkable asks). */
+std::pair<x86::reg32, x86::reg32> MemMap::blockOf(x86::reg32 address)
+{
+    if (address >= kMemory)
+        return std::make_pair(x86::reg32(0), x86::reg32(0));
+    return std::make_pair(x86::reg32(0), kMemory);
+}
+
 }
 
 namespace nfs3hp
