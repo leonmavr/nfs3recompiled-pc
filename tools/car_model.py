@@ -34,11 +34,15 @@ another car's body -- its `car.fce`, and with `--textures` its paint textures,
 archive and beside it, which is how a car gets a body nobody has modelled for
 it yet: the physics stay yours, the shell is someone else's.
 
-Writing a *brand new* FCE -- converting an .obj into one -- is not in here.  The
-tables are all known, but the three reserved areas are not, and the game reads
-them (the port's own loader zeroes 32 bytes a vertex in reserved #1 as it turns
-the file into its polygon records).  A converter would have to work out what
-they hold first; `info --reserved` prints what a retail file puts there.
+Writing a *brand new* FCE -- converting an .obj into one -- is not in here, but
+nothing in the format stands in the way.  Everything the game draws from is in
+the tables above; the three reserved areas are stale scratch.  #1 is the 32
+bytes a vertex the renderer works in (sub_4bf4c0 writes x, y, z and 1/z over it
+and sub_49cfa0 zeroes its +0x14), so a retail file holds the *screen*
+coordinates of the last frame that drew the car; #2 and #3 are 12 bytes a
+vertex nothing reads.  Zeroing all three in a retail `car.fce` still renders and
+races without a flaw, so a converter can leave them zero.  `info --reserved`
+prints what a retail file puts there.
 """
 import argparse
 import json

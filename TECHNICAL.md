@@ -907,14 +907,22 @@ shell is the donor's. Two things to expect: the wheels sit where the *donor*
 had them (their origins are in its mesh, not in `carp.txt`), and the dashboard
 and the showcase picture keep their own shapes unless you swap those too.
 
-Turning an `.obj` **into** an `.fce` is the one thing not here, and it is a
-project rather than a flag: every table above is known, but the three reserved
-areas at header `+0x1c`/`+0x20`/`+0x24` are not — 32 bytes a vertex, 12 bytes a
-vertex, 12 bytes a vertex, holding floats nobody has documented, and the game
-reads them (the port's own loader walks reserved #1 as it builds its polygon
-records, and zeroes a field in it). `info --reserved` prints what a retail file
-puts there; a converter has to work out what the game wants before it can write
-one.
+Turning an `.obj` **into** an `.fce` is the one thing not here, and nothing in
+the format stands in its way: the tables above are everything the game draws
+from. The three reserved areas at header `+0x1c`/`+0x20`/`+0x24` look like the
+obstacle — 32 bytes a vertex, then 12 and 12 — but they are scratch. Reserved
+#1 is the record the renderer transforms a vertex in: `sub_4bf4c0` writes x, y,
+z and 1/z over it every frame, `sub_49cfa0` zeroes its `+0x14`, and a retail
+file therefore holds the *screen* coordinates of whatever frame last drew the
+car (FM50's start 393.3, 237.1 — not a vertex of its mesh). Zeroing all three
+areas in a retail `car.fce`, in the loose file and in `car.viv`, still renders
+the car in the showroom and races it unchanged: the mesh is the vertex,
+normal, triangle and part tables alone. A converter can leave the areas zero
+(`info --reserved` prints what a retail file puts there for reference), and
+what is left is bookkeeping — splitting the mesh into named parts with origins,
+one vertex and triangle range each, four levels of detail, per-corner (u, v)
+into a texture page, the two 16-colour palettes, and half the model's size in
+the header.
 
 ### Desktop (Windows)
 
