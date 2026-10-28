@@ -784,6 +784,10 @@ if __name__ == '__main__':
     from tools.apply_car_slots import apply as apply_car_slots
     apply_car_slots(Path(__file__).resolve().parent)
 
+    # The per-car tables: 260 slots each, in a section of the port's own.
+    from tools.apply_car_arrays import apply as apply_car_arrays
+    apply_car_arrays(Path(__file__).resolve().parent)
+
     # RaceNet, Modem and Serial: off the connection screen, EA's server being
     # gone and a phone having neither of the others.
     from tools.apply_hide_connections import apply as apply_hide_connections

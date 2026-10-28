@@ -5,9 +5,9 @@
  * found, and a missing one is looked up by walking the loaded cars in order.
  * The table itself is 50 pointers at 0x5f3c00, and the car count is kept at
  * 0x5f3cc8, the next dword -- so a longer table in place would have run into
- * it.  These two hold it instead: same pointers, same order, 256 of them, and
- * tools/apply_car_slots.py has sub_439a50 call them where it used to read and
- * write guest memory.  Nothing else in the game touches the table.
+ * it.  These two hold it instead: same pointers, same order, kCarSlots of
+ * them, and tools/apply_car_slots.py has sub_439a50 call them where it used to
+ * read and write guest memory.  Nothing else in the game touches the table.
  *
  * Kept as guest addresses -- they are values, not host pointers, and the code
  * that walks them is the game's. */

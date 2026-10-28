@@ -714,9 +714,9 @@ Three things make a folder a car.
 
   A copied car repeats it. Change this byte, and the copy becomes a car of its
   own. `carp.txt`'s `Serial Number` is a different field and is not the one
-  checked. The value is compared as a byte, and the game addresses cars by it,
-  so keep it within 0 to 49 and unused: the slot table it indexes has 50
-  entries (`sub_439a50`, which rejects anything past `0x31`).
+  checked. The value is compared as a byte and must be distinct — 256 cars is
+  the whole of the range — but it may be anywhere in `0` to `255`; the retail
+  cars only happen to use 2 to 49.
 - **A name.** The display name is in the same `fedata.eng`; two cars may share
   one, as the game's own (Bonus) cars do, but the car list is sorted by it.
 
@@ -733,22 +733,51 @@ lookup that would read through the null the missing archive left behind, and
 the port's C runtime answers a null `FILE*` with an error instead of a
 segfault (`src/nfs3hp/native_watcom.cpp`).
 
-**Fifty cars is the ceiling**, and it is not the one it looks like. The table
-`sub_439a50` memoises the loaded cars in — 50 pointers at `0x5f3c00`, with the
-car count in the dword straight after it — is now the port's, 256 entries in
-host memory (`src/nfs3hp/native_car_slots.cpp`, `tools/apply_car_slots.py`),
-because that one could not be made longer where it lies. It was not the limit:
-with it raised, 50 cars still load and the 51st crashes. The ceiling is a block
-of per-car tables the scan fills as it walks `carmodel` — roughly
-`0x554f00`–`0x555300`, about 650 references across nine of the generated files
-— and the 51st car writes past the end of them, so the next path it builds is
-made of whatever it landed on (the run that crashed asked for
-`carmodel/0008/car.viv`, which is not a folder anyone made). Lifting that means
-relocating and enlarging the whole block, not raising one bound.
+**Up to 256 cars, and it used to be fifty.** Three separate limits stood in
+the way, all of them "fifty because the retail game has 23":
 
-So the retail 23 cars plus 27 more can be added; past 50 the game has to be
-taken apart further. The `car_slots` work stands on its own as the first of
-those limits removed, and changes nothing below 50.
+- **The table `sub_439a50` memoises cars into** — 50 pointers at `0x5f3c00`,
+  with the car count in the dword straight after it, so it could not be made
+  longer where it lies. It is now the port's: 512 entries in host memory
+  (`src/nfs3hp/native_car_slots.cpp`, `tools/apply_car_slots.py`), which is
+  what `sub_439a50` reads and writes instead of the table. Its bound was also
+  still `cmp eax, 0x31` — the first attempt at this only changed the comment
+  beside that compare, which is why raising the table did nothing on its own.
+- **Six per-car arrays** the scan fills, at `0x554fa8`, `0x55500a`, `0x555138`
+  and `0x5551a2` (16-bit) and `0x55506c` and `0x555214` (32-bit): 49 entries
+  and a terminator each, packed against the next, so the fifty-first car wrote
+  into the array after its own. They are now in a section of memory the port
+  adds to the machine's map, `kCarArrayA`-`kCarArrayF` in
+  `src/nfs3hp/car_arrays.h` (`tools/apply_car_arrays.py`), with room for every
+  car the list can hold. Every access is `base + index * element` with the
+  index already scaled, so only the base had to change.
+- **The four lists the car menus sort** (`sub_43a580`), at `0x5552d8`,
+  `0x5553a0`, `0x555468` and `0x555530`: fifty records each, 200 bytes apart,
+  with a group's address worked out as `group * 200`. Moved and enlarged the
+  same way (`kCarGroupTable`, `tools/apply_car_groups.py`), and the two places
+  that multiply by 200 now multiply by `kCarGroupStride`. This was the one
+  that crashed: past the fourth group ran the counters at `0x5555f8` and then
+  live globals, so the sort compared a pointer that was never a car.
+
+A car's ID is one byte, so 256 distinct cars is the ceiling, and that has been
+run: 256 folders load, the car screens list and drive them, and a race starts
+and runs. Two things are worth knowing about how it got there.
+
+The tables are sized **512**, twice the id range, because the game asks
+`sub_439a50` with two different numbers: a car's place in the list, and — in
+the traffic code — a traffic body's id, which runs to `0x1f3`. Sized for the
+first only — 260 entries — a 256-car race crashed mid-race; 512 holds both.
+
+**What is left**: the traffic bodies. Their ids are 50 to 66, their names are
+in the game's own table at `0x55cfb0` ("0008", "0009", … the folders under
+`carmodel/traffic`), and they are not loaded cars, so the game names them by
+falling back to that table when `sub_439a50` has nothing at that index. Below
+fifty cars there is never anything there; past it there is, so the race asks
+for `carmodel/traffic/<a player car>/car.viv`, which does not exist. The open
+fails, the log says so, and the race carries on without that body — it is not
+a crash. Fixing it means letting `sub_439a50` answer by id — the record's own
+id byte at `+0x31c` — instead of by place, so a place and an id stop meaning
+the same number, and that is the next piece of work here.
 
 ### Desktop (Windows)
 

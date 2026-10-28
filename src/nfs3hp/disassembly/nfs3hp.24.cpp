@@ -1,4 +1,5 @@
 #include "nfs3hp.h"
+#include "car_arrays.h"
 #include <lib/thread.h>
 
 namespace nfs3hp
@@ -11664,11 +11665,11 @@ L_0x004a3d67:
     // 004a3d87  31db                   -xor ebx, ebx
     cpu.ebx ^= x86::reg32(x86::sreg32(cpu.ebx));
     // 004a3d89  66890dac4f5500         -mov word ptr [0x554fac], cx
-    app->getMemory<x86::reg16>(x86::reg32(5590956) /* 0x554fac */) = cpu.cx;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayA + 4) /* port: car array, was 0x554fac */) = cpu.cx;
     // 004a3d90  6689350e505500         -mov word ptr [0x55500e], si
-    app->getMemory<x86::reg16>(x86::reg32(5591054) /* 0x55500e */) = cpu.si;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayB + 4) /* port: car array, was 0x55500e */) = cpu.si;
     // 004a3d97  66893d3c515500         -mov word ptr [0x55513c], di
-    app->getMemory<x86::reg16>(x86::reg32(5591356) /* 0x55513c */) = cpu.di;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayC + 4) /* port: car array, was 0x55513c */) = cpu.di;
     // 004a3d9e  66a39a515500           -mov word ptr [0x55519a], ax
     app->getMemory<x86::reg16>(x86::reg32(5591450) /* 0x55519a */) = cpu.ax;
     // 004a3da4  6689159c515500         -mov word ptr [0x55519c], dx
@@ -11678,9 +11679,9 @@ L_0x004a3d67:
     // 004a3db2  66890da0515500         -mov word ptr [0x5551a0], cx
     app->getMemory<x86::reg16>(x86::reg32(5591456) /* 0x5551a0 */) = cpu.cx;
     // 004a3db9  66a3a2515500           -mov word ptr [0x5551a2], ax
-    app->getMemory<x86::reg16>(x86::reg32(5591458) /* 0x5551a2 */) = cpu.ax;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayD) /* port: car array, was 0x5551a2 */) = cpu.ax;
     // 004a3dbf  66a3a4515500           -mov word ptr [0x5551a4], ax
-    app->getMemory<x86::reg16>(x86::reg32(5591460) /* 0x5551a4 */) = cpu.ax;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayD + 2) /* port: car array, was 0x5551a4 */) = cpu.ax;
     // 004a3dc5  a14cbb6f00             -mov eax, dword ptr [0x6fbb4c]
     cpu.eax = app->getMemory<x86::reg32>(x86::reg32(7322444) /* 0x6fbb4c */);
     // 004a3dca  beb0bf4900             -mov esi, 0x49bfb0
@@ -11717,11 +11718,11 @@ L_0x004a3ddf:
     // 004a3df3  31d2                   -xor edx, edx
     cpu.edx ^= x86::reg32(x86::sreg32(cpu.edx));
     // 004a3df5  66a3ae4f5500           -mov word ptr [0x554fae], ax
-    app->getMemory<x86::reg16>(x86::reg32(5590958) /* 0x554fae */) = cpu.ax;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayA + 6) /* port: car array, was 0x554fae */) = cpu.ax;
     // 004a3dfb  66a310505500           -mov word ptr [0x555010], ax
-    app->getMemory<x86::reg16>(x86::reg32(5591056) /* 0x555010 */) = cpu.ax;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayB + 6) /* port: car array, was 0x555010 */) = cpu.ax;
     // 004a3e01  66a33c515500           -mov word ptr [0x55513c], ax
-    app->getMemory<x86::reg16>(x86::reg32(5591356) /* 0x55513c */) = cpu.ax;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayC + 4) /* port: car array, was 0x55513c */) = cpu.ax;
     // 004a3e07  66890d9a515500         -mov word ptr [0x55519a], cx
     app->getMemory<x86::reg16>(x86::reg32(5591450) /* 0x55519a */) = cpu.cx;
     // 004a3e0e  6689359c515500         -mov word ptr [0x55519c], si
@@ -11729,7 +11730,7 @@ L_0x004a3ddf:
     // 004a3e15  66a3a0515500           -mov word ptr [0x5551a0], ax
     app->getMemory<x86::reg16>(x86::reg32(5591456) /* 0x5551a0 */) = cpu.ax;
     // 004a3e1b  66a3a2515500           -mov word ptr [0x5551a2], ax
-    app->getMemory<x86::reg16>(x86::reg32(5591458) /* 0x5551a2 */) = cpu.ax;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayD) /* port: car array, was 0x5551a2 */) = cpu.ax;
     // 004a3e21  31c0                   +xor eax, eax
     cpu.clear_co();
     cpu.set_szp((cpu.eax ^= x86::reg32(x86::sreg32(cpu.eax))));

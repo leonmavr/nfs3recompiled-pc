@@ -1,4 +1,5 @@
 #include "nfs3hp.h"
+#include "car_arrays.h"
 #include <x86.h>
 #include <winapi/wrapper.h>
 #include "eacsnd.h"
@@ -25,7 +26,7 @@ namespace nfs3hp
 {
 
 Application::Application(const char* appName)
-    :   WinApplication(appName, 0x401000, { { s_AUTOSegment, 0x401000, 1257472 }, { s__idataSegment, 0x534000, 5632 }, { s_DGROUPSegment, 0x536000, 226816 }, { nullptr, 0x56e000, 4891648 }, { s__rsrcSegment, 0xa31000, 2048 }, { eacsnd::s_AUTOSegment, 0xa32800, 29696 }, { eacsnd::s__idataSegment, 0xa3a800, 1536 }, { eacsnd::s_DGROUPSegment, 0xa3b800, 6656 }, { nullptr, 0xa3d800, 2560 }, { eacsnd::s__edataSegment, 0xa3e800, 1024 }, { voodoo2a::s_AUTOSegment, 0xa83200, 52224 }, { voodoo2a::s__idataSegment, 0xa90200, 2048 }, { voodoo2a::s_DGROUPSegment, 0xa91200, 7680 }, { nullptr, 0xa93200, 6656 }, { voodoo2a::s__edataSegment, 0xa95200, 1536 }, { voodoo2a::s__rsrcSegment, 0xa97200, 1024 } })
+    :   WinApplication(appName, 0x401000, { { s_AUTOSegment, 0x401000, 1257472 }, { s__idataSegment, 0x534000, 5632 }, { s_DGROUPSegment, 0x536000, 226816 }, { nullptr, 0x56e000, 4891648 }, { s__rsrcSegment, 0xa31000, 2048 }, { eacsnd::s_AUTOSegment, 0xa32800, 29696 }, { eacsnd::s__idataSegment, 0xa3a800, 1536 }, { eacsnd::s_DGROUPSegment, 0xa3b800, 6656 }, { nullptr, 0xa3d800, 2560 }, { eacsnd::s__edataSegment, 0xa3e800, 1024 }, { voodoo2a::s_AUTOSegment, 0xa83200, 52224 }, { voodoo2a::s__idataSegment, 0xa90200, 2048 }, { voodoo2a::s_DGROUPSegment, 0xa91200, 7680 }, { nullptr, 0xa93200, 6656 }, { voodoo2a::s__edataSegment, 0xa95200, 1536 }, { voodoo2a::s__rsrcSegment, 0xa97200, 1024 }, { nullptr, kCarArrayBase, kCarArraySize } })
 {
         eacsnd::s_registry->registerSymbols(this);
         voodoo2a::s_registry->registerSymbols(this);

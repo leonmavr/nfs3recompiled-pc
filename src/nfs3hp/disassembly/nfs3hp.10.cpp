@@ -1,4 +1,5 @@
 #include "nfs3hp.h"
+#include "car_arrays.h"
 #include <lib/thread.h>
 
 namespace nfs3hp
@@ -276,11 +277,13 @@ void Application::sub_43a580(WinApplication* __restrict app, x86::CPU& cpu_)
     // 0043a58f  2b05504f5500           -sub eax, dword ptr [0x554f50]
     (cpu.eax) -= x86::reg32(x86::sreg32(app->getMemory<x86::reg32>(x86::reg32(5590864) /* 0x554f50 */)));
     // 0043a595  ba20030000             -mov edx, 0x320
-    cpu.edx = 800 /*0x320*/;
+        // Port (tools/apply_car_groups.py): four lists of every car, not fifty.
+cpu.edx = kCarGroupTableSize;
     // 0043a59a  8945fc                 -mov dword ptr [ebp - 4], eax
     app->getMemory<x86::reg32>(cpu.ebp + x86::reg32(-4) /* -0x4 */) = cpu.eax;
     // 0043a59d  b8d8525500             -mov eax, 0x5552d8
-    cpu.eax = 5591768 /*0x5552d8*/;
+        // Port (tools/apply_car_groups.py): the car groups moved to kCarGroupTable.
+cpu.eax = kCarGroupTable;
     // 0043a5a2  e865610a00             -call 0x4e070c
     cpu.esp -= 4;
     nfs3hp::fillZero(app, cpu.sync());
@@ -370,6 +373,7 @@ L_0x0043a5b8:
     cpu.ebx = app->getMemory<x86::reg32>(cpu.ebp + x86::reg32(-8) /* -0x8 */);
     // 0043a605  c1e003                 -shl eax, 3
     cpu.eax <<= 3 /*0x3*/ % 32;
+    cpu.eax = x86::reg32(cpu.eax / 200 * kCarGroupStride); /* 200 was fifty records a group */
     // 0043a608  01d8                   +add eax, ebx
     {
         x86::reg32& tmp1 = cpu.eax;
@@ -383,7 +387,8 @@ L_0x0043a5b8:
         cpu.set_szp(tmp1);
     }
     // 0043a60a  89b8d8525500           -mov dword ptr [eax + 0x5552d8], edi
-    app->getMemory<x86::reg32>(cpu.eax + x86::reg32(5591768) /* 0x5552d8 */) = cpu.edi;
+        // Port (tools/apply_car_groups.py): the car groups moved to kCarGroupTable.
+app->getMemory<x86::reg32>(cpu.eax + x86::reg32(kCarGroupTable)) = cpu.edi;
     // 0043a610  89d0                   -mov eax, edx
     cpu.eax = cpu.edx;
     // 0043a612  e839f4ffff             -call 0x439a50
@@ -404,7 +409,8 @@ L_0x0043a5b8:
         cpu.set_szp(tmp);
     }
     // 0043a61f  890c85d4525500         -mov dword ptr [eax*4 + 0x5552d4], ecx
-    app->getMemory<x86::reg32>(x86::reg32(5591764) /* 0x5552d4 */ + cpu.eax * 4) = cpu.ecx;
+        // Port (tools/apply_car_groups.py): the car groups moved to kCarGroupTable.
+app->getMemory<x86::reg32>(x86::reg32(kCarGroupTable - 4) + cpu.eax * 4) = cpu.ecx;
     // 0043a626  a3f8555500             -mov dword ptr [0x5555f8], eax
     app->getMemory<x86::reg32>(x86::reg32(5592568) /* 0x5555f8 */) = cpu.eax;
 L_0x0043a62b:
@@ -424,7 +430,8 @@ L_0x0043a62e:
     // 0043a633  bb04000000             -mov ebx, 4
     cpu.ebx = 4 /*0x4*/;
     // 0043a638  b8d8525500             -mov eax, 0x5552d8
-    cpu.eax = 5591768 /*0x5552d8*/;
+        // Port (tools/apply_car_groups.py): the car groups moved to kCarGroupTable.
+cpu.eax = kCarGroupTable + 0 * kCarGroupStride;
     // 0043a63d  8b15f8555500           -mov edx, dword ptr [0x5555f8]
     cpu.edx = app->getMemory<x86::reg32>(x86::reg32(5592568) /* 0x5555f8 */);
     // 0043a643  e8b03e0b00             -call 0x4ee4f8
@@ -437,7 +444,8 @@ L_0x0043a62e:
     // 0043a64d  bb04000000             -mov ebx, 4
     cpu.ebx = 4 /*0x4*/;
     // 0043a652  b8a0535500             -mov eax, 0x5553a0
-    cpu.eax = 5591968 /*0x5553a0*/;
+        // Port (tools/apply_car_groups.py): the car groups moved to kCarGroupTable.
+cpu.eax = kCarGroupTable + 1 * kCarGroupStride;
     // 0043a657  8b15fc555500           -mov edx, dword ptr [0x5555fc]
     cpu.edx = app->getMemory<x86::reg32>(x86::reg32(5592572) /* 0x5555fc */);
     // 0043a65d  e8963e0b00             -call 0x4ee4f8
@@ -450,7 +458,8 @@ L_0x0043a62e:
     // 0043a667  bb04000000             -mov ebx, 4
     cpu.ebx = 4 /*0x4*/;
     // 0043a66c  b868545500             -mov eax, 0x555468
-    cpu.eax = 5592168 /*0x555468*/;
+        // Port (tools/apply_car_groups.py): the car groups moved to kCarGroupTable.
+cpu.eax = kCarGroupTable + 2 * kCarGroupStride;
     // 0043a671  8b1500565500           -mov edx, dword ptr [0x555600]
     cpu.edx = app->getMemory<x86::reg32>(x86::reg32(5592576) /* 0x555600 */);
     // 0043a677  e87c3e0b00             -call 0x4ee4f8
@@ -463,7 +472,8 @@ L_0x0043a62e:
     // 0043a681  bb04000000             -mov ebx, 4
     cpu.ebx = 4 /*0x4*/;
     // 0043a686  b830555500             -mov eax, 0x555530
-    cpu.eax = 5592368 /*0x555530*/;
+        // Port (tools/apply_car_groups.py): the car groups moved to kCarGroupTable.
+cpu.eax = kCarGroupTable + 3 * kCarGroupStride;
     // 0043a68b  8b1504565500           -mov edx, dword ptr [0x555604]
     cpu.edx = app->getMemory<x86::reg32>(x86::reg32(5592580) /* 0x555604 */);
     // 0043a691  e8623e0b00             -call 0x4ee4f8
@@ -521,8 +531,10 @@ void Application::sub_43a6b0(WinApplication* __restrict app, x86::CPU& cpu_)
     (cpu.edx) += x86::reg32(x86::sreg32(cpu.eax));
     // 0043a6c4  c1e203                 -shl edx, 3
     cpu.edx <<= 3 /*0x3*/ % 32;
+    cpu.edx = x86::reg32(cpu.edx / 200 * kCarGroupStride); /* 200 was fifty records a group */
     // 0043a6c7  8b848ad8525500         -mov eax, dword ptr [edx + ecx*4 + 0x5552d8]
-    cpu.eax = app->getMemory<x86::reg32>(cpu.edx + x86::reg32(5591768) /* 0x5552d8 */ + cpu.ecx * 4);
+        // Port (tools/apply_car_groups.py): the car groups moved to kCarGroupTable.
+cpu.eax = app->getMemory<x86::reg32>(cpu.edx + x86::reg32(kCarGroupTable) + cpu.ecx * 4);
     // 0043a6ce  85c0                   +test eax, eax
     cpu.clear_co();
     cpu.set_szp(static_cast<x86::reg32>(cpu.eax & cpu.eax));
@@ -631,7 +643,7 @@ L_0x0043a71b:
     // 0043a724  ba01000000             -mov edx, 1
     cpu.edx = 1 /*0x1*/;
     // 0043a729  b80a505500             -mov eax, 0x55500a
-    cpu.eax = 5591050 /*0x55500a*/;
+    cpu.eax = kCarArrayB /* port: car array, was 0x55500a */;
     // 0043a72e  8d1c36                 -lea ebx, [esi + esi]
     cpu.ebx = x86::reg32(cpu.esi + cpu.esi * 1);
     // 0043a731  e80a5f0a00             -call 0x4e0640
@@ -681,7 +693,7 @@ L_0x0043a75a:
     // 0043a75f  ba01000000             -mov edx, 1
     cpu.edx = 1 /*0x1*/;
     // 0043a764  b80a505500             -mov eax, 0x55500a
-    cpu.eax = 5591050 /*0x55500a*/;
+    cpu.eax = kCarArrayB /* port: car array, was 0x55500a */;
     // 0043a769  8d1c36                 -lea ebx, [esi + esi]
     cpu.ebx = x86::reg32(cpu.esi + cpu.esi * 1);
     // 0043a76c  e8cf5e0a00             -call 0x4e0640
@@ -736,13 +748,13 @@ L_0x0043a773:
     // 0043a78d  b980809000             -mov ecx, 0x908080
     cpu.ecx = 9470080 /*0x908080*/;
     // 0043a792  66891c550a505500       -mov word ptr [edx*2 + 0x55500a], bx
-    app->getMemory<x86::reg16>(x86::reg32(5591050) /* 0x55500a */ + cpu.edx * 2) = cpu.bx;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayB) /* port: car array, was 0x55500a */ + cpu.edx * 2) = cpu.bx;
     // 0043a79a  890c956c505500         -mov dword ptr [edx*4 + 0x55506c], ecx
-    app->getMemory<x86::reg32>(x86::reg32(5591148) /* 0x55506c */ + cpu.edx * 4) = cpu.ecx;
+    app->getMemory<x86::reg32>(x86::reg32(kCarArrayE) /* port: car array, was 0x55506c */ + cpu.edx * 4) = cpu.ecx;
     // 0043a7a1  66891c55a2515500       -mov word ptr [edx*2 + 0x5551a2], bx
-    app->getMemory<x86::reg16>(x86::reg32(5591458) /* 0x5551a2 */ + cpu.edx * 2) = cpu.bx;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayD) /* port: car array, was 0x5551a2 */ + cpu.edx * 2) = cpu.bx;
     // 0043a7a9  890c9514525500         -mov dword ptr [edx*4 + 0x555214], ecx
-    app->getMemory<x86::reg32>(x86::reg32(5591572) /* 0x555214 */ + cpu.edx * 4) = cpu.ecx;
+    app->getMemory<x86::reg32>(x86::reg32(kCarArrayF) /* port: car array, was 0x555214 */ + cpu.edx * 4) = cpu.ecx;
 L_0x0043a7b0:
     // 0043a7b0  42                     +inc edx
     {
@@ -810,7 +822,7 @@ L_0x0043a7bf:
     cpu.clear_co();
     cpu.set_szp((cpu.edi ^= x86::reg32(x86::sreg32(cpu.edi))));
     // 0043a7d0  66893c55a2515500       -mov word ptr [edx*2 + 0x5551a2], di
-    app->getMemory<x86::reg16>(x86::reg32(5591458) /* 0x5551a2 */ + cpu.edx * 2) = cpu.di;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayD) /* port: car array, was 0x5551a2 */ + cpu.edx * 2) = cpu.di;
 L_0x0043a7d8:
     // 0043a7d8  42                     +inc edx
     {
@@ -885,7 +897,7 @@ L_0x0043a7e2:
     cpu.clear_co();
     cpu.set_szp((cpu.eax ^= x86::reg32(x86::sreg32(cpu.eax))));
     // 0043a7fe  668904550a505500       -mov word ptr [edx*2 + 0x55500a], ax
-    app->getMemory<x86::reg16>(x86::reg32(5591050) /* 0x55500a */ + cpu.edx * 2) = cpu.ax;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayB) /* port: car array, was 0x55500a */ + cpu.edx * 2) = cpu.ax;
 L_0x0043a806:
     // 0043a806  42                     +inc edx
     {
@@ -961,7 +973,7 @@ L_0x0043a815:
     cpu.clear_co();
     cpu.set_szp((cpu.edi ^= x86::reg32(x86::sreg32(cpu.edi))));
     // 0043a827  66893c55a2515500       -mov word ptr [edx*2 + 0x5551a2], di
-    app->getMemory<x86::reg16>(x86::reg32(5591458) /* 0x5551a2 */ + cpu.edx * 2) = cpu.di;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayD) /* port: car array, was 0x5551a2 */ + cpu.edx * 2) = cpu.di;
 L_0x0043a82f:
     // 0043a82f  42                     +inc edx
     {
@@ -1044,7 +1056,7 @@ L_0x0043a839:
     cpu.clear_co();
     cpu.set_szp((cpu.eax ^= x86::reg32(x86::sreg32(cpu.eax))));
     // 0043a856  668904550a505500       -mov word ptr [edx*2 + 0x55500a], ax
-    app->getMemory<x86::reg16>(x86::reg32(5591050) /* 0x55500a */ + cpu.edx * 2) = cpu.ax;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayB) /* port: car array, was 0x55500a */ + cpu.edx * 2) = cpu.ax;
 L_0x0043a85e:
     // 0043a85e  42                     +inc edx
     {
@@ -1120,7 +1132,7 @@ L_0x0043a86d:
     cpu.clear_co();
     cpu.set_szp((cpu.edi ^= x86::reg32(x86::sreg32(cpu.edi))));
     // 0043a87f  66893c55a2515500       -mov word ptr [edx*2 + 0x5551a2], di
-    app->getMemory<x86::reg16>(x86::reg32(5591458) /* 0x5551a2 */ + cpu.edx * 2) = cpu.di;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayD) /* port: car array, was 0x5551a2 */ + cpu.edx * 2) = cpu.di;
 L_0x0043a887:
     // 0043a887  42                     +inc edx
     {
@@ -1203,7 +1215,7 @@ L_0x0043a891:
     cpu.clear_co();
     cpu.set_szp((cpu.eax ^= x86::reg32(x86::sreg32(cpu.eax))));
     // 0043a8ae  668904550a505500       -mov word ptr [edx*2 + 0x55500a], ax
-    app->getMemory<x86::reg16>(x86::reg32(5591050) /* 0x55500a */ + cpu.edx * 2) = cpu.ax;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayB) /* port: car array, was 0x55500a */ + cpu.edx * 2) = cpu.ax;
 L_0x0043a8b6:
     // 0043a8b6  42                     +inc edx
     {
@@ -1287,7 +1299,7 @@ L_0x0043a8e6:
     cpu.clear_co();
     cpu.set_szp((cpu.edi ^= x86::reg32(x86::sreg32(cpu.edi))));
     // 0043a8e8  66893c55a2515500       -mov word ptr [edx*2 + 0x5551a2], di
-    app->getMemory<x86::reg16>(x86::reg32(5591458) /* 0x5551a2 */ + cpu.edx * 2) = cpu.di;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayD) /* port: car array, was 0x5551a2 */ + cpu.edx * 2) = cpu.di;
 L_0x0043a8f0:
     // 0043a8f0  42                     +inc edx
     {
@@ -1363,7 +1375,7 @@ L_0x0043a914:
     cpu.clear_co();
     cpu.set_szp((cpu.eax ^= x86::reg32(x86::sreg32(cpu.eax))));
     // 0043a916  668904550a505500       -mov word ptr [edx*2 + 0x55500a], ax
-    app->getMemory<x86::reg16>(x86::reg32(5591050) /* 0x55500a */ + cpu.edx * 2) = cpu.ax;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayB) /* port: car array, was 0x55500a */ + cpu.edx * 2) = cpu.ax;
 L_0x0043a91e:
     // 0043a91e  42                     +inc edx
     {
@@ -1431,7 +1443,7 @@ L_0x0043a930:
     cpu.clear_co();
     cpu.set_szp((cpu.edi ^= x86::reg32(x86::sreg32(cpu.edi))));
     // 0043a941  66893c55a2515500       -mov word ptr [edx*2 + 0x5551a2], di
-    app->getMemory<x86::reg16>(x86::reg32(5591458) /* 0x5551a2 */ + cpu.edx * 2) = cpu.di;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayD) /* port: car array, was 0x5551a2 */ + cpu.edx * 2) = cpu.di;
 L_0x0043a949:
     // 0043a949  42                     +inc edx
     {
@@ -1491,7 +1503,7 @@ L_0x0043a953:
     cpu.clear_co();
     cpu.set_szp((cpu.eax ^= x86::reg32(x86::sreg32(cpu.eax))));
     // 0043a964  668904550a505500       -mov word ptr [edx*2 + 0x55500a], ax
-    app->getMemory<x86::reg16>(x86::reg32(5591050) /* 0x55500a */ + cpu.edx * 2) = cpu.ax;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayB) /* port: car array, was 0x55500a */ + cpu.edx * 2) = cpu.ax;
 L_0x0043a96c:
     // 0043a96c  42                     +inc edx
     {
@@ -1559,7 +1571,7 @@ L_0x0043a97e:
     cpu.clear_co();
     cpu.set_szp((cpu.edi ^= x86::reg32(x86::sreg32(cpu.edi))));
     // 0043a98f  66893c55a2515500       -mov word ptr [edx*2 + 0x5551a2], di
-    app->getMemory<x86::reg16>(x86::reg32(5591458) /* 0x5551a2 */ + cpu.edx * 2) = cpu.di;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayD) /* port: car array, was 0x5551a2 */ + cpu.edx * 2) = cpu.di;
 L_0x0043a997:
     // 0043a997  42                     +inc edx
     {
@@ -1619,7 +1631,7 @@ L_0x0043a9a1:
     cpu.clear_co();
     cpu.set_szp((cpu.eax ^= x86::reg32(x86::sreg32(cpu.eax))));
     // 0043a9b2  668904550a505500       -mov word ptr [edx*2 + 0x55500a], ax
-    app->getMemory<x86::reg16>(x86::reg32(5591050) /* 0x55500a */ + cpu.edx * 2) = cpu.ax;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayB) /* port: car array, was 0x55500a */ + cpu.edx * 2) = cpu.ax;
 L_0x0043a9ba:
     // 0043a9ba  42                     +inc edx
     {
@@ -1687,7 +1699,7 @@ L_0x0043a9cc:
     cpu.clear_co();
     cpu.set_szp((cpu.edi ^= x86::reg32(x86::sreg32(cpu.edi))));
     // 0043a9dd  66893c55a2515500       -mov word ptr [edx*2 + 0x5551a2], di
-    app->getMemory<x86::reg16>(x86::reg32(5591458) /* 0x5551a2 */ + cpu.edx * 2) = cpu.di;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayD) /* port: car array, was 0x5551a2 */ + cpu.edx * 2) = cpu.di;
 L_0x0043a9e5:
     // 0043a9e5  42                     +inc edx
     {
@@ -1747,7 +1759,7 @@ L_0x0043a9ef:
     cpu.clear_co();
     cpu.set_szp((cpu.eax ^= x86::reg32(x86::sreg32(cpu.eax))));
     // 0043aa00  668904550a505500       -mov word ptr [edx*2 + 0x55500a], ax
-    app->getMemory<x86::reg16>(x86::reg32(5591050) /* 0x55500a */ + cpu.edx * 2) = cpu.ax;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayB) /* port: car array, was 0x55500a */ + cpu.edx * 2) = cpu.ax;
 L_0x0043aa08:
     // 0043aa08  42                     +inc edx
     {
@@ -1815,7 +1827,7 @@ L_0x0043aa17:
     cpu.clear_co();
     cpu.set_szp((cpu.edi ^= x86::reg32(x86::sreg32(cpu.edi))));
     // 0043aa28  66893c55a2515500       -mov word ptr [edx*2 + 0x5551a2], di
-    app->getMemory<x86::reg16>(x86::reg32(5591458) /* 0x5551a2 */ + cpu.edx * 2) = cpu.di;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayD) /* port: car array, was 0x5551a2 */ + cpu.edx * 2) = cpu.di;
 L_0x0043aa30:
     // 0043aa30  42                     +inc edx
     {
@@ -1875,7 +1887,7 @@ L_0x0043aa3a:
     cpu.clear_co();
     cpu.set_szp((cpu.eax ^= x86::reg32(x86::sreg32(cpu.eax))));
     // 0043aa4b  668904550a505500       -mov word ptr [edx*2 + 0x55500a], ax
-    app->getMemory<x86::reg16>(x86::reg32(5591050) /* 0x55500a */ + cpu.edx * 2) = cpu.ax;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayB) /* port: car array, was 0x55500a */ + cpu.edx * 2) = cpu.ax;
 L_0x0043aa53:
     // 0043aa53  42                     +inc edx
     {
@@ -1943,7 +1955,7 @@ L_0x0043aa62:
     cpu.clear_co();
     cpu.set_szp((cpu.edi ^= x86::reg32(x86::sreg32(cpu.edi))));
     // 0043aa73  66893c55a2515500       -mov word ptr [edx*2 + 0x5551a2], di
-    app->getMemory<x86::reg16>(x86::reg32(5591458) /* 0x5551a2 */ + cpu.edx * 2) = cpu.di;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayD) /* port: car array, was 0x5551a2 */ + cpu.edx * 2) = cpu.di;
 L_0x0043aa7b:
     // 0043aa7b  42                     +inc edx
     {
@@ -2003,7 +2015,7 @@ L_0x0043aa85:
     cpu.clear_co();
     cpu.set_szp((cpu.eax ^= x86::reg32(x86::sreg32(cpu.eax))));
     // 0043aa96  668904550a505500       -mov word ptr [edx*2 + 0x55500a], ax
-    app->getMemory<x86::reg16>(x86::reg32(5591050) /* 0x55500a */ + cpu.edx * 2) = cpu.ax;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayB) /* port: car array, was 0x55500a */ + cpu.edx * 2) = cpu.ax;
 L_0x0043aa9e:
     // 0043aa9e  42                     +inc edx
     {
@@ -2071,7 +2083,7 @@ L_0x0043aaad:
     cpu.clear_co();
     cpu.set_szp((cpu.edi ^= x86::reg32(x86::sreg32(cpu.edi))));
     // 0043aabe  66893c55a2515500       -mov word ptr [edx*2 + 0x5551a2], di
-    app->getMemory<x86::reg16>(x86::reg32(5591458) /* 0x5551a2 */ + cpu.edx * 2) = cpu.di;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayD) /* port: car array, was 0x5551a2 */ + cpu.edx * 2) = cpu.di;
 L_0x0043aac6:
     // 0043aac6  42                     +inc edx
     {
@@ -2131,7 +2143,7 @@ L_0x0043aad0:
     cpu.clear_co();
     cpu.set_szp((cpu.eax ^= x86::reg32(x86::sreg32(cpu.eax))));
     // 0043aae1  668904550a505500       -mov word ptr [edx*2 + 0x55500a], ax
-    app->getMemory<x86::reg16>(x86::reg32(5591050) /* 0x55500a */ + cpu.edx * 2) = cpu.ax;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayB) /* port: car array, was 0x55500a */ + cpu.edx * 2) = cpu.ax;
 L_0x0043aae9:
     // 0043aae9  42                     +inc edx
     {
@@ -2199,7 +2211,7 @@ L_0x0043aaf8:
     cpu.clear_co();
     cpu.set_szp((cpu.edi ^= x86::reg32(x86::sreg32(cpu.edi))));
     // 0043ab09  66893c55a2515500       -mov word ptr [edx*2 + 0x5551a2], di
-    app->getMemory<x86::reg16>(x86::reg32(5591458) /* 0x5551a2 */ + cpu.edx * 2) = cpu.di;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayD) /* port: car array, was 0x5551a2 */ + cpu.edx * 2) = cpu.di;
 L_0x0043ab11:
     // 0043ab11  42                     +inc edx
     {
@@ -2259,7 +2271,7 @@ L_0x0043ab1b:
     cpu.clear_co();
     cpu.set_szp((cpu.eax ^= x86::reg32(x86::sreg32(cpu.eax))));
     // 0043ab2c  668904550a505500       -mov word ptr [edx*2 + 0x55500a], ax
-    app->getMemory<x86::reg16>(x86::reg32(5591050) /* 0x55500a */ + cpu.edx * 2) = cpu.ax;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayB) /* port: car array, was 0x55500a */ + cpu.edx * 2) = cpu.ax;
 L_0x0043ab34:
     // 0043ab34  42                     +inc edx
     {
@@ -2327,7 +2339,7 @@ L_0x0043ab46:
     cpu.clear_co();
     cpu.set_szp((cpu.edi ^= x86::reg32(x86::sreg32(cpu.edi))));
     // 0043ab57  66893c55a2515500       -mov word ptr [edx*2 + 0x5551a2], di
-    app->getMemory<x86::reg16>(x86::reg32(5591458) /* 0x5551a2 */ + cpu.edx * 2) = cpu.di;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayD) /* port: car array, was 0x5551a2 */ + cpu.edx * 2) = cpu.di;
 L_0x0043ab5f:
     // 0043ab5f  42                     +inc edx
     {
@@ -2387,7 +2399,7 @@ L_0x0043ab69:
     cpu.clear_co();
     cpu.set_szp((cpu.eax ^= x86::reg32(x86::sreg32(cpu.eax))));
     // 0043ab7a  668904550a505500       -mov word ptr [edx*2 + 0x55500a], ax
-    app->getMemory<x86::reg16>(x86::reg32(5591050) /* 0x55500a */ + cpu.edx * 2) = cpu.ax;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayB) /* port: car array, was 0x55500a */ + cpu.edx * 2) = cpu.ax;
 L_0x0043ab82:
     // 0043ab82  42                     +inc edx
     {
@@ -2455,7 +2467,7 @@ L_0x0043ab94:
     cpu.clear_co();
     cpu.set_szp((cpu.edi ^= x86::reg32(x86::sreg32(cpu.edi))));
     // 0043aba5  66893c55a2515500       -mov word ptr [edx*2 + 0x5551a2], di
-    app->getMemory<x86::reg16>(x86::reg32(5591458) /* 0x5551a2 */ + cpu.edx * 2) = cpu.di;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayD) /* port: car array, was 0x5551a2 */ + cpu.edx * 2) = cpu.di;
 L_0x0043abad:
     // 0043abad  42                     +inc edx
     {
@@ -2515,7 +2527,7 @@ L_0x0043abb7:
     cpu.clear_co();
     cpu.set_szp((cpu.eax ^= x86::reg32(x86::sreg32(cpu.eax))));
     // 0043abc8  668904550a505500       -mov word ptr [edx*2 + 0x55500a], ax
-    app->getMemory<x86::reg16>(x86::reg32(5591050) /* 0x55500a */ + cpu.edx * 2) = cpu.ax;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayB) /* port: car array, was 0x55500a */ + cpu.edx * 2) = cpu.ax;
 L_0x0043abd0:
     // 0043abd0  42                     +inc edx
     {
@@ -2716,7 +2728,7 @@ L_0x0043ac67:
     cpu.eax = app->getMemory<x86::reg32>(x86::reg32(7328444) /* 0x6fd2bc */);
     // 0043ac6c  66833c450a50550000     +cmp word ptr [eax*2 + 0x55500a], 0
     {
-        x86::reg16 tmp1 = app->getMemory<x86::reg16>(x86::reg32(5591050) /* 0x55500a */ + cpu.eax * 2);
+        x86::reg16 tmp1 = app->getMemory<x86::reg16>(x86::reg32(kCarArrayB) /* port: car array, was 0x55500a */ + cpu.eax * 2);
         x86::reg16 tmp2 = x86::reg16(x86::sreg16(0 /*0x0*/));
         x86::reg16 result = tmp1 - tmp2;
         cpu.flags.cf = tmp1 < tmp2;
@@ -2775,7 +2787,7 @@ L_0x0043ac97:
     cpu.eax = app->getMemory<x86::reg32>(x86::reg32(7328552) /* 0x6fd328 */);
     // 0043ac9c  66833c450a50550000     +cmp word ptr [eax*2 + 0x55500a], 0
     {
-        x86::reg16 tmp1 = app->getMemory<x86::reg16>(x86::reg32(5591050) /* 0x55500a */ + cpu.eax * 2);
+        x86::reg16 tmp1 = app->getMemory<x86::reg16>(x86::reg32(kCarArrayB) /* port: car array, was 0x55500a */ + cpu.eax * 2);
         x86::reg16 tmp2 = x86::reg16(x86::sreg16(0 /*0x0*/));
         x86::reg16 result = tmp1 - tmp2;
         cpu.flags.cf = tmp1 < tmp2;
@@ -2896,7 +2908,7 @@ start:
     // 0043acf3  baff000000             -mov edx, 0xff
     cpu.edx = 255 /*0xff*/;
     // 0043acf8  b80a505500             -mov eax, 0x55500a
-    cpu.eax = 5591050 /*0x55500a*/;
+    cpu.eax = kCarArrayB /* port: car array, was 0x55500a */;
     // 0043acfd  e83e590a00             -call 0x4e0640
     cpu.esp -= 4;
     nfs3hp::watcom::memset(app, cpu.sync());
@@ -2919,7 +2931,7 @@ L_0x0043ad1b:
     // 0043ad1b  bb62000000             -mov ebx, 0x62
     cpu.ebx = 98 /*0x62*/;
     // 0043ad20  b80a505500             -mov eax, 0x55500a
-    cpu.eax = 5591050 /*0x55500a*/;
+    cpu.eax = kCarArrayB /* port: car array, was 0x55500a */;
     // 0043ad25  31d2                   -xor edx, edx
     cpu.edx ^= x86::reg32(x86::sreg32(cpu.edx));
     // 0043ad27  e814590a00             -call 0x4e0640
@@ -2995,9 +3007,9 @@ L_0x0043ad53:
     // 0043ad67  be01000000             -mov esi, 1
     cpu.esi = 1 /*0x1*/;
     // 0043ad6c  668934550a505500       -mov word ptr [edx*2 + 0x55500a], si
-    app->getMemory<x86::reg16>(x86::reg32(5591050) /* 0x55500a */ + cpu.edx * 2) = cpu.si;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayB) /* port: car array, was 0x55500a */ + cpu.edx * 2) = cpu.si;
     // 0043ad74  66893455a2515500       -mov word ptr [edx*2 + 0x5551a2], si
-    app->getMemory<x86::reg16>(x86::reg32(5591458) /* 0x5551a2 */ + cpu.edx * 2) = cpu.si;
+    app->getMemory<x86::reg16>(x86::reg32(kCarArrayD) /* port: car array, was 0x5551a2 */ + cpu.edx * 2) = cpu.si;
 L_0x0043ad7c:
     // 0043ad7c  42                     +inc edx
     {
