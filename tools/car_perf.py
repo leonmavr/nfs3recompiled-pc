@@ -1007,6 +1007,88 @@ def parse_assignment(text):
     return name.strip(), values
 
 
+def accel_samples(car, scale=1.0):
+    """The 112 AI acceleration samples for the car as it now stands, at 1 m/s a step."""
+    curve = car.physics_curve(step=0.25)
+    samples = []
+    for index in range(ACC_SAMPLES):
+        speed = float(index)
+        value = 0.0
+        if curve and speed <= car.vmax * 1.02:
+            value = Car._interpolate(curve, speed) * scale
+        samples.append(max(0.0, value))
+    return samples
+
+
+def table_time(samples, speed):
+    """Seconds to `speed` m/s, integrating samples taken 1 m/s apart."""
+    curve = [(float(i), a) for i, a in enumerate(samples)]
+    return Car.time_from_curve(curve, speed)
+
+
+_CALIBRATION = {}
+
+
+def calibration(root=CARMODEL):
+    """How much the engine-curve estimate overstates the retail cars.
+
+    The estimate has no clutch, tyre or traction loss in it, so it is quicker
+    than the acceleration tables EA shipped.  Measured against the whole field
+    it is a steady factor, and that factor is what `derive --scale auto` takes
+    out -- the tuning still shows through, the optimism does not.
+    """
+    key = str(root)
+    if key in _CALIBRATION:
+        return _CALIBRATION[key]
+    ratios = []
+    for car in all_cars(root):
+        table = table_time(car.accel_table(), 27.78)
+        raw = table_time(accel_samples(car, 1.0), 27.78)
+        if table and raw:
+            ratios.append(raw / table)
+    if ratios:
+        ratios.sort()
+        factor = ratios[len(ratios) // 2]
+    else:
+        factor = 1.0
+    _CALIBRATION[key] = factor
+    return factor
+
+
+def derive_tables(car, scale="auto", match=None, root=CARMODEL):
+    """Rewrite the eight AI ACC sections from the engine curve, gearing and mass.
+
+    Those sections are one curve of acceleration against speed, and they are
+    what the AI drives to; nothing else recomputes them, so a car whose engine,
+    gearing or mass has been edited otherwise keeps the acceleration its donor
+    had.  `scale` can be "auto" (keep this car's current 0-100, changing only
+    the shape), a number, or 1.0 for the raw engine-curve estimate.
+    """
+    before = car.accel_table()
+    if match is not None:
+        factor = calibration(root)
+        for _ in range(4):
+            samples = accel_samples(car, factor)
+            now = table_time(samples, 27.78)
+            if not now:
+                break
+            factor *= now / match
+    elif scale == "auto":
+        factor = calibration(root)
+        samples = accel_samples(car, factor)
+    else:
+        factor = float(scale)
+        samples = accel_samples(car, factor)
+    samples = accel_samples(car, factor)
+    return samples, factor, table_time(before, 27.78), table_time(samples, 27.78)
+
+
+def write_accel(carp, samples):
+    for section in range(ACC_LAST - ACC_FIRST + 1):
+        chunk = samples[section * 14:(section + 1) * 14]
+        carp.set(ACC_FIRST + section, chunk)
+
+
 def resolve_changes(carp, changes):
     """[(field number, values)] for every assignment, before anything is written."""
     resolved = []
@@ -1320,6 +1402,16 @@ def main(argv=None):
     setter.add_argument("--keep-v2r", action="store_true",
                         help="do not recompute velocity-to-rpm when the gearing changes")
 
+    derive = sub.add_parser("derive",
+                            help="rebuild the AI acceleration tables from the engine and gearing")
+    derive.add_argument("car")
+    derive.add_argument("--scale", default="auto",
+                        help="auto (keep this car's 0-100, default), a number, or 1.0 for raw")
+    derive.add_argument("--match", type=float,
+                        help="a 0-100 to aim the derived curve at, in seconds")
+    derive.add_argument("--out", help="write a copy of the car here")
+    derive.add_argument("--dry-run", action="store_true")
+
     clone = sub.add_parser("clone", help="copy a car to a new folder with a new id and name")
     clone.add_argument("car")
     clone.add_argument("target", help="the new folder, under the carmodel folder")
@@ -1329,6 +1421,8 @@ def main(argv=None):
     clone.add_argument("--preset")
     clone.add_argument("--dry-run", action="store_true")
     clone.add_argument("--keep-v2r", action="store_true")
+    clone.add_argument("--derive", action="store_true",
+                       help="rebuild the AI acceleration tables from the tuned engine")
 
     args = parser.parse_args(argv)
     root = Path(args.root)
@@ -1388,6 +1482,27 @@ def main(argv=None):
             print("  written to %s" % " and ".join(written))
             return 0
 
+        if args.command == "derive":
+            car = find_car(args.car, root)
+            samples, factor, was, now = derive_tables(car, args.scale, args.match, root)
+            print("%s (%s):" % (car.key, car.folder))
+            print("  acceleration table  0-100 %s -> %s   (scale %.3f%s)"
+                  % ("%.2f s" % was if was else "--", "%.2f s" % now if now else "--", factor,
+                     ", the model's own optimism" if args.scale == "auto" and args.match is None
+                     else ""))
+            if args.dry_run:
+                print("  (nothing written)")
+                return 0
+            if args.out:
+                target = Path(args.out)
+                if target.exists():
+                    raise CarFileError("%s already exists" % target)
+                shutil.copytree(car.folder, target)
+                car = Car(target)
+            write_accel(car.carp, samples)
+            print("  written to %s" % " and ".join(car.carp.save()))
+            return 0
+
         if args.command == "clone":
             source = find_car(args.car, root)
             target = root / args.target
@@ -1426,6 +1541,13 @@ def main(argv=None):
                     touched = apply_changes(copy.carp, changes)
                     for name in ([] if args.keep_v2r else sync_v2r(copy.carp, touched, rolling)):
                         print("  %-18s recomputed from the gearing" % name)
+                    if args.derive:
+                        samples, factor, was, now = derive_tables(copy, root=root)
+                        write_accel(copy.carp, samples)
+                        print("  %-18s 0-100 %s -> %s (scale %.3f)"
+                              % ("acceleration table",
+                                 "%.2f s" % was if was else "--", "%.2f s" % now if now else "--",
+                                 factor))
                     print("  written to %s" % " and ".join(copy.carp.save()))
             except Exception:
                 shutil.rmtree(target, ignore_errors=True)

@@ -836,6 +836,86 @@ Three things are worth knowing before tuning:
   curve peaks at 600 where the brochure claims 475 Nm). The tool shows both
   side by side rather than picking one.
 
+#### Building the performance for a car of your own
+
+Nothing has to be authored from a blank page: take the retail car nearest to
+what you want, copy it, then move the numbers.
+
+    # 1. a car of its own: new folder, new id, new name, and a starting point
+    python3 tools/car_perf.py clone hgts mycar --id 60 --name "My Car"
+
+    # 2. the numbers, as field=value in the labels' own words, or a JSON preset
+    python3 tools/car_perf.py set mycar mass=1250 "final=3.75" grip=3.10 \
+            "torque=300,320,350,...,200" --preset tweaks.json
+
+    # 3. the acceleration tables, from the engine, gearing and mass you just set
+    python3 tools/car_perf.py derive mycar          # --match 5.2 to aim at a 0-100
+
+`derive` is the piece that makes a tuned car coherent. The eight `AI ACC`
+sections are a curve of acceleration against speed that nothing else
+recomputes, so without it your car would be quicker for you and stock for the
+AI. It rebuilds them by running the car's own torque curve through its own
+gearbox and mass, then applying the factor the model is optimistic by —
+measured across the whole retail field (about 0.96) — so the tuning shows
+through and the model's own cheerfulness does not. `--scale 1` writes the raw
+estimate, `--match <seconds>` aims the table at a 0-100 you choose, and
+`--dry-run` shows what would change.
+
+The torque curve is 41 numbers, one every 256 rpm from 0 to 10240, and the
+other arrays are fixed sizes too — `list --fields` gives every field and its
+size, and a wrong count is refused rather than written. What is worth setting
+first, in the order it changes the car: `mass`, `torque`, the gear `ratios` and
+`final` (whose `velocity to rpm ratio` follows automatically), `vmax` and
+`speed cap`, then the handling set — `grip`, `brake decel`, `front grip`,
+`turn in`/`turn out`, `turning circle` — and `acc` sections only through
+`derive`.
+
+### Giving a car a body
+
+The body is a car's `car.fce`: the mesh, its parts and its paint. The format is
+EA's NFS3 FCE and it is documented — TheXDS/VivLib keeps the specification
+(`docs/FileFormats/FCE-specs.md`) — with a fixed `0x1f04`-byte header full of
+table offsets: vertices (12 bytes each, part-local, in metres), normals, then
+56-byte triangles of a texture page, three vertex indices, material flags and
+three (u, v) pairs; a part table with each part's origin, name, vertex range
+and triangle range; and two palettes of 16 colours in hue/saturation/
+brightness. The parts are the game's levels of detail — "hi body" with its four
+wheels, then "medium", "small" and "tiny" — plus odd extras such as
+"high headlights".
+
+`tools/car_model.py` reads them:
+
+    python3 tools/car_model.py info hgts             # parts, size, paint, pages
+    python3 tools/car_model.py preview hgts          # draw it, no textures
+    python3 tools/car_model.py export hgts --out /tmp --lod high
+
+`preview` draws the mesh shaded from two angles; `export` writes an `.obj` with
+the parts as groups and a `.mtl` per texture page, Z-up for Blender. Vertices
+are stored *per part*, so both move each one by its part's origin — skip that
+and the wheels pile up inside the body.
+
+A car can be given a body nobody has modelled for it yet:
+
+    python3 tools/car_model.py swap mycar --from diab --textures
+
+That puts the donor's `car.fce` — and with `--textures` its `fedata.fsh` paint
+palette, with `--dashboard` its `dash.qfs`, with `--showcase` its `car00.tga` —
+into the car's archive and beside it. Verified by putting the Diablo's body and
+paint on the Ferrari 550's slot and starting the game: the car screen shows a
+Diablo. The physics stay yours, and so do the names in `fedata.eng` — only the
+shell is the donor's. Two things to expect: the wheels sit where the *donor*
+had them (their origins are in its mesh, not in `carp.txt`), and the dashboard
+and the showcase picture keep their own shapes unless you swap those too.
+
+Turning an `.obj` **into** an `.fce` is the one thing not here, and it is a
+project rather than a flag: every table above is known, but the three reserved
+areas at header `+0x1c`/`+0x20`/`+0x24` are not — 32 bytes a vertex, 12 bytes a
+vertex, 12 bytes a vertex, holding floats nobody has documented, and the game
+reads them (the port's own loader walks reserved #1 as it builds its polygon
+records, and zeroes a field in it). `info --reserved` prints what a retail file
+puts there; a converter has to work out what the game wants before it can write
+one.
+
 ### Desktop (Windows)
 
 Uses the prebuilt SDL3 in `sdl3/`. CMake ≥ 3.15 and a C++17 compiler:
