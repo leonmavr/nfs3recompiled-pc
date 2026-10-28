@@ -26,23 +26,46 @@ game's levels of detail.
 
     python3 tools/car_model.py info hgts
     python3 tools/car_model.py export hgts --out /tmp
+    python3 tools/car_model.py import mycar mycar.obj
     python3 tools/car_model.py swap hgts mycar --from diab
 
-`export` writes an .obj (and .mtl) to look at or edit in Blender; `swap` puts
-another car's body -- its `car.fce`, and with `--textures` its paint textures,
-`--dashboard` its dashboard and `--showcase` its picture -- into a car's
-archive and beside it, which is how a car gets a body nobody has modelled for
-it yet: the physics stay yours, the shell is someone else's.
+`export` writes an .obj (and .mtl) to look at or edit in Blender; `import` is
+the other way and is the one that makes a car of your own -- see below; `swap`
+puts another car's body -- its `car.fce`, and with `--textures` its paint
+textures, `--dashboard` its dashboard and `--showcase` its picture -- into a
+car's archive and beside it, which is how a car gets a body nobody has modelled
+for it yet: the physics stay yours, the shell is someone else's.
 
-Writing a *brand new* FCE -- converting an .obj into one -- is not in here, but
-nothing in the format stands in the way.  Everything the game draws from is in
-the tables above; the three reserved areas are stale scratch.  #1 is the 32
-bytes a vertex the renderer works in (sub_4bf4c0 writes x, y, z and 1/z over it
-and sub_49cfa0 zeroes its +0x14), so a retail file holds the *screen*
-coordinates of the last frame that drew the car; #2 and #3 are 12 bytes a
-vertex nothing reads.  Zeroing all three in a retail `car.fce` still renders and
-races without a flaw, so a converter can leave them zero.  `info --reserved`
-prints what a retail file puts there.
+Writing a brand new FCE is `import`, and nothing in the format stood in its way
+after all.  Everything the game draws from is in the tables above; the three
+reserved areas are stale scratch.  #1 is the 32 bytes a vertex the renderer
+works in (sub_4bf4c0 writes x, y, z and 1/z over it and sub_49cfa0 zeroes its
++0x14), so a retail file holds the *screen* coordinates of the last frame that
+drew the car; #2 and #3 are 12 bytes a vertex nothing reads.  Zeroing all three
+in a retail `car.fce` still renders and races without a flaw, so `import`
+leaves them zero.  `info --reserved` prints what a retail file puts there.
+
+What a mesh still has to bring is what the game cannot work out for itself:
+
+  - parts, one per `o`/`g` group.  The first is the body.  A group whose name
+    says which wheel it is ("wheel_FL", "front left wheel") becomes one of the
+    names the game knows -- "high left front wheel" -- because those are the
+    parts it steers and rolls; anything else keeps its own name.
+  - four levels of detail.  The game picks one by distance, so a mesh with only
+    the near one would be a car that is drawn at one distance.  `--lods dup`
+    (the default) gives the missing levels the near one's geometry again, which
+    costs triangles and never shows the wrong thing; `--lods single` leaves
+    them out.
+  - (u, v) per corner, into the car's one texture page.  That texture is the
+    car's own `fedata.fsh`, so a new body either paints itself with the retail
+    car's layout or ships a new `fedata.fsh`.  A corner without a `vt` takes
+    `--uv`, one texel of that texture.
+  - the paint stays the car's: `import` keeps the palette, the headlight and
+    brake light positions and the corners of the header nothing has documented
+    from the model it replaces (`--base` takes them from another car).
+
+The round trip is exact: `export hgts --lod all` then `import` of that .obj
+gives back 821 vertices, 1104 triangles and a car that renders identically.
 """
 import argparse
 import json
@@ -279,8 +302,8 @@ def export_obj(car, model, parts, out_dir, up="z"):
     faces = []
     for part in parts:
         faces.append(("o %s" % (part.name.replace(" ", "_") or ("part%d" % part.index)),
-                      part.first_triangle, part.triangles))
-    for name_line, first, count in faces:
+                      part, part.first_triangle, part.triangles))
+    for name_line, part, first, count in faces:
         lines.append(name_line)
         emitted = set()
         for index in range(first, min(first + count, len(model.triangles))):
@@ -296,7 +319,6 @@ def export_obj(car, model, parts, out_dir, up="z"):
                 if slot is None:
                     slot = len(uv_lines) + 1
                     uvs[key] = slot
-                    u, v = point((0, 0, 0)) and corner  # UVs are not transformed
                     uv_lines.append("vt %.5f %.5f" % (corner[0], corner[1]))
                 refs.append(slot)
             g0, g1, g2 = (i0 + part.first_vertex, i1 + part.first_vertex,
@@ -417,6 +439,285 @@ def preview(car, model, parts, out=None, show=True):
     plt.close(figure)
 
 
+# ------------------------------------------------------- writing a model
+
+LOD_TAGS = ("high", "medium", "small", "tiny")
+
+
+def _wheel_name(group):
+    """The game's name for a wheel group, or None if the group is not one.
+
+    The game finds a car's wheels by the names its own models use -- "high left
+    front wheel" and its three siblings -- and steers and rolls those parts, so
+    a group called "wheel_FL_32" has to come out as one of them or the wheel is
+    a body panel that never turns."""
+    low = " " + group.lower().replace("_", " ").replace("-", " ") + " "
+    if not any(word in low for word in (" wheel ", " tyre ", " tire ")):
+        return None
+    side = ("left" if any(word in low for word in (" left ", " lf ", " fl ", " l "))
+            else "right" if any(word in low for word in (" right ", " rf ", " fr ", " r ")) else None)
+    end = "front" if " front " in low else "rear" if (" rear " in low or " back " in low) else None
+    return "%s %s wheel" % (side, end) if side and end else None
+
+
+def part_names(groups):
+    """The names the parts get, in order: the first is the body."""
+    names = []
+    for index, group in enumerate(groups):
+        name = _wheel_name(group)
+        if not name:
+            name = "body" if index == 0 else (group.strip() or ("part %d" % index))
+        name = name.replace("_", " ").strip()[:63]
+        if not name.lower().startswith(LOD_TAGS):
+            name = "high " + name
+        names.append(name)
+    return names
+
+
+def read_obj(path):
+    """(positions, uvs, normals, groups) from an .obj, its faces fan-cut.
+
+    A group is what `o` or `g` names; a file that names none is one part.  A
+    corner is (position, uv, normal) indices into the file's own lists, the
+    last two None where the face does not give them."""
+    positions, uvs, normals = [], [], []
+    groups = []
+    current = None
+    for number, line in enumerate(Path(path).read_text(errors="replace").splitlines(), start=1):
+        line = line.strip()
+        if not line or line[0] == "#":
+            continue
+        head, _, rest = line.partition(" ")
+        fields = rest.split()
+        try:
+            if head == "v":
+                positions.append(tuple(float(c) for c in fields[:3]))
+            elif head == "vt":
+                uvs.append((float(fields[0]), float(fields[1]) if len(fields) > 1 else 0.0))
+            elif head == "vn":
+                normals.append(tuple(float(c) for c in fields[:3]))
+            elif head in ("o", "g"):
+                current = {"name": rest.strip(), "triangles": []}
+                groups.append(current)
+            elif head == "f":
+                if current is None:
+                    current = {"name": "", "triangles": []}
+                    groups.append(current)
+                corners = []
+                for item in fields:
+                    bits = item.split("/")
+
+                    def index(text, count):
+                        if not text:
+                            return None
+                        value = int(text)
+                        return value - 1 if value > 0 else count + value
+
+                    corners.append((index(bits[0], len(positions)),
+                                    index(bits[1], len(uvs)) if len(bits) > 1 else None,
+                                    index(bits[2], len(normals)) if len(bits) > 2 else None))
+                for i in range(1, len(corners) - 1):
+                    current["triangles"].append((corners[0], corners[i], corners[i + 1]))
+        except (ValueError, IndexError):
+            raise CarFileError("%s line %d: not an .obj line: %s" % (path, number, line))
+    groups = [group for group in groups if group["triangles"]]
+    if not groups:
+        raise CarFileError("%s: no faces in it" % path)
+    return positions, uvs, normals, groups
+
+
+def _cross(a, b):
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+def _unit(vector):
+    length = math.sqrt(sum(c * c for c in vector))
+    return tuple(c / length for c in vector) if length else (0.0, 0.0, 1.0)
+
+
+def fce_from_obj(positions, uvs, normals, groups, header, up="y", scale=1.0, lods="dup",
+                 flat_uv=(0.5, 0.5)):
+    """The bytes of a car.fce made of the groups, over `header`\'s own fields.
+
+    `header` is a model\'s first 0x1f04 bytes: what a mesh cannot say -- the
+    paint palettes, the headlight and brake light positions, the areas nothing
+    has documented -- is kept from it, and everything the mesh does decide is
+    written over it."""
+    # The game's own axes are Y up and +Z forward (the retail cars' headlights
+    # are at +Z).  Blender's .obj export is Y up with the model facing -Z, and
+    # what `export` writes is Z up, so both are turned on the way in.
+    turn = (lambda x, y, z: (x, y, -z)) if up == "y" else (lambda x, y, z: (x, z, -y))
+
+    def point(position):
+        return turn(*(c * scale for c in position))
+
+    model_vertices, model_normals, model_triangles = [], [], []
+    parts = []
+    names = part_names([group["name"] for group in groups])
+    for name, group in zip(names, groups):
+        corners = [point(positions[corner[0]]) for triangle in group["triangles"] for corner in triangle]
+        low = tuple(min(c[i] for c in corners) for i in range(3))
+        high = tuple(max(c[i] for c in corners) for i in range(3))
+        origin = tuple((low[i] + high[i]) / 2.0 for i in range(3))   # a wheel turns about this
+
+        local = {}
+        first_vertex, first_triangle = len(model_vertices), len(model_triangles)
+        for triangle in group["triangles"]:
+            indices, corner_uvs = [], []
+            for position_index, uv_index, normal_index in triangle:
+                # an FCE's (u, v) belong to the corner, so a vertex is split only
+                # where one position carries two normals
+                key = (position_index, normal_index)
+                if key not in local:
+                    local[key] = len(model_vertices)
+                    position = point(positions[position_index])
+                    model_vertices.append(tuple(position[i] - origin[i] for i in range(3)))
+                    if normal_index is not None and normal_index < len(normals):
+                        model_normals.append(_unit(turn(*normals[normal_index])))
+                    else:
+                        model_normals.append(None)      # the face's, below
+                indices.append(local[key])
+                corner_uvs.append(uvs[uv_index] if uv_index is not None and uv_index < len(uvs)
+                                  else flat_uv)
+            a, b, c = (model_vertices[i] for i in indices)
+            face = _unit(_cross(tuple(b[i] - a[i] for i in range(3)),
+                                tuple(c[i] - a[i] for i in range(3))))
+            for slot in indices:
+                if model_normals[slot] is None:
+                    model_normals[slot] = face
+            model_triangles.append((indices, corner_uvs))
+        parts.append((name, origin, first_vertex, len(model_vertices) - first_vertex,
+                      first_triangle, len(model_triangles) - first_triangle))
+
+    def copy_part(source, name):
+        """The same geometry again under another name, for a level of detail the
+        mesh does not carry of its own."""
+        _n, origin, first, count, first_triangle, triangle_count = parts[source]
+        new_first, new_triangle = len(model_vertices), len(model_triangles)
+        model_vertices.extend(model_vertices[first:first + count])
+        model_normals.extend(model_normals[first:first + count])
+        for index in range(first_triangle, first_triangle + triangle_count):
+            indices, corners = model_triangles[index]
+            model_triangles.append(([i - first + new_first for i in indices], list(corners)))
+        parts.append((name, origin, new_first, count, new_triangle, triangle_count))
+
+    if lods == "dup":
+        # Every car the game ships has four levels of detail, and the game picks
+        # one by distance; a mesh with only the near one is a car that can be
+        # drawn at one distance only.  Rather than lose it at the others, the
+        # missing levels are the near one again, which costs triangles but never
+        # shows the wrong thing.  A mesh that brings its own levels keeps them.
+        have = {part[0].split(" ")[0] for part in parts}
+        wheels = [index for index, part in enumerate(parts) if "wheel" in part[0].split(" ", 1)[-1]]
+        for tag in ("medium", "small", "tiny"):
+            if tag in have:
+                continue
+            copy_part(0, tag + " " + parts[0][0].split(" ", 1)[-1])
+            if tag == "medium":
+                for index in wheels:
+                    copy_part(index, tag + " " + parts[index][0].split(" ", 1)[-1])
+    return _pack_fce(header, model_vertices, model_normals, model_triangles, parts)
+
+
+def blank_header(dummies=(), colours=(), secondary=()):
+    """A header with nothing in it, for a car that has no model of its own."""
+    header = bytearray(HEADER_SIZE)
+    for index, pair in enumerate(dummies[:8]):
+        struct.pack_into("<6f", header, 0x38 + index * 24, *pair)
+    struct.pack_into("<I", header, 0x34, len(dummies[:8]))
+    struct.pack_into("<I", header, 0x0F8, 0)
+    for count_at, at, entries in ((0x7FC, 0x800, colours), (0x900, 0x904, secondary)):
+        struct.pack_into("<I", header, count_at, min(len(entries), 16))
+        for slot, entry in enumerate(entries[:16]):
+            struct.pack_into("<4I", header, at + slot * 16, *entry)
+    return bytes(header)
+
+
+def _pack_fce(header, vertices, normals, triangles, parts):
+    """The file: the header, then the tables in the order the header points at.
+
+    Vertices are 12 bytes (part-local: the part's origin puts them back),
+    normals 12, triangles 0x38 -- texture page, three indices local to the
+    part, the flags, then the three (u, v) pairs -- and the three reserved
+    areas the format leaves undocumented, 32 bytes a vertex and then 12 and 12,
+    which the renderer works in and writes over: zero here.
+
+    What a mesh cannot say is kept from `header` -- either the model the car has
+    now or blank_header(): the paint palettes, the headlight positions, and
+    whatever the format's unknown corners hold in a file the game already
+    draws."""
+    if header is None or len(header) < HEADER_SIZE:
+        raise CarFileError("no 0x1f04-byte header to build on")
+    if len(parts) > MAX_PARTS:
+        raise CarFileError("%d parts, and a model holds %d" % (len(parts), MAX_PARTS))
+
+    header = bytearray(header)
+    data = bytearray()
+    offsets = {}
+
+    def place(table, table_bytes):
+        offsets[table] = len(data)
+        data.extend(table_bytes)
+
+    place("vertices", b"".join(struct.pack("<3f", *vertex) for vertex in vertices))
+    place("normals", b"".join(struct.pack("<3f", *normal) for normal in normals))
+    triangle_bytes = bytearray()
+    for _name, _origin, first, _count, first_triangle, triangle_count in parts:
+        for index in range(first_triangle, first_triangle + triangle_count):
+            indices, corners = triangles[index]
+            # indices are the part's own, not the model's: the game adds the
+            # part's first vertex to them
+            triangle_bytes.extend(struct.pack("<4I", 0, indices[0] - first, indices[1] - first,
+                                              indices[2] - first))
+            # 12 bytes the format leaves unexplained, 0xff00ff00 a corner in
+            # every retail triangle but some of the bonus car's, which are grey
+            triangle_bytes.extend(b"\x00\xff" * 6)
+            triangle_bytes.extend(struct.pack("<I", 0))                 # flags
+            triangle_bytes.extend(struct.pack("<6f", corners[0][0], corners[1][0], corners[2][0],
+                                             corners[0][1], corners[1][1], corners[2][1]))
+    place("triangles", bytes(triangle_bytes))
+    place("reserved #1", bytes(len(vertices) * 0x20))
+    place("reserved #2", bytes(len(vertices) * 12))
+    place("reserved #3", bytes(len(vertices) * 12))
+
+    low = [math.inf] * 3
+    high = [-math.inf] * 3
+    for _name, origin, first, count, _first_triangle, _count in parts:
+        for index in range(first, first + count):
+            for axis in range(3):
+                value = vertices[index][axis] + origin[axis]
+                low[axis] = min(low[axis], value)
+                high[axis] = max(high[axis], value)
+
+    struct.pack_into("<I", header, 0x04, len(triangles))
+    struct.pack_into("<I", header, 0x08, len(vertices))
+    struct.pack_into("<I", header, 0x0C, 1)                              # one texture page
+    struct.pack_into("<I", header, 0x10, offsets["vertices"])
+    struct.pack_into("<I", header, 0x14, offsets["normals"])
+    struct.pack_into("<I", header, 0x18, offsets["triangles"])
+    struct.pack_into("<I", header, 0x1C, offsets["reserved #1"])
+    struct.pack_into("<I", header, 0x20, offsets["reserved #2"])
+    struct.pack_into("<I", header, 0x24, offsets["reserved #3"])
+    struct.pack_into("<3f", header, 0x28, *[(high[axis] - low[axis]) / 2.0 if vertices else 0.0
+                                           for axis in range(3)])
+    struct.pack_into("<I", header, 0x0F8, len(parts))
+
+    # the part tables and the names are the model's; the palettes between stay
+    for at, size in ((0x0FC, 0x7FC - 0x0FC), (0x0E04, HEADER_SIZE - 0x0E04)):
+        header[at:at + size] = bytes(size)
+    for index, (name, origin, first, count, first_triangle, triangle_count) in enumerate(parts):
+        struct.pack_into("<3f", header, 0x0FC + index * 12, *origin)
+        struct.pack_into("<I", header, 0x3FC + index * 4, first)
+        struct.pack_into("<I", header, 0x4FC + index * 4, count)
+        struct.pack_into("<I", header, 0x5FC + index * 4, first_triangle)
+        struct.pack_into("<I", header, 0x6FC + index * 4, triangle_count)
+        raw = name.encode("latin-1", "replace")[:64]
+        header[0x0E04 + index * 64:0x0E04 + index * 64 + len(raw)] = raw
+    return bytes(header) + bytes(data)
+
+
+
+
 # --------------------------------------------------------------------- cli
 
 def _print_info(car, model, reserved):
@@ -456,7 +757,8 @@ def _print_info(car, model, reserved):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Inspect a car's model, export it as OBJ, or give a car a different body.")
+        description="Inspect a car's model, export it as OBJ, build one from an OBJ, "
+                    "or give a car a different body.")
     parser.add_argument("--root", default="gamedata/carmodel")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -478,6 +780,24 @@ def main(argv=None):
     draw.add_argument("--out")
     draw.add_argument("--lod", default="high")
     draw.add_argument("--no-window", action="store_true")
+
+    load = sub.add_parser("import", help="build a car.fce from an .obj and give it to a car")
+    load.add_argument("car")
+    load.add_argument("obj")
+    load.add_argument("--base", help="the car whose header is kept (paint, lights, the unknown "
+                                     "corners); default: the car's own model")
+    load.add_argument("--up", default="y", choices=("y", "z"),
+                      help="the .obj's up axis: y for Blender's default (default), z if the mesh "
+                           "is already Z up")
+    load.add_argument("--scale", type=float, default=1.0, help="metres per mesh unit (default 1)")
+    load.add_argument("--uv", default="0.5,0.5",
+                      help="the (u, v) a corner gets when the .obj has none (default 0.5,0.5, "
+                           "which is one texel of the car's own texture)")
+    load.add_argument("--lods", default="dup", choices=("dup", "single"),
+                      help="dup (default) gives the mesh the medium, small and tiny levels it "
+                           "does not carry, so the game can draw it at any distance; single keeps "
+                           "only the parts the .obj has")
+    load.add_argument("--dry-run", action="store_true")
 
     swap = sub.add_parser("swap", help="take another car's body, textures or dashboard")
     swap.add_argument("car")
@@ -515,6 +835,41 @@ def main(argv=None):
                 raise CarFileError("%s has no %s parts" % (car.key, args.lod))
             preview(car, model, parts, out=args.out,
                     show=not args.no_window and not args.out)
+            return 0
+
+        if args.command == "import":
+            car = find_car(args.car, args.root)
+            source = find_car(args.base, args.root) if args.base else car
+            try:
+                model, _ = load_model(source)
+                header = model_bytes(source.folder)[0][:HEADER_SIZE]
+            except CarFileError:
+                if args.base:
+                    raise
+                model = None
+                header = blank_header()
+            positions, uvs, normals, groups = read_obj(args.obj)
+            try:
+                flat_uv = tuple(float(c) for c in args.uv.split(","))
+            except ValueError:
+                raise CarFileError("--uv takes two numbers, u,v")
+            built = fce_from_obj(positions, uvs, normals, groups, header, up=args.up,
+                                 scale=args.scale, lods=args.lods, flat_uv=flat_uv)
+            again = parse_fce(built, args.obj)
+            print("%s <- %s" % (car.key, args.obj))
+            print("  %d vertices, %d triangles, %d parts, %.3f x %.3f x %.3f m"
+                  % (len(again.vertices), len(again.triangles), len(again.parts),
+                     again.half_size[0] * 2, again.half_size[1] * 2, again.half_size[2] * 2))
+            for part in again.parts:
+                print("    %2d  %-24s origin %6.2f %6.2f %6.2f   %4d verts %4d tris"
+                      % (part.index, part.name, part.origin[0], part.origin[1], part.origin[2],
+                         part.vertices, part.triangles))
+            if args.dry_run:
+                print("  (nothing written)")
+                return 0
+            mode = replace_archive_entry(car_archive(car), "car.fce", built)
+            (car.folder / "car.fce").write_bytes(built)
+            print("  wrote car.fce (%d bytes) into car.viv, %s" % (len(built), mode))
             return 0
 
         if args.command == "swap":

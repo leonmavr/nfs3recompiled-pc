@@ -906,6 +906,7 @@ wheels, then "medium", "small" and "tiny" — plus odd extras such as
     python3 tools/car_model.py info hgts             # parts, size, paint, pages
     python3 tools/car_model.py preview hgts          # draw it, no textures
     python3 tools/car_model.py export hgts --out /tmp --lod high
+    python3 tools/car_model.py import hgts mycar.obj # a body of your own
 
 `preview` draws the mesh shaded from two angles; `export` writes an `.obj` with
 the parts as groups and a `.mtl` per texture page, Z-up for Blender. Vertices
@@ -925,22 +926,50 @@ shell is the donor's. Two things to expect: the wheels sit where the *donor*
 had them (their origins are in its mesh, not in `carp.txt`), and the dashboard
 and the showcase picture keep their own shapes unless you swap those too.
 
-Turning an `.obj` **into** an `.fce` is the one thing not here, and nothing in
-the format stands in its way: the tables above are everything the game draws
-from. The three reserved areas at header `+0x1c`/`+0x20`/`+0x24` look like the
-obstacle — 32 bytes a vertex, then 12 and 12 — but they are scratch. Reserved
-#1 is the record the renderer transforms a vertex in: `sub_4bf4c0` writes x, y,
-z and 1/z over it every frame, `sub_49cfa0` zeroes its `+0x14`, and a retail
-file therefore holds the *screen* coordinates of whatever frame last drew the
-car (FM50's start 393.3, 237.1 — not a vertex of its mesh). Zeroing all three
-areas in a retail `car.fce`, in the loose file and in `car.viv`, still renders
-the car in the showroom and races it unchanged: the mesh is the vertex,
-normal, triangle and part tables alone. A converter can leave the areas zero
-(`info --reserved` prints what a retail file puts there for reference), and
-what is left is bookkeeping — splitting the mesh into named parts with origins,
-one vertex and triangle range each, four levels of detail, per-corner (u, v)
-into a texture page, the two 16-colour palettes, and half the model's size in
-the header.
+A mesh of your own is an `.obj` away. `import` builds the `car.fce` and puts
+it in the car's archive:
+
+    python3 tools/car_model.py import mycar mycar.obj --base hgts
+
+The format held nothing back: the tables above are everything the game draws
+from, and the three reserved areas at header `+0x1c`/`+0x20`/`+0x24` — 32 bytes
+a vertex, then 12 and 12 — are scratch. Reserved #1 is the record the renderer
+transforms a vertex in: `sub_4bf4c0` writes x, y, z and 1/z over it every frame,
+`sub_49cfa0` zeroes its `+0x14`, and a retail file therefore holds the *screen*
+coordinates of whatever frame last drew the car (FM50's start 393.3, 237.1 — not
+a vertex of its mesh). Zeroing all three in a retail `car.fce`, in the loose file
+and in `car.viv`, still renders the car in the showroom and races it unchanged.
+`import` leaves them zero; `info --reserved` prints what a retail file puts
+there for reference.
+
+What the mesh has to bring is what the game cannot work out:
+
+- **Parts**, one per `o`/`g` group, the first being the body. A group that names
+  its wheel and side (`wheel_FL`, `front left wheel`) becomes the name the game
+  knows — `high left front wheel` — because those are the parts it steers and
+  rolls; any other name is kept. Each part's origin is its bounding box's centre,
+  which is the pivot a wheel turns about, and its vertices are stored relative to
+  it.
+- **Four levels of detail**: the game picks one by distance, and a car carrying
+  only the near one is drawn at one distance. `--lods dup` (the default) gives
+  the missing levels the near one's geometry again — triangles spent, never the
+  wrong thing shown; `--lods single` leaves them out. A mesh that brings its own
+  levels (`export` writes all four) keeps them.
+- **(u, v) per corner**, into the car's one texture page. That page is the car's
+  own `fedata.fsh`, so a new body either paints itself with the retail car's
+  layout or ships a new `fedata.fsh`. Corners with no `vt` take `--uv u,v`.
+
+Everything else comes from the model it replaces (`--base` for another car): the
+two 16-colour paint palettes, the headlight and brake light positions at header
+`+0x34`, the unknown corners of the header, and half the model's size is
+computed from the mesh. Axes: the game is Y up with `+Z` forward, which is what
+Blender's `.obj` export gives (`--up y`, the default, flips its forward `-Z`);
+`--up z` for what `export` itself writes.
+
+Verified both ways round: `export hgts --lod all` then `import` of that file
+gives back 821 vertices, 1104 triangles and the same world geometry, triangle
+for triangle, and the game renders it identically; a hand-written box body with
+four box wheels imports, shows in the Player Car screen and races.
 
 ### Desktop (Windows)
 
