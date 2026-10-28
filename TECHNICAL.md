@@ -779,6 +779,63 @@ a crash. Fixing it means letting `sub_439a50` answer by id — the record's own
 id byte at `+0x31c` — instead of by place, so a place and an id stop meaning
 the same number, and that is the next piece of work here.
 
+### Seeing and tuning a car's performance
+
+`carp.txt` is the whole physics of a car: 80 labelled fields, plain text, and
+the labels are what the game's parser looks for (they are in `nfs3.exe` at
+`0x53e0xx`-`0x53f0xx`), so editing a value is the whole job — nothing is
+compiled or re-derived.  It lives **inside the car's `car.viv`**, beside
+`car.fce` and `fedata.fsh`: that is the copy the game parses, and the loose
+`carp.txt` in the folder is only what `tools/extract_viv.py` unpacked (delete
+it and the car still drives).  The tool therefore reads the archive and writes
+both, and a file that grows past its old size has the archive rebuilt around
+it.
+
+`tools/car_perf.py` reads them, draws them, and writes them back:
+
+    python3 tools/car_perf.py list                     # every car, side by side
+    python3 tools/car_perf.py list --fields            # the fields you can set
+    python3 tools/car_perf.py show hgts                # a window
+    python3 tools/car_perf.py show hgts --out hgts.png # a picture instead
+    python3 tools/car_perf.py compare hgts diab ffal
+    python3 tools/car_perf.py set hgts mass=1500 "final=4.10"
+    python3 tools/car_perf.py clone hgts mycar --id 60 --name "ZZZ 001" mass=1500
+
+`show` puts four panels on one page: the headline figures as bars against the
+rest of the field (power, power per tonne, top speed, 0-100, grip, braking,
+turning circle), the engine's torque curve with the power worked out from it,
+the gear chart (engine rpm against road speed, one line per gear, with the
+redline and the drops at a shift), and the acceleration the game gives the car.
+`set` and `clone` take `field=value` in the same words the labels use, or a
+`--preset` JSON object, and `--dry-run` says what would change without writing;
+`clone` copies the whole folder and gives the copy its own id and display name,
+in `fedata.eng` and inside `car.viv`, so it is a car the game will load (the id
+must be unused, and the name cannot be wider than the one it replaces — the
+archive's offsets are fixed).
+
+Three things are worth knowing before tuning:
+
+- **Acceleration comes from two different places.** The eight `AI ACC`
+  sections are one curve — acceleration in m/s² against speed in 1 m/s steps,
+  running out exactly at the car's maximum velocity — and that is what the AI
+  drives to; it is what the tool integrates for its 0-100 and 400 m, and for
+  the retail cars it reproduces the showroom figures to within about 0.2 s.
+  The player's car gets its go from the torque curve, the gearbox and the
+  mass, which the tool draws as the dashed estimate. So editing mass, gearing
+  or the torque curve moves the dashed curve and not the table: a tuned car
+  needs its `AI ACC` sections edited too if the AI is to keep up.
+- **Gearing is stored twice.** `gear ratios` and `final gear` are the gearbox,
+  but the speed at a given rpm comes from `velocity to rpm ratio`, and the game
+  reads that one — `velocity to rpm ratio = ratio × final × 60 ÷ (wheel
+  circumference)`, which the retail files satisfy. `set` and `clone` recompute
+  it when the gearing changes (`--keep-v2r` leaves it alone), which is why a
+  change to the final drive moves the gear chart.
+- **The showroom numbers are blurb, not data.** The `220 kW @ 4800 rpm` in
+  `fedata.eng` is what the brochure says; the torque curve in `carp.txt` is
+  what the car is simulated from, and for some cars the two disagree (the HSV
+  curve peaks at 600 where the brochure claims 475 Nm). The tool shows both
+  side by side rather than picking one.
+
 ### Desktop (Windows)
 
 Uses the prebuilt SDL3 in `sdl3/`. CMake ≥ 3.15 and a C++17 compiler:
