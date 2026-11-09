@@ -31,6 +31,9 @@ void setSwapObserver(SwapObserver observer);
  * blits into, so it is what turns a touch on the screen into a pixel of the
  * game.  False while no Glide window is open. */
 bool screenRect(int& x, int& y, int& w, int& h, int& pictureWidth, int& pictureHeight);
+/* Port: what is drawn from now on is a car (on) or not (off) -- the road's
+ * grain stays off the cars' paint (ThrashRenderer::setCarSurface). */
+void carSurface(bool on);
 
 /* The texture atlas: free texels, whole 256x256 tiles among them, and its size
  * in texels.  False while no Glide window is open. */

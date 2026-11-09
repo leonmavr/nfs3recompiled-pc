@@ -72,6 +72,8 @@ extern PFNGLGENSAMPLERSPROC             glGenSamplers;
 extern PFNGLDELETESAMPLERSPROC          glDeleteSamplers;
 extern PFNGLBINDSAMPLERPROC             glBindSampler;
 extern PFNGLSAMPLERPARAMETERIPROC       glSamplerParameteri;
+extern PFNGLSAMPLERPARAMETERFPROC       glSamplerParameterf;
+extern PFNGLGENERATEMIPMAPPROC          glGenerateMipmap;
 
 #endif /* NFS_GL_NEEDS_LOADER */
 

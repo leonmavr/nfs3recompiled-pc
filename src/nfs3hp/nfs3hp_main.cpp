@@ -160,6 +160,8 @@ void dialogEmblem(bool drawing)
     win32::glide2x::squeezeToLeft(drawing);
 }
 
+void carVerticesDone();  // native_vertices.cpp
+
 bool raceIsRunning()
 {
     return s_raceRunning;
@@ -2428,6 +2430,7 @@ void botForceTick(win32::WinApplication* app)
 void onSwap(win32::WinApplication* app)
 {
     ++nfs3hp::s_swaps;
+    nfs3hp::carVerticesDone();
 #ifndef __ANDROID__
     scriptTick();
 #endif

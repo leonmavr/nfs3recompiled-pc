@@ -60,6 +60,8 @@ PFNGLGENSAMPLERSPROC             glGenSamplers;
 PFNGLDELETESAMPLERSPROC          glDeleteSamplers;
 PFNGLBINDSAMPLERPROC             glBindSampler;
 PFNGLSAMPLERPARAMETERIPROC       glSamplerParameteri;
+PFNGLSAMPLERPARAMETERFPROC       glSamplerParameterf;
+PFNGLGENERATEMIPMAPPROC          glGenerateMipmap;
 
 namespace
 {
@@ -136,6 +138,8 @@ void loadGlFunctions()
     load(glDeleteSamplers,          "glDeleteSamplers");
     load(glBindSampler,             "glBindSampler");
     load(glSamplerParameteri,       "glSamplerParameteri");
+    load(glSamplerParameterf,       "glSamplerParameterf");
+    load(glGenerateMipmap,          "glGenerateMipmap");
 
     s_loaded = true;
 }

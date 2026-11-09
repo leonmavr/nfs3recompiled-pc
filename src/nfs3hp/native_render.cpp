@@ -7139,6 +7139,30 @@ void bouncersNative(win32::WinApplication* app, x86::CPU& cpu)
     leave();
 }
 
+/* Port: how far the headlights' patch on the road reaches and how wide it is,
+ * against the original's (NFS_HEADLIGHT_REACH, 2 by default; NFS_HEADLIGHT_WIDTH,
+ * 1.4).  The original lit at most 30 units of road ahead -- a few car lengths,
+ * so at night the road ran into the dark just past the bonnet.  1 and 1 are
+ * the original exactly. */
+float headlightSetting(const char* name, float fallback)
+{
+    const char* text = SDL_getenv(name);
+    const float value = text && *text ? float(SDL_atof(text)) : fallback;
+    return value >= 0.25f && value <= 4.0f ? value : fallback;
+}
+
+float headlightReach()
+{
+    static const float reach = headlightSetting("NFS_HEADLIGHT_REACH", 2.0f);
+    return reach;
+}
+
+float headlightWidth()
+{
+    static const float width = headlightSetting("NFS_HEADLIGHT_WIDTH", 1.4f);
+    return width;
+}
+
 /* sub_491bc0: a headlight's patch on the road, stdcall (view in eax; +4..+0xc
  * where it falls, +0x10 its colour, +0x14 for sub_420bf0, +0x18 its size,
  * +0x1c the car or 0, +0x20 its direction kept): unless the detail
@@ -7341,12 +7365,16 @@ void roadLightNative(win32::WinApplication* app, x86::CPU& cpu)
     push(r.eax);
     r.edx = ebp - 0x12;
     r.eax = 1;
-    push(m.word(ebp + 0xa6));
+    // Port: the patch wider by headlightWidth() (1 the original's).
+    push(headlightWidth() == 1.0f ? m.word(ebp + 0xa6)
+                                  : asBits(float(m.load(ebp + 0xa6)) * headlightWidth()));
     if (!callTo(0x4e0050))
         return;
     {
-        // The length held to [size, 30].
-        const double length = M::mul(m.load(ebp + 0x6e), m.loadDouble(0x53bce0));
+        // The length held to [size, 30] -- port: both the length and its
+        // ceiling times headlightReach(), 1 the original's.
+        const double reach = headlightReach();
+        const double length = M::mul(M::mul(m.load(ebp + 0x6e), m.loadDouble(0x53bce0)), reach);
         const double size = m.load(ebp + 0xa6);
         app->getMemory<double>(ebp + 0x56) = size;
         app->getMemory<double>(ebp + 0x36) = length;
@@ -7359,12 +7387,17 @@ void roadLightNative(win32::WinApplication* app, x86::CPU& cpu)
         }
         else
         {
-            compareToFlags(app->getMemory<double>(ebp + 0x36), m.loadDouble(0x53bce8));
+            const double ceiling = M::mul(m.loadDouble(0x53bce8), reach);
+            compareToFlags(app->getMemory<double>(ebp + 0x36), ceiling);
             if (!cpu.flags.cf && !cpu.flags.zf)
             {
-                r.edx = 0;
+                // 30.0 as a double, its two halves -- or the port's ceiling.
+                const double held = reach == 1.0 ? 30.0 : ceiling;
+                x86::reg32 halves[2];
+                std::memcpy(halves, &held, sizeof halves);
+                r.edx = halves[0];
                 flags.logic(0);
-                r.ebx = 0x403e0000;
+                r.ebx = halves[1];
                 m.word(ebp + 0x5e, r.edx);
                 m.word(ebp + 0x62, r.ebx);
             }

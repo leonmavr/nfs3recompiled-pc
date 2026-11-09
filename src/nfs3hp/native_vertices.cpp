@@ -746,6 +746,33 @@ void envMapCoordsNative(win32::WinApplication* app, x86::CPU& cpu)
     cpu.esp = esp + 4 + 4;
 }
 
+/* Port: the cars' vertices, as sub_49da30 lights them each frame -- the arrays
+ * their polygons point into, which is how THRASH's drawing (native_thrash.cpp)
+ * tells a car's paint from the road it is sorted in with, to keep the road's
+ * grain (thrashrenderer.cpp) off it.  Cleared as a frame
+ * is shown (carVerticesDone, from nfs3hp_main.cpp's onSwap). */
+}  // namespace (the functions above), for the two the other files call
+
+struct CarVertexRange { x86::reg32 first, end; };
+static std::vector<CarVertexRange> s_carVertices;
+
+bool isCarVertex(x86::reg32 vertex)
+{
+    for (const CarVertexRange& range : s_carVertices)
+        if (vertex >= range.first && vertex < range.end)
+            return true;
+    return false;
+}
+
+void carVerticesDone()
+{
+    s_carVertices.clear();
+    win32::glide2x::carSurface(false);
+}
+
+namespace
+{
+
 /* sub_49da30: a car's vertices lit by the sun.
  *   eax  the car: records of 0x84 bytes at [eax], this part's [eax+4]
  *   edx  count; ebx  the normals; ecx  where they go, turned
@@ -764,6 +791,11 @@ void shadeNormalsNative(win32::WinApplication* app, x86::CPU& cpu)
     const x86::reg32 count = cpu.edx;
     const x86::reg32 turned = cpu.ecx;
     const x86::reg32 dots = app->getMemory<x86::reg32>(cpu.eax) + app->getMemory<x86::reg32>(cpu.eax + 4) * 0x84;
+    {
+        const x86::reg32 vertices = app->getMemory<x86::reg32>(esp + 4);
+        if (s_carVertices.size() < 256)
+            s_carVertices.push_back({ vertices, vertices + count * 0x20 });
+    }
     // push esi, edi, ebp; mov ebp, esp; sub esp, 0x14 -- then the two calls
     cpu.ebp = esp - 12;
     cpu.esp = esp - 12 - 0x14;

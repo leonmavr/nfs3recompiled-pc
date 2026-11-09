@@ -18,6 +18,10 @@ namespace win32
 
 static const char g_preamble[] = NFS_GLSL_PREAMBLE;
 
+// EXT_texture_filter_anisotropic's, core in OpenGL 4.6.
+static const GLenum kTextureMaxAnisotropy = 0x84FE;
+static const GLenum kMaxTextureMaxAnisotropy = 0x84FF;
+
 /* GlideRenderer's vertex shader without the atlas: the fog factor from the
  * draw's table at the corner's w, worked out here (see gliderenderer.cpp). */
 static const char g_vertexShader[] = ""
@@ -78,6 +82,9 @@ static const char g_fragmentShader[] =
 "uniform float u_gamma;"
 "uniform vec2 u_wrap;"
 "uniform float u_levels;"
+"uniform float u_detail;"
+"uniform float u_detailScale;"
+"uniform sampler2D u_detailTexture;"
 /* Whether a texel is the key colour, compared as GlideRenderer compares it:
  * against the bytes its own conversion to RGBA8 gave the texel -- 565 widened
  * by a shift, 1555 scaled, 4444 and 8888 exact -- so a key matches the texels
@@ -132,6 +139,13 @@ static const char g_fragmentShader[] =
 "    vec4 color = vec4(mix(v_color.rgb, v_color.rgb * textureColor.rgb, v_combine.s),"
 "                      mix(v_color.a, v_color.a * textureColor.a, v_combine.t));"
 "    if (color.a <= u_alphaRef) discard;"
+/* The ground's grain (initGl): a fine noise over the texture, in its own
+ * coordinates so it lies on the surface, lighter and darker by u_detail.  Far
+ * off its mipmaps average to grey and it is gone of itself. */
+"    if (u_detail > 0.0 && v_combine.s > 0.5 && v_combine.q > 0.5) {"
+"        float grain = texture(u_detailTexture, uv * u_detailScale).r;"
+"        color.rgb *= 1.0 + u_detail * (grain - 0.5) * 2.0;"
+"    }"
 "    color.rgb = mix(color.rgb, u_fogColor, clamp(v_fog, 0.0, 1.0));"
 "    if (u_gamma != 1.0)"
 "        color.rgb = pow(max(color.rgb, vec3(0.0)), vec3(1.0 / max(u_gamma, 0.001)));"
@@ -255,6 +269,54 @@ ThrashRenderer::~ThrashRenderer()
     giveVertices(m_vertices);
 }
 
+/* The ground's grain: 256 x 256, tiling, around a mean of a half -- asphalt's
+ * own speckle, a texel or two across, over a softer mottle of a few dozen.
+ * Value noise on a wrapped lattice, so the tile has no seam; a fixed seed, so
+ * every run looks the same. */
+static std::vector<x86::reg8> grainTexels()
+{
+    const int size = 256;
+    std::vector<float> sum(size * size, 0.0f);
+    std::uint32_t seed = 0x9e3779b9u;
+    auto next = [&seed]() {
+        seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
+        return float(seed & 0xffffff) / float(0xffffff);
+    };
+    struct Octave { int cell; float weight; };
+    const Octave octaves[] = { { 1, 0.55f }, { 2, 0.25f }, { 8, 0.12f }, { 32, 0.08f } };
+    for (const Octave& octave : octaves)
+    {
+        const int cells = size / octave.cell;
+        std::vector<float> lattice(cells * cells);
+        for (float& v : lattice)
+            v = next();
+        for (int y = 0; y < size; ++y)
+            for (int x = 0; x < size; ++x)
+            {
+                const float fx = float(x) / octave.cell, fy = float(y) / octave.cell;
+                const int x0 = int(fx) % cells, y0 = int(fy) % cells;
+                const int x1 = (x0 + 1) % cells, y1 = (y0 + 1) % cells;
+                float tx = fx - std::floor(fx), ty = fy - std::floor(fy);
+                tx = tx * tx * (3 - 2 * tx);
+                ty = ty * ty * (3 - 2 * ty);
+                const float a = lattice[y0 * cells + x0], b = lattice[y0 * cells + x1];
+                const float c = lattice[y1 * cells + x0], d = lattice[y1 * cells + x1];
+                sum[y * size + x] += octave.weight * ((a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * ty);
+            }
+    }
+    double mean = 0, square = 0;
+    for (float v : sum) { mean += v; square += double(v) * v; }
+    mean /= sum.size();
+    const double deviation = std::sqrt(square / sum.size() - mean * mean);
+    std::vector<x86::reg8> texels(sum.size());
+    for (std::size_t i = 0; i < sum.size(); ++i)
+    {
+        const double v = 0.5 + (sum[i] - mean) / deviation * 0.17;  // about +-0.5 at three deviations
+        texels[i] = x86::reg8(std::lround(std::min(1.0, std::max(0.0, v)) * 255.0));
+    }
+    return texels;
+}
+
 void ThrashRenderer::initGl()
 {
     loadGlFunctions();
@@ -265,13 +327,44 @@ void ThrashRenderer::initGl()
     glBindVertexArray(m_vertexArray);
     glGenBuffers(1, &m_vertexBuffer);
     glBindBuffer(GL_ARRAY_BUFFER, m_vertexBuffer);
+    /* Port: the textures filtered as a GPU of now would.  The game hands every
+     * texture over as one level -- the track, the cars, the sky, all of them --
+     * so the Voodoo's own "nearest mipmap" had nothing to choose from and
+     * everything far away was sampled from the full-size picture: the road's
+     * markings broke into blocks towards the horizon and shimmered as the car
+     * moved.  So the levels below are made here (upload, glGenerateMipmap), the
+     * sampler blends between two of them (trilinear), and anisotropic
+     * filtering keeps the road sharp where it is seen at a grazing angle --
+     * NFS_ANISOTROPY, 8 by default, at most what the GPU offers; 1 for none.
+     * NFS_TEXTURE_FILTER=0 is the Voodoo's way again.  Draws with a chroma key
+     * filter by hand from the game's own levels only (the shader's u_levels),
+     * so a cut-out edge never picks up a level made here. */
+    const char* filter = SDL_getenv("NFS_TEXTURE_FILTER");
+    m_makeMipmaps = !(filter && SDL_strcmp(filter, "0") == 0);
+    float anisotropy = 1.0f;
+    if (m_makeMipmaps)
+    {
+        const char* wanted = SDL_getenv("NFS_ANISOTROPY");
+        anisotropy = wanted && *wanted ? float(SDL_atof(wanted)) : 8.0f;
+        GLfloat most = 0.0f;
+        while (glGetError() != GL_NO_ERROR) {}
+        glGetFloatv(kMaxTextureMaxAnisotropy, &most);
+        if (glGetError() != GL_NO_ERROR || most < 1.0f)
+            most = 1.0f;
+        anisotropy = SDL_max(1.0f, SDL_min(anisotropy, most));
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[GFX] textures: levels made for them, trilinear, %gx anisotropic (the GPU's most %g)",
+                    double(anisotropy), double(most));
+    }
     glGenSamplers(4, m_samplers);
     for (int i = 0; i < 4; ++i)
     {
-        glSamplerParameteri(m_samplers[i], GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_NEAREST);
+        glSamplerParameteri(m_samplers[i], GL_TEXTURE_MIN_FILTER,
+                            m_makeMipmaps ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR_MIPMAP_NEAREST);
         glSamplerParameteri(m_samplers[i], GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glSamplerParameteri(m_samplers[i], GL_TEXTURE_WRAP_S, (i & 1) ? GL_REPEAT : GL_CLAMP_TO_EDGE);
         glSamplerParameteri(m_samplers[i], GL_TEXTURE_WRAP_T, (i & 2) ? GL_REPEAT : GL_CLAMP_TO_EDGE);
+        if (anisotropy > 1.0f)
+            glSamplerParameterf(m_samplers[i], kTextureMaxAnisotropy, anisotropy);
     }
 
     glGenRenderbuffers(1, &m_depthBuffer);
@@ -288,6 +381,39 @@ void ThrashRenderer::initGl()
                                           GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, &depthBits);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     compileShaders(depthBits, (const char*)glGetString(GL_RENDERER));
+
+    /* Port: grain on the road and the ground (NFS_ROAD_DETAIL, how much
+     * lighter and darker it makes them: 0.35 by default, 0 for none).  The
+     * track's textures are 1998's, a few texels to a stretch of road, and up
+     * close the road was a smooth blur; a fine noise over them in their own
+     * coordinates, eight to a texture, gives it a surface again.  Its mipmaps
+     * average it to grey, so it fades by itself with distance and costs a
+     * texture read where it is drawn. */
+    const char* detail = SDL_getenv("NFS_ROAD_DETAIL");
+    m_detailStrength = detail && *detail ? float(SDL_atof(detail)) : 0.35f;
+    m_detailStrength = SDL_max(0.0f, SDL_min(m_detailStrength, 1.0f));
+    if (m_detailStrength > 0.0f)
+    {
+        const std::vector<x86::reg8> grain = grainTexels();
+        glGenTextures(1, &m_detailTexture);
+        glBindTexture(GL_TEXTURE_2D, m_detailTexture);
+        glTexStorage2D(GL_TEXTURE_2D, 9, GL_R8, 256, 256);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 256, GL_RED, GL_UNSIGNED_BYTE, grain.data());
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[GFX] grain on the road and the ground: %.2f", double(m_detailStrength));
+    }
+    glUseProgram(m_program);
+    glUniform1i(m_locations.detailTexture, 1);
+    glUniform1f(m_locations.detailScale, 8.0f);
+    glUniform1f(m_locations.detail, 0.0f);
+    glUseProgram(0);
 }
 
 static GLuint compileShader(GLenum type, const std::string& defines, const char* body)
@@ -355,6 +481,9 @@ void ThrashRenderer::compileShaders(int depthBits, const char* renderer)
     m_locations.wrap = glGetUniformLocation(m_program, "u_wrap");
     m_locations.levels = glGetUniformLocation(m_program, "u_levels");
     m_locations.texture = glGetUniformLocation(m_program, "u_texture");
+    m_locations.detail = glGetUniformLocation(m_program, "u_detail");
+    m_locations.detailTexture = glGetUniformLocation(m_program, "u_detailTexture");
+    m_locations.detailScale = glGetUniformLocation(m_program, "u_detailScale");
     glUseProgram(m_program);
     glUniform1i(m_locations.texture, 0);
     float w[64];
@@ -430,6 +559,13 @@ void ThrashRenderer::flush()
     batch.clipMaxY = m_clipMaxY;
     batch.gamma = m_gamma;
     batch.fogTable = m_fogTableIndex;
+    /* The grain goes on the solid, tiled surfaces of the world -- the road, the
+     * ground, the walls: written to depth, not cut out, and wrapped, as the
+     * track's textures are and the sky's and the HUD's are not -- and not a
+     * car's body, whose textures wrap as well (setCarSurface).
+     * (Blending says nothing: the game leaves it on for nearly everything.)  The shader adds that the draw is fogged, which the 2D
+     * screens never are. */
+    batch.detail = !m_carSurface && m_zTest && m_zBuffer && !m_chromaKey && (m_wrapS || m_wrapT);
     m_batches.push_back(batch);
 }
 
@@ -500,8 +636,16 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
     int fogTable = -1;
     const Batch* previous = nullptr;
     bool scissor = false;
+    if (m_detailTexture)
+    {
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, m_detailTexture);
+        glActiveTexture(GL_TEXTURE0);
+    }
     for (const Batch& batch : draw.batches)
     {
+        if (m_detailTexture && (!previous || batch.detail != previous->detail))
+            glUniform1f(m_locations.detail, batch.detail ? m_detailStrength : 0.0f);
         if (batch.fogTable != fogTable)
         {
             fogTable = batch.fogTable;
@@ -671,6 +815,15 @@ void ThrashRenderer::setChromakeyMode(bool enable)
     {
         flush();
         m_chromaKey = enable;
+    }
+}
+
+void ThrashRenderer::setCarSurface(bool car)
+{
+    if (car != m_carSurface)
+    {
+        flush();
+        m_carSurface = car;
     }
 }
 
@@ -852,6 +1005,87 @@ void ThrashRenderer::setTextureData(x86::reg32, x86::reg32 address, const void* 
     });
 }
 
+/* The level below one of a texture's, for a texture with alpha: each texel the
+ * four above it, their colours weighed by how opaque they are.  A plain average
+ * (glGenerateMipmap) takes the colour of the see-through texels too, which the
+ * game's art leaves black: a cut-out's smaller levels came out with a dark
+ * fringe, and the smoke and sparks with dark specks where their edges passed
+ * the alpha test.  Texels as upload() keeps them: 5551 (1555 turned round),
+ * 4444 as A R G B, 8888 as B G R A. */
+static void decodeTexel(const x86::reg8* p, TextureFormat format, float (&out)[4])
+{
+    if (format == TF_ARGB_8888)
+    {
+        out[0] = p[2] / 255.f; out[1] = p[1] / 255.f; out[2] = p[0] / 255.f; out[3] = p[3] / 255.f;
+        return;
+    }
+    const unsigned v = unsigned(p[0] | p[1] << 8);
+    if (format == TF_ARGB_1555)
+    {
+        out[0] = ((v >> 11) & 31) / 31.f; out[1] = ((v >> 6) & 31) / 31.f;
+        out[2] = ((v >> 1) & 31) / 31.f; out[3] = float(v & 1);
+    }
+    else
+    {
+        out[3] = ((v >> 12) & 15) / 15.f; out[0] = ((v >> 8) & 15) / 15.f;
+        out[1] = ((v >> 4) & 15) / 15.f; out[2] = (v & 15) / 15.f;
+    }
+}
+
+static void encodeTexel(x86::reg8* p, TextureFormat format, const float (&in)[4])
+{
+    auto q = [](float f, float most) { return unsigned(SDL_clamp(f, 0.f, 1.f) * most + 0.5f); };
+    if (format == TF_ARGB_8888)
+    {
+        p[2] = x86::reg8(q(in[0], 255)); p[1] = x86::reg8(q(in[1], 255));
+        p[0] = x86::reg8(q(in[2], 255)); p[3] = x86::reg8(q(in[3], 255));
+        return;
+    }
+    unsigned v;
+    if (format == TF_ARGB_1555)
+        v = q(in[0], 31) << 11 | q(in[1], 31) << 6 | q(in[2], 31) << 1 | (in[3] >= 0.5f ? 1u : 0u);
+    else
+        v = q(in[3], 15) << 12 | q(in[0], 15) << 8 | q(in[1], 15) << 4 | q(in[2], 15);
+    p[0] = x86::reg8(v);
+    p[1] = x86::reg8(v >> 8);
+}
+
+/* Appends to `texels` (level 0 of a size x size texture) every level below it. */
+static void appendAlphaLevels(std::vector<x86::reg8>& texels, x86::reg32 size, TextureFormat format,
+                              x86::reg32 texelBytes)
+{
+    std::size_t above = 0;
+    for (x86::reg32 at = size; at > 1; at >>= 1)
+    {
+        const x86::reg32 below = at >> 1;
+        const std::size_t start = texels.size();
+        texels.resize(start + std::size_t(below) * below * texelBytes);
+        for (x86::reg32 y = 0; y < below; ++y)
+            for (x86::reg32 x = 0; x < below; ++x)
+            {
+                float sum[4] = { 0, 0, 0, 0 }, plain[3] = { 0, 0, 0 };
+                for (x86::reg32 k = 0; k < 4; ++k)
+                {
+                    float t[4];
+                    const std::size_t i = std::size_t(2 * y + (k >> 1)) * at + 2 * x + (k & 1);
+                    decodeTexel(&texels[above + i * texelBytes], format, t);
+                    for (int c = 0; c < 3; ++c)
+                    {
+                        sum[c] += t[c] * t[3];
+                        plain[c] += t[c];
+                    }
+                    sum[3] += t[3];
+                }
+                float out[4];
+                for (int c = 0; c < 3; ++c)
+                    out[c] = sum[3] > 0.f ? sum[c] / sum[3] : plain[c] / 4.f;
+                out[3] = sum[3] / 4.f;
+                encodeTexel(&texels[start + (std::size_t(y) * below + x) * texelBytes], format, out);
+            }
+        above = start;
+    }
+}
+
 void ThrashRenderer::upload(x86::reg32 index, x86::reg32 size, x86::reg32 levels, TextureFormat format,
                             std::vector<x86::reg8>& texels)
 {
@@ -878,12 +1112,17 @@ void ThrashRenderer::upload(x86::reg32 index, x86::reg32 size, x86::reg32 levels
     }
     if (index >= m_glTextures.size())
         m_glTextures.resize(index + 1, 0);
+    // The levels the game left out, made below (see initGl).
+    x86::reg32 storedLevels = levels;
+    if (m_makeMipmaps && levels == 1)
+        for (x86::reg32 at = size; at > 1; at >>= 1)
+            ++storedLevels;
     GLuint& name = m_glTextures[index];
     if (!name)
     {
         glGenTextures(1, &name);
         glBindTexture(GL_TEXTURE_2D, name);
-        glTexStorage2D(GL_TEXTURE_2D, GLsizei(levels), internal, GLsizei(size), GLsizei(size));
+        glTexStorage2D(GL_TEXTURE_2D, GLsizei(storedLevels), internal, GLsizei(size), GLsizei(size));
         if (format == TF_ARGB_4444)
         {
             // OpenGL reads A R G B as R G B A: each channel from the next one along.
@@ -903,14 +1142,23 @@ void ThrashRenderer::upload(x86::reg32 index, x86::reg32 size, x86::reg32 levels
     {
         glBindTexture(GL_TEXTURE_2D, name);
     }
+    // Opaque 565 through the GPU; anything with alpha weighed here.
+    x86::reg32 sent = levels;
+    if (storedLevels > levels && format != TF_RGB_565)
+    {
+        appendAlphaLevels(texels, size, format, texelBytes);
+        sent = storedLevels;
+    }
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     const x86::reg8* level = texels.data();
-    for (x86::reg32 at = size, lod = 0; lod < levels; ++lod, at >>= 1)
+    for (x86::reg32 at = size, lod = 0; lod < sent; ++lod, at >>= 1)
     {
         glTexSubImage2D(GL_TEXTURE_2D, GLint(lod), 0, 0, GLsizei(at), GLsizei(at), layout, type, level);
         level += std::size_t(at) * at * texelBytes;
     }
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    if (storedLevels > sent)
+        glGenerateMipmap(GL_TEXTURE_2D);
 }
 
 /* THRASH_treset: every texture but the window's one-texel one given up --

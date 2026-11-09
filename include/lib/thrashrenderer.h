@@ -55,6 +55,9 @@ public:
     void setDither(bool enable) override;
     void setCullMode(x86::reg32 mode) override;
     void setChromakeyMode(bool enable) override;
+    /* Port: what is drawn is a car's body, which the ground's grain leaves
+     * alone (glide2x::carSurface, from the car's mesh in native_vertices.cpp). */
+    void setCarSurface(bool car);
     void setTexClampMode(bool wrapS, bool wrapT) override;
     void setChromakeyValue(x86::reg32 color) override;
     void setClipWindow(x86::reg32 minX, x86::reg32 minY, x86::reg32 maxX, x86::reg32 maxY) override;
@@ -111,6 +114,7 @@ private:
         x86::reg32 clipMinX, clipMinY, clipMaxX, clipMaxY;
         float gamma;
         int fogTable;
+        bool detail;            // the ground's grain over it (initGl)
     };
     friend struct ThrashDraw;
 
@@ -150,9 +154,13 @@ private:
     {
         int position, color, texCoord, combine;
         int transform, fogW, fogTable, fogColor, alphaRef, chromaKey, chromaKeyColor, gamma, wrap, levels, texture,
-            format;
+            format, detail, detailTexture, detailScale;
     } m_locations;
+    unsigned int            m_detailTexture = 0;
+    bool                    m_carSurface = false;   // the game thread's
+    float                   m_detailStrength = 0.0f;  // NFS_ROAD_DETAIL; 0 for none
     bool                    m_depth16;
+    bool                    m_makeMipmaps = false;  // levels made for the textures (initGl)
 
     // The game thread's.
     ThrashVertex*           m_vertices;

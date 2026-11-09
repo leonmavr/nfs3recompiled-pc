@@ -35,6 +35,9 @@
 namespace nfs3hp
 {
 
+// native_vertices.cpp: whether a vertex is one of a car's this frame (a port).
+bool isCarVertex(x86::reg32 vertex);
+
 win32::ThrashRenderer::Corner thrashCorner(win32::WinApplication* app, x86::reg32 in, float zScale, float wScale);
 void thrashBatchVertex(win32::WinApplication* app, x86::reg32 in, float zScale, float wScale, win32::ThrashVertex& out);
 
@@ -218,9 +221,13 @@ struct Vertices
         return thrashCorner(app, in, zScale, wScale);
     }
 
-    /* Whether triangles drawn through `slot` may go into the batch. */
-    bool batched(x86::reg32 slot) const
+    /* Whether triangles drawn through `slot` may go into the batch.  Port:
+     * and whether what is drawn is a car's (its first corner one of the
+     * cars' vertices), which the road's grain is kept off. */
+    bool batched(x86::reg32 slot, x86::reg32 corner) const
     {
+        if (direct)
+            direct->setCarSurface(isCarVertex(corner));
         return direct && drawsThrough(app, slot, kGrDrawTriangle);
     }
 
@@ -258,7 +265,7 @@ struct Vertices
      * stopped. */
     bool triangle(x86::CPU& cpu, x86::reg32 slot, x86::reg32 a, x86::reg32 b, x86::reg32 c) const
     {
-        if (batched(slot))
+        if (batched(slot, a))
         {
             plainTriangle(a, b, c);
             return true;
@@ -270,7 +277,7 @@ struct Vertices
     /* Triangles a b c and c d a, as Glide's quads go, each through kQuadDraw. */
     bool quad(x86::CPU& cpu, x86::reg32 a, x86::reg32 b, x86::reg32 c, x86::reg32 d) const
     {
-        if (batched(kQuadDraw))
+        if (batched(kQuadDraw, a))
         {
             // the four once; each triangle's slots copied from them before rebasing
             win32::ThrashVertex v[4];
@@ -347,7 +354,7 @@ void drawTriFanNative(win32::WinApplication* app, x86::CPU& cpu)
     const x86::sreg32 count = x86::sreg32(at(app, esp + 4));
     const x86::reg32 vertices = at(app, esp + 8);
     const Vertices convert(app);
-    if (count > 0 && convert.batched(kTriangleDraw))
+    if (count > 0 && convert.batched(kTriangleDraw, vertices))
     {
         win32::ThrashVertex centre, previous, next;
         convert.batch(vertices, centre);
@@ -384,7 +391,7 @@ void drawTriStripNative(win32::WinApplication* app, x86::CPU& cpu)
     const x86::sreg32 count = x86::sreg32(at(app, esp + 4));
     const x86::reg32 vertices = at(app, esp + 8);
     const Vertices convert(app);
-    if (count > 0 && convert.batched(kTriangleDraw))
+    if (count > 0 && convert.batched(kTriangleDraw, vertices))
     {
         for (x86::sreg32 i = 0; i < count; ++i)
         {

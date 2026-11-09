@@ -126,6 +126,12 @@ static void squeezed(const GrVertex*& a, const GrVertex*& b, const GrVertex*& c,
     c = &copies[2];
 }
 
+void carSurface(bool on)
+{
+    if (s_directRenderer)
+        s_directRenderer->setCarSurface(on);
+}
+
 bool screenRect(int& x, int& y, int& w, int& h, int& pictureWidth, int& pictureHeight)
 {
     if (!s_renderer)

@@ -194,6 +194,40 @@ shrank them to 16 bits for a Voodoo2; here the Voodoo2 driver takes them too
 on the disc — the track surfaces and most of the menu backgrounds — stays as it
 is. `NFS_TEXTURES32=0` goes back to 16-bit textures.
 
+### Texture filtering and the road's grain
+
+The game hands every texture to the Glide layer as a single level -- the
+track, the cars, the sky -- so far-off surfaces were sampled from the
+full-size picture: the road's markings broke into blocks towards the horizon
+and the road and fences shimmered as the car moved. The levels below are now
+made as each texture is uploaded (`ThrashRenderer::upload`): opaque 565 ones
+by the GPU, those with alpha on the CPU with each colour weighed by how
+opaque it is, since a plain average takes in the black of the see-through
+texels and left smoke and cut-outs with dark specks. They are sampled
+trilinear with 8x anisotropic filtering (`NFS_ANISOTROPY`, at most what the
+GPU offers). Chroma-keyed draws still filter by hand from the game's own
+level. `NFS_TEXTURE_FILTER=0` is the Voodoo's sampling again.
+
+Over that, the road and the ground get a fine grain (`NFS_ROAD_DETAIL`, 0.35):
+a tiling 256 x 256 noise made at start, read in each surface's own texture
+coordinates at eight to a texture, and lightening or darkening it by up to
+that much. Its mipmaps average it to grey, so it fades by itself with
+distance. It goes on the solid, wrapped, depth-written surfaces -- the
+track's, not the HUD's, the sky's or a cut-out's -- and never on a car: the
+cars' vertices are noted as `sub_49da30` lights them each frame
+(`native_vertices.cpp`), and THRASH's drawing (`native_thrash.cpp`) marks a
+triangle whose first corner is one of them (`ThrashRenderer::setCarSurface`).
+`NFS_ROAD_DETAIL=0` leaves it out.
+
+### Longer headlights
+
+The headlights' patch on the road (`sub_491bc0`, `roadLightNative`) lit at
+most 30 units ahead, a few car lengths, so at night the road went dark just
+past the bonnet. Its length and that ceiling are doubled
+(`NFS_HEADLIGHT_REACH`, 2) and it is 1.4 times as wide
+(`NFS_HEADLIGHT_WIDTH`); 1 and 1 are the original. `NFS_NATIVE_CHECK` reports
+the patch as differing from the generated code unless both are 1.
+
 ### Projected headlights
 
 With projected headlights the game draws the lit road a second time over
@@ -1080,6 +1114,10 @@ from the phone; the rest matter for a desktop run.
 | `NFS_WINDOW` | unset | Desktop only: the window's size as `WIDTHxHEIGHT`, e.g. `1600x900`. Unset, 1280x720 fitted to the display. |
 | `NFS_FULLSCREEN` | on | Desktop only: `0` opens a window instead of the whole screen; `1` or unset starts borderless fullscreen, as Alt+Enter's is. |
 | `NFS_GAMMA`, `NFS_BRIGHTNESS`, `NFS_CONTRAST` | `1.0` | Applied to the finished frame in the final blit, so menus and movies are covered as well as a race. |
+| `NFS_TEXTURE_FILTER` | on | `0`: textures sampled as the Voodoo did -- the game's one level, no levels made, no anisotropy (Texture filtering and the road's grain). |
+| `NFS_ANISOTROPY` | `8` | Anisotropic filtering of the textures, at most what the GPU offers; `1` for none. |
+| `NFS_ROAD_DETAIL` | `0.35` | How much the road's and the ground's grain lightens and darkens them, 0 to 1; `0` for none. |
+| `NFS_HEADLIGHT_REACH`, `NFS_HEADLIGHT_WIDTH` | `2`, `1.4` | How far the headlights' patch on the road reaches and how wide it is, against the original's (0.25 to 4; `1` and `1` are the original). |
 | `NFS_ORIENTATION` | unset | `auto` allows both landscape directions; anything else pins one. Must be set before `SDL_Init`. |
 | `NFS_CAR_DETAIL_FULL` | on | With Car Detail at High, every car keeps its detailed model and the player's texture size out to the draw distance, in every view, and the limit on how many are drawn at once is lifted. `0` restores the original. |
 | `NFS_MIRROR_FULL` | on | The rear-view mirror is drawn as the main view is: its distances, the track's detailed models, cars at full detail, the sky with clouds and lightning, car lights and the headlights' light. `0` restores the original short, coarse mirror. |
