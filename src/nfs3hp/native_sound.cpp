@@ -1,6 +1,7 @@
 #include <nfs3hp.h>
 #include "isnd.h"
 #include <lib/memmap.h>
+#include <lib/loudness.h>
 #include <SDL3/SDL.h>
 #include <atomic>
 #include <cstring>
@@ -402,6 +403,16 @@ bool serveNative(win32::WinApplication* app, x86::CPU& cpu)
     mix(app, cpu, s, buffer, frames);
     if (soundTracing())
         traceMixer(app);
+
+    /* Brought up to level (lib/loudness.h): the game's own levels sat below
+     * everything else playing on the machine.  Only the game's sound thread
+     * serves, so the limiter's state is its alone. */
+    static win32::Loudness loudness;
+    if (SDL_AUDIO_BITSIZE(s.format.format) == 16 && s.format.channels > 0)
+    {
+        loudness.setRate(s.format.freq);
+        loudness.apply(&app->getMemory<std::int16_t>(buffer), frames, std::size_t(s.format.channels));
+    }
 
     std::lock_guard<std::mutex> guard(s.lock);
     if (s.started && s.stream == stream)

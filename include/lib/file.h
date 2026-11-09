@@ -56,6 +56,14 @@ public:
 
     bool findNext(WIN32_FIND_DATAA* data);
 
+    /* Who decides the order of a listing, where the order means something:
+     * called with the directory listed (as opened on the host) and what it
+     * holds, in the filesystem's own order, and free to reorder it.  The game
+     * numbers its cars in the order it finds their folders (nfs3hp_main.cpp,
+     * carFolderOrder). */
+    typedef void (*ListingOrder)(const std::string& directory, std::vector<WIN32_FIND_DATAA>& files);
+    static void setListingOrder(ListingOrder order);
+
 private:
     std::string                     m_pattern;
     std::vector<WIN32_FIND_DATAA>   m_files;

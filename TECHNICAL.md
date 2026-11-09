@@ -708,6 +708,9 @@ these back.
 
 Keys are the game's own 1998 defaults: the arrows steer and work the pedals,
 Escape is back, Enter confirms; the mouse is the game's pointer, races included.
+While a box asks for a name the window takes typed text (`SDL_StartTextInput`,
+in `textEntryTick`): SDL 3 only sends it while that is on, so until it was,
+Backspace deleted and the letters did nothing.
 The game's cursor is put where the system pointer is on the picture, as a
 phone's mouse is (`desktopMouseWatch`, `src/nfs3hp/nfs3hp_main.cpp`), not moved
 by how far the mouse went: that distance counts in pixels of the window, up to
@@ -722,9 +725,38 @@ sending keys chosen with `NFS_GAMEPAD<n>_<BUTTON>` (see Environment variables).
 
 ### Adding a car
 
-The game does not carry a list of car names: it lists `gamedata/carmodel` and
-loads every folder it finds, so a new car is a new folder — not a replaced one.
-Three things make a folder a car.
+`tools/import_car.py` does all of what follows for a downloaded car — a zip, a
+`.viv` or the folder it was unpacked to, however the add-on packed it:
+
+    python3 tools/import_car.py build/game ~/Downloads/some_car.zip [more.zip ...]
+
+Each car in it becomes a new folder; a folder name, an ID or a four-letter
+code another car already has is changed for the new one (in its archive, every
+language), its showcase art and slide go in under its new name and ID where
+nothing is there yet, and files every car shares — the add-ons' own copy of
+`compare.fsh` — are never written. `--dry-run` says what it would do. Fake
+downloads (a `.viv` that is not an archive) and archives that are not cars (an
+NFS4 traffic body) are named and skipped.
+
+**Where a new car goes in the list.** The game numbers its cars by the order
+it finds their folders, and that number is what the settings keep: the
+player's car, the opponents'. Windows lists folders by name, so a new one slid
+in among the others; Linux and Android list them in the directory's own order,
+so it could land anywhere — and every car after it moved up a place, which
+looked like the new car taking an old one's place. The port keeps the order in
+`gamedata/carorder.txt` (`carFolderOrder`, `src/nfs3hp/nfs3hp_main.cpp`), one
+folder a line: the cars named there keep their places, and a folder not named
+yet is added after them, so nothing already chosen changes. The first run
+writes it from the order already in use. Editing it reorders the list.
+
+One car is always last: Knockout (`knoc`, ID 33), the stand-in the knockout
+races use. The Player Car list is built in place order and stops at it
+(`0x43a435`), so whatever came after it was loaded but could not be chosen —
+on a Linux disk that was usually a few retail cars and any car just added.
+The retail install had it last only because its installer wrote the folders
+onto FAT in that order.
+
+By hand, three things make a folder a car.
 
 - **`car.viv`**, the car's archive, and it is the one file that matters: the
   model (`car.fce`), the texture (`fedata.fsh`), the text (`fedata.eng` and the
@@ -1071,7 +1103,7 @@ from the phone; the rest matter for a desktop run.
 | `NFS_FE_NATIVE_OFF` | unset | A list of generated functions, `sub_437e00,sub_438260`, left to the generated code while the other decompiled ones run. |
 | `NFS_NATIVE_CHECK` | off | `1` runs each native stand-in against the generated code and logs any difference (`[NATIVE]`). The polygon and car loops are compared over all of guest memory once a second. Slow, and draws some triangles twice. `clip` checks only the stand-ins of the clipping (both ways to the screen, the car's quad mesh included), the track, the effects, the car lights and detail, the objects and the vector math, every call; the small helpers called from hundreds of places are checked on every 64th call. |
 | `NFS_AUDIO_RATE` | unset | The output's own sample rate. The game mixes at 22050 Hz and SDL converts to this; a device opened at any other rate is resampled by Android, off its low-latency path. Unset, the device opens at SDL's default. |
-| `NFS_VOLUME` | `1.5` | How far the finished mix is lifted before it reaches the device (`src/lib/sdl-backend/audio.cpp`), 0.1 to 8: the game's own levels leave it quiet beside other applications. The lift saturates, so a loud mix clips rather than wraps; `1` leaves it as the game mixed it. |
+| `NFS_VOLUME` | `2.5` | How far the game's sound is lifted on its way to the device (`include/lib/loudness.h`, applied in `src/nfs3hp/native_sound.cpp`), 0.1 to 8. A limiter holds the lifted sound under -1 dBFS, easing back over 150 ms, so quiet passages come up by the whole lift and loud ones are held rather than clipped; `1` leaves the mix as the game made it. The Audio screen's own sliders start at 50%, and raising them is the other way up. |
 | `NFS_SND_MIX` | on | `0` leaves the game's sound mixer (`sub_500864` and everything under it) to its generated code instead of `src/nfs3hp/native_mixer.cpp`. `NFS_SND_CHECK=1` (debug) mixes each block natively and with the generated code and logs any byte that differs (`[SNDCHK]`); a block that calls the game, to refill a stream or end a sound, is left to the generated code. |
 | `NFS_TOUCH_STEER_LEFT` etc. | unset | Keys the touch overlay sends for steering and the pedals, so that endpoint can report them as axes. |
 | `NFS_GAMEPAD1_SOUTH` etc. | built-in defaults | What a pad button sends, as `NFS_GAMEPAD<n>_<BUTTON>`: an SDL key name (`Space`, `Return`), `axis:steer_left`, `axis:steer_right`, `axis:accelerate`, `axis:brake`, or empty for nothing. `_UI` after it is the same button in the menus. `LEFT_TRIGGER` and `RIGHT_TRIGGER` are the triggers read as buttons, empty by default; the launcher gives them the pedals' keys for a pad set to Digital. |

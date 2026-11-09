@@ -186,6 +186,13 @@ static std::string resolvePathCaseInsensitive(const std::string& path)
     return resolved;
 }
 
+static FileEnumerator::ListingOrder s_listingOrder = nullptr;
+
+void FileEnumerator::setListingOrder(ListingOrder order)
+{
+    s_listingOrder = order;
+}
+
 FileEnumerator::FileEnumerator(const char* filename)
     :   m_pattern(moveToRoot(filename))
     ,   m_index(-1)
@@ -210,6 +217,11 @@ FileEnumerator::FileEnumerator(const char* filename)
         m_files.push_back(result);
     }
     ::FindClose(h);
+    if (s_listingOrder)
+    {
+        const size_t slash = m_pattern.find_last_of("\\/");
+        s_listingOrder(slash == std::string::npos ? std::string(".") : m_pattern.substr(0, slash), m_files);
+    }
 #else
     for (std::string::iterator it = m_pattern.begin(); it != m_pattern.end(); ++it)
         if (*it == '\\') *it = '/';
@@ -261,6 +273,8 @@ FileEnumerator::FileEnumerator(const char* filename)
             }
         }
         closedir(d);
+        if (s_listingOrder)
+            s_listingOrder(dirPath, m_files);
         /* An empty result is normal for the optional file sets the game probes
          * for at startup, but it is also exactly what a save list that refuses
          * to show anything looks like -- and with the directory present there

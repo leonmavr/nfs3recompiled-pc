@@ -2314,6 +2314,32 @@ void textEntryTick(win32::WinApplication* app)
         last = -1;  // asked again next frame
         return;
     }
+#ifndef __ANDROID__
+    /* The desktop's keyboard types into the box too.  SDL 3 only sends typed
+     * text (SDL_EVENT_TEXT_INPUT, the window's WM_CHAR) while text input is
+     * started on the window, and nothing started it here -- on a phone that is
+     * the launcher's keyboard's to do (nativeToggleKeyboard) -- so Backspace,
+     * a key event, deleted, and the letters did nothing.  It is started while
+     * the box is up and stopped after, so a race's keys never go through an
+     * input method.  On SDL's main thread, where it wants it. */
+    SDL_RunOnMainThread([](void* on) {
+        SDL_Window* window = SDL_GetKeyboardFocus();
+        if (!window)
+        {
+            int count = 0;
+            SDL_Window** windows = SDL_GetWindows(&count);
+            if (windows && count > 0)
+                window = windows[0];
+            SDL_free(windows);
+        }
+        if (!window)
+            return;
+        if (on)
+            SDL_StartTextInput(window);
+        else
+            SDL_StopTextInput(window);
+    }, typing ? reinterpret_cast<void*>(1) : nullptr, false);
+#endif
     x86::sreg32 left, top, right, bottom;
     if (typing && frontEndTakingText(app) && textFieldRect(app, left, top, right, bottom))
         SDL_Log("[TEXT] a name is asked for; its line runs %d..%d across, %d..%d down",
@@ -2561,6 +2587,152 @@ static bool hasEntry(const std::string& root, const char* name)
  * word about why.  It is the one thing a desktop run has that a phone's does
  * not -- a folder the player assembles -- so it is the one thing likely to be
  * wrong.  Nothing is stopped here; the game decides that itself. */
+/* The order the cars are numbered in, kept.
+ *
+ * The game numbers its cars by the order it finds their folders in
+ * `gamedata/carmodel` -- that number is what the car lists, the player's car in
+ * the settings (0x6fd2bc), the opponents and every table of car_arrays.h hold --
+ * and it finds them in whatever order the filesystem lists them.  On Windows
+ * that is the name's order, so a new car slots in among the others by its name;
+ * on Linux and Android it is the directory's own (a hash's, on ext4), so a new
+ * folder can land anywhere.  Either way every car after it moved up a place:
+ * the player's car became another one, an opponent another, as if the new car
+ * had taken over an old one's place.
+ *
+ * So the order is kept in `gamedata/carorder.txt`, a folder name a line: the
+ * cars it names keep their places, and a folder it does not name yet -- a car
+ * just added -- goes after all of them, in the first place free (but before
+ * Knockout, below), and is written into it.  The first time there is no file, the order is the one the game has
+ * been using, so nothing that is already chosen moves.  A car taken away gives
+ * its place up and the ones after it move down one: the game's numbers have no
+ * gaps.  Editing the file reorders the list. */
+static std::string lowerCase(std::string text)
+{
+    for (char& c : text)
+        c = char(SDL_tolower(static_cast<unsigned char>(c)));
+    return text;
+}
+
+static void carFolderOrder(const std::string& directory, std::vector<win32::WIN32_FIND_DATAA>& files)
+{
+    std::string dir = directory;
+    while (!dir.empty() && (dir.back() == '/' || dir.back() == '\\'))
+        dir.pop_back();
+    const size_t slash = dir.find_last_of("/\\");
+    const std::string leaf = lowerCase(slash == std::string::npos ? dir : dir.substr(slash + 1));
+    if (leaf != "carmodel")
+        return;
+    const std::string orderPath = (slash == std::string::npos ? std::string(".") : dir.substr(0, slash)) + "/carorder.txt";
+
+    // The folders, as found; "." and ".." and any plain file keep their places at either end.
+    std::vector<win32::WIN32_FIND_DATAA> folders, before, after;
+    for (const win32::WIN32_FIND_DATAA& file : files)
+    {
+        if (SDL_strcmp(file.cFileName, ".") == 0 || SDL_strcmp(file.cFileName, "..") == 0)
+            before.push_back(file);
+        else if (file.dwFileAttributes & 16)
+            folders.push_back(file);
+        else
+            after.push_back(file);
+    }
+
+    std::vector<std::string> order;
+    bool known = false;
+    size_t size = 0;
+    if (char* text = static_cast<char*>(SDL_LoadFile(orderPath.c_str(), &size)))
+    {
+        known = true;
+        std::string all(text, size);
+        SDL_free(text);
+        size_t start = 0;
+        while (start <= all.size())
+        {
+            size_t end = all.find('\n', start);
+            if (end == std::string::npos)
+                end = all.size();
+            std::string line = all.substr(start, end - start);
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
+                line.pop_back();
+            size_t first = line.find_first_not_of(" \t");
+            if (first != std::string::npos && line[first] != '#')
+                order.push_back(lowerCase(line.substr(first)));
+            start = end + 1;
+        }
+    }
+
+    std::vector<win32::WIN32_FIND_DATAA> sorted;
+    std::vector<bool> placed(folders.size(), false);
+    for (const std::string& name : order)
+    {
+        for (size_t i = 0; i < folders.size(); ++i)
+        {
+            if (!placed[i] && lowerCase(folders[i].cFileName) == name)
+            {
+                sorted.push_back(folders[i]);
+                placed[i] = true;
+                break;
+            }
+        }
+    }
+    std::vector<win32::WIN32_FIND_DATAA> added;
+    for (size_t i = 0; i < folders.size(); ++i)
+        if (!placed[i])
+            added.push_back(folders[i]);
+    /* New ones in their names' order, so two added at once always come out
+     * the same way round; the first time, the order already in use. */
+    if (known)
+        std::sort(added.begin(), added.end(), [](const win32::WIN32_FIND_DATAA& a, const win32::WIN32_FIND_DATAA& b) {
+            return lowerCase(a.cFileName) < lowerCase(b.cFileName);
+        });
+    for (const win32::WIN32_FIND_DATAA& folder : added)
+    {
+        if (known && SDL_strcasecmp(folder.cFileName, "traffic") != 0)
+            SDL_Log("[CARS] %s is new: it goes after the cars already there (before knoc, which ends the list)",
+                    folder.cFileName);
+        sorted.push_back(folder);
+    }
+
+    /* Knockout (`knoc`, the car with ID 33) is not a car anyone drives: the
+     * car lists are built in place order and stop at it (0x43a435 -- the place
+     * it stands at is kept in 0x6fdc30), so every car after it is left out of
+     * the Player Car list.  The retail install had it last, as the installer
+     * wrote the folders onto a FAT disk; anywhere else, a car that came after
+     * it -- an added one, at the end -- was in the game but nowhere to be
+     * chosen.  So it is always the last. */
+    for (size_t i = 0; i < sorted.size(); ++i)
+    {
+        if (SDL_strcasecmp(sorted[i].cFileName, "knoc") == 0 && i + 1 != sorted.size())
+        {
+            const win32::WIN32_FIND_DATAA knockout = sorted[i];
+            sorted.erase(sorted.begin() + std::ptrdiff_t(i));
+            sorted.push_back(knockout);
+            break;
+        }
+    }
+
+    files.clear();
+    files.insert(files.end(), before.begin(), before.end());
+    files.insert(files.end(), sorted.begin(), sorted.end());
+    files.insert(files.end(), after.begin(), after.end());
+
+    // Written back when something was added or has gone.
+    bool same = known && order.size() == sorted.size();
+    for (size_t i = 0; same && i < sorted.size(); ++i)
+        same = order[i] == lowerCase(sorted[i].cFileName);
+    if (same)
+        return;
+    std::string text =
+        "# The order the cars are numbered in -- one gamedata/carmodel folder a line.\n"
+        "# A folder not named here yet is a new car and is added at the end, so the\n"
+        "# cars already here keep their places (nfs3hp_main.cpp, carFolderOrder).\n";
+    for (const win32::WIN32_FIND_DATAA& folder : sorted)
+        text += std::string(folder.cFileName) + "\n";
+    if (!SDL_SaveFile(orderPath.c_str(), text.data(), text.size()))
+        SDL_Log("[CARS] %s could not be written: %s", orderPath.c_str(), SDL_GetError());
+    else if (!known)
+        SDL_Log("[CARS] the cars' order kept in %s: %zu folders", orderPath.c_str(), sorted.size());
+}
+
 static void checkCarArchives(std::string folder);
 
 static void checkGameData(const char* root)
@@ -2594,7 +2766,11 @@ static bool archiveEntries(const std::string& path, std::vector<std::string>& na
     SDL_IOStream* file = SDL_IOFromFile(path.c_str(), "rb");
     if (!file)
         return false;
-    unsigned char header[12];
+    /* "BIGF", the size, the count and where the first entry's data starts:
+     * sixteen bytes before the first entry.  Reading twelve put every entry
+     * four bytes early, so the names came out of the wrong bytes and a car
+     * whose car.fce was there was reported without one. */
+    unsigned char header[16];
     const size_t read = SDL_ReadIO(file, header, sizeof header);
     bool ok = read == sizeof header && std::memcmp(header, "BIGF", 4) == 0;
     const unsigned count = ok ? (unsigned(header[8]) << 24 | unsigned(header[9]) << 16
@@ -2829,6 +3005,7 @@ int main(int argc, char* argv[])
     if (dataRoot.empty() || dataRoot.back() != '/')
         dataRoot += '/';
 #endif
+    win32::FileEnumerator::setListingOrder(carFolderOrder);
     nfs3hp::installMenuData();
     /* The game pumps its message queue from a guest thread, which is not
      * the thread SDL considers "main" on Android.  SDL only warns about
