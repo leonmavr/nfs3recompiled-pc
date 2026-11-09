@@ -373,6 +373,38 @@ void fitShowcase(Guest& guest, x86::reg32 menu, const CarScreen& screen)
         grey(showcase, guest.call(kHasShowcase, fe::args({ guest.dword(screen.car) })) == 0);
 }
 
+/* Port: the colour's name and its arrow (the `[carclrselect]` item,
+ * CAR_COLOR_SELECT_Pn) stood in the Color row's place.  The rows' buttons are
+ * placed by their ypos, from the row table at 0x559c94 (native_frontend_main.cpp,
+ * setRows), but this item keeps the fixed y its .MNU gives it, 220 -- where the
+ * Color row is only in the table that has the rows 23 pixels higher (Modern
+ * Patch's, and mainsplt's here).  With the original table the rows stand at
+ * 208 (Transmission) and 243 (Color), and the colour came out between them:
+ * its "Blue" printed under Transmission's "Automatic", and its box (220-247)
+ * over the bottom of Transmission's list (209-236).  Selecting it with Down put
+ * the pointer there, on the list, so the selection went back up to it and the
+ * keys never got past Color; a click on the colour opened the transmission
+ * list instead.  It is put on the Color row, as the transmission's list is on
+ * its own, one pixel below the row as that list is, whatever the table holds. */
+constexpr x86::reg32 kRowY = 0x559c94;             // int16 every four bytes, by ypos
+constexpr x86::reg32 kButtonRow = 0x4a;            // int16, a button's ypos
+constexpr x86::reg32 kBoxY = 0x1a;                 // int16, the top of the item's box
+constexpr std::int32_t kRows = 8;
+
+void placeColourOnItsRow(Guest& guest, x86::reg32 menu, const CarScreen& screen)
+{
+    const Item button = fe::findItem(guest, menu, kColourButton);
+    const Item colours = fe::findItem(guest, menu, screen.colours);
+    if (!button || !colours)
+        return;
+    const std::int32_t row = std::int16_t(guest.word(button.address() + kButtonRow));
+    if (row < 0 || row >= kRows)
+        return;
+    const std::uint16_t y = std::uint16_t(guest.word(kRowY + 4 * x86::reg32(row)) + 1);
+    guest.setWord(colours.address() + fe::item::kY, y);
+    guest.setWord(colours.address() + kBoxY, y);
+}
+
 /* sub_426d60, car1 as it opens. */
 x86::reg32 onCar1Enter(Guest& guest, x86::reg32 menu)
 {
@@ -389,6 +421,7 @@ x86::reg32 onCar1Enter(Guest& guest, x86::reg32 menu)
         download.setHidden(true);
     if (Item hidden = fe::findItem(guest, menu, kHideThis))
         hidden.setHidden(true);
+    placeColourOnItsRow(guest, menu, kCar1);
     return 0;
 }
 
@@ -397,6 +430,7 @@ x86::reg32 onCar2Enter(Guest& guest, x86::reg32 menu)
 {
     guest.call(0x4104b0);
     fitEditButton(guest, menu, kCar2);
+    placeColourOnItsRow(guest, menu, kCar2);
     if (Item colour = fe::findItem(guest, menu, kColourButton))
         colour.setOnClick(kCar2.colourClicked);
     fitShowcase(guest, menu, kCar2);

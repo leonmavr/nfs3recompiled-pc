@@ -531,9 +531,17 @@ named and its spoken description (`TRKINFO.MNU`). With them, the developer's
 recorder the car and track screens keep, which saves the turning car or the
 track frame by frame as `.tga` files. Their 55 functions were compared by the
 same `tools/frontend_checks/run.sh`, and keep the port's changes among them:
-Download Car stays hidden (`tools/apply_hide_download.py`) and the phone's
+Download Car stays hidden (`tools/apply_hide_download.py`), the phone's
 keyboard comes up while the game waits for a typed name
-(`tools/apply_text_entry.py`).
+(`tools/apply_text_entry.py`), and the colour on `CAR1`/`CAR2` stands on the
+Color row (`placeColourOnItsRow`). The rows' buttons and Transmission's list
+are placed by their `ypos` from the row table at `0x559c94`, but the colour's
+item keeps the fixed y of 220 its `.MNU` gives it — the Color row only in the
+table with the rows 23 pixels higher. With the original table it sat between
+Transmission and Color, over the bottom of Transmission's list: its name
+printed under "Automatic", a click on it opened the transmission list, and Down
+went from Color to the colour, whose box put the pointer on that list, and back
+up — the screen could not be walked past Color.
 
 The engine goes the same way, a layer at a time. First
 (`native_frontend_menus.cpp`), what reads `FeData\Menus\*.mnu` into the table
@@ -644,19 +652,28 @@ The disc keeps some of its data packed, and the game only asks for it unpacked:
 every car is a `BIGF` archive, `gamedata/carmodel/<car>/car.viv`, holding that
 car's model (`car.fce`), texture, text and sounds, and `fedata/art` packs its
 showcase pictures the same way. The retail installer unpacks them; a folder
-copied off the disc has only the `.viv`. Without that step the game starts with
-44 `unable to open file .../car.fec` lines and no car models —
-`tools/extract_viv.py` does what the installer did, in place, leaving the
-archives alone and never overwriting a file that is already there (`--force`
+copied off the disc has only the `.viv`. Without that step the game has no car
+models — `tools/extract_viv.py` does what the installer did, in place, leaving
+the archives alone and never overwriting a file that is already there (`--force`
 overwrites).
+
+`unable to open file .../car.fec` lines are not a sign of that: `car.fec` is the
+20-byte record the game keeps of one car's own colour and tuning, written beside
+`car.viv` when a car is chosen, so a data set has one only for the cars it has
+been played with. A missing one is expected — the row is created the first time
+that car is picked.
 
 With two arguments the second is the CD path, for data split between an install
 directory and the disc.
 
-The window opens at 1280x720, centred, and can be resized; a display too small
-for that gets a smaller one of the same shape. `NFS_WINDOW=1600x900` picks
-another, and `NFS_FULLSCREEN=1` starts on the whole screen. **Alt+Enter**
-toggles borderless fullscreen at the display's size.
+A game starts on the whole screen: borderless, no title bar or frame, and the
+picture keeps its own shape with the rest of the screen padded in black rather
+than stretched -- the renderer picks the largest rectangle of the game's aspect
+and blits into it (`present` in `src/lib/renderer.cpp`), so a 16:10 or 21:9
+monitor gets bars. `NFS_FULLSCREEN=0` opens a window instead, at 1280x720,
+centred and resizable (a display too small for that gets a smaller one of the
+same shape, `NFS_WINDOW=1600x900` picks another). **Alt+Enter** toggles between
+the two.
 
 Losing focus — another window in front — stops the game's clock, and a race
 being driven comes back paused, as a phone's background does: the game's own
@@ -691,6 +708,15 @@ these back.
 
 Keys are the game's own 1998 defaults: the arrows steer and work the pedals,
 Escape is back, Enter confirms; the mouse is the game's pointer, races included.
+The game's cursor is put where the system pointer is on the picture, as a
+phone's mouse is (`desktopMouseWatch`, `src/nfs3hp/nfs3hp_main.cpp`), not moved
+by how far the mouse went: that distance counts in pixels of the window, up to
+three times the 640 a menu spans, so the two parted at once and the system
+pointer stopped at the screen's edge with the game's cursor short of it. The
+wheel still reaches the game as DirectInput's.
+The window's own pointer is hidden while the game's mouse is open — the game
+draws the pointer itself, and SDL's arrow stayed on screen beside it, two
+pointers a few pixels apart (`ShowCursor`, `src/lib/winapi/user32.cpp`).
 A pad is `NFS Gamepad 1` / `2` with X steering and Y as both pedals, its buttons
 sending keys chosen with `NFS_GAMEPAD<n>_<BUTTON>` (see Environment variables).
 
@@ -776,6 +802,15 @@ the way, all of them "fifty because the retail game has 23":
   that multiply by 200 now multiply by `kCarGroupStride`. This was the one
   that crashed: past the fourth group ran the counters at `0x5555f8` and then
   live globals, so the sort compared a pointer that was never a car.
+- **The five car lists' records**, twenty bytes each from `0x5564ac`: the
+  choice the list drives, its name, and the three per-car tables it shows
+  (`cars`, `car2`, `carShowcase`, `carCompare1`, `carCompare2`). Those three
+  are pointers held in the game's *data*, so moving the arrays left every car
+  menu reading the addresses the tables used to have: the Player Car row showed
+  line 0 of the language's text — the game's own `BAD TEXT INDEX 0` — and the
+  car lists scrolled through nothing. `patchCarListDescriptors`
+  (`src/nfs3hp/nfs3hp_main.cpp`) repoints them at `kCarArrayA`, `B` and `E` as
+  the game starts, since no code patch can reach a pointer in data.
 
 A car's ID is one byte, so 256 distinct cars is the ceiling, and that has been
 run: 256 folders load, the car screens list and drive them, and a race starts
@@ -1011,7 +1046,7 @@ from the phone; the rest matter for a desktop run.
 |---|---|---|
 | `NFS_FPS_CAP` | `30` | Frame rate the renderer paces presents to. The game's logic is tuned for 30 Hz. |
 | `NFS_WINDOW` | unset | Desktop only: the window's size as `WIDTHxHEIGHT`, e.g. `1600x900`. Unset, 1280x720 fitted to the display. |
-| `NFS_FULLSCREEN` | unset | Desktop only: `1` starts fullscreen, as Alt+Enter would. |
+| `NFS_FULLSCREEN` | on | Desktop only: `0` opens a window instead of the whole screen; `1` or unset starts borderless fullscreen, as Alt+Enter's is. |
 | `NFS_GAMMA`, `NFS_BRIGHTNESS`, `NFS_CONTRAST` | `1.0` | Applied to the finished frame in the final blit, so menus and movies are covered as well as a race. |
 | `NFS_ORIENTATION` | unset | `auto` allows both landscape directions; anything else pins one. Must be set before `SDL_Init`. |
 | `NFS_CAR_DETAIL_FULL` | on | With Car Detail at High, every car keeps its detailed model and the player's texture size out to the draw distance, in every view, and the limit on how many are drawn at once is lifted. `0` restores the original. |
@@ -1036,6 +1071,7 @@ from the phone; the rest matter for a desktop run.
 | `NFS_FE_NATIVE_OFF` | unset | A list of generated functions, `sub_437e00,sub_438260`, left to the generated code while the other decompiled ones run. |
 | `NFS_NATIVE_CHECK` | off | `1` runs each native stand-in against the generated code and logs any difference (`[NATIVE]`). The polygon and car loops are compared over all of guest memory once a second. Slow, and draws some triangles twice. `clip` checks only the stand-ins of the clipping (both ways to the screen, the car's quad mesh included), the track, the effects, the car lights and detail, the objects and the vector math, every call; the small helpers called from hundreds of places are checked on every 64th call. |
 | `NFS_AUDIO_RATE` | unset | The output's own sample rate. The game mixes at 22050 Hz and SDL converts to this; a device opened at any other rate is resampled by Android, off its low-latency path. Unset, the device opens at SDL's default. |
+| `NFS_VOLUME` | `1.5` | How far the finished mix is lifted before it reaches the device (`src/lib/sdl-backend/audio.cpp`), 0.1 to 8: the game's own levels leave it quiet beside other applications. The lift saturates, so a loud mix clips rather than wraps; `1` leaves it as the game mixed it. |
 | `NFS_SND_MIX` | on | `0` leaves the game's sound mixer (`sub_500864` and everything under it) to its generated code instead of `src/nfs3hp/native_mixer.cpp`. `NFS_SND_CHECK=1` (debug) mixes each block natively and with the generated code and logs any byte that differs (`[SNDCHK]`); a block that calls the game, to refill a stream or end a sound, is left to the generated code. |
 | `NFS_TOUCH_STEER_LEFT` etc. | unset | Keys the touch overlay sends for steering and the pedals, so that endpoint can report them as axes. |
 | `NFS_GAMEPAD1_SOUTH` etc. | built-in defaults | What a pad button sends, as `NFS_GAMEPAD<n>_<BUTTON>`: an SDL key name (`Space`, `Return`), `axis:steer_left`, `axis:steer_right`, `axis:accelerate`, `axis:brake`, or empty for nothing. `_UI` after it is the same button in the menus. `LEFT_TRIGGER` and `RIGHT_TRIGGER` are the triggers read as buttons, empty by default; the launcher gives them the pedals' keys for a pad set to Digital. |

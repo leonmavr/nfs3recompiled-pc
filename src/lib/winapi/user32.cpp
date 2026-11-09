@@ -595,14 +595,23 @@ HHOOK SetWindowsHookExA(WinApplication* app, x86::CPU& cpu,
     return 0;
 }
 
+/* Win32's own cursor count: the pointer is drawn while it is not negative.
+ * The game hides the window's cursor while its mouse is open and draws the
+ * pointer itself (0x436930), and brings it back for an error box; SDL has a
+ * single flag, so the count is kept here.  Left as a stub, the window kept
+ * SDL's own arrow on screen beside the game's -- two pointers. */
 int ShowCursor(WinApplication* app, x86::CPU& cpu,
                BOOL bShow)
 {
-    // TODO?
     NFS2_USE(app);
     NFS2_USE(cpu);
-    NFS2_USE(bShow);
-    return 0;
+    static int s_count = 0;
+    s_count += bShow ? 1 : -1;
+    if (s_count >= 0)
+        SDL_ShowCursor();
+    else
+        SDL_HideCursor();
+    return s_count;
 }
 
 BOOL ShowWindow(WinApplication* app, x86::CPU& cpu,

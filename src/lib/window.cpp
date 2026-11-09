@@ -206,12 +206,14 @@ Window::Window(const char *title, int /*x*/, int /*y*/, int w, int h)
     }
 #ifndef __ANDROID__
     SDL_SetWindowPosition(m_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
-    /* NFS_FULLSCREEN=1 starts on the whole screen, as Alt+Enter would. */
-    if (const char* fullscreen = SDL_getenv("NFS_FULLSCREEN"))
-    {
-        if (*fullscreen && SDL_strcmp(fullscreen, "0") != 0)
-            toggleFullscreen(m_window);
-    }
+    /* A game opens on the whole screen: borderless, so no title bar and no
+     * frame, as Alt+Enter's fullscreen is.  The renderer keeps the picture's
+     * own shape and pads the rest with black (renderer.cpp), so a screen of
+     * another shape gets bars rather than a stretched picture.  NFS_FULLSCREEN=0
+     * opens a window instead, as the port did before. */
+    const char* fullscreen = SDL_getenv("NFS_FULLSCREEN");
+    if (!fullscreen || SDL_strcmp(fullscreen, "0") != 0)
+        toggleFullscreen(m_window);
     int openedW = 0, openedH = 0;
     SDL_GetWindowSizeInPixels(m_window, &openedW, &openedH);
     SDL_Log("[SCREEN] window %dx%d", openedW, openedH);

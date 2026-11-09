@@ -83,6 +83,11 @@ public:
      * paths stay in step.  `button` is 0 to 3, as DIMOFS_BUTTON0 counts them. */
     static void movePointer(x86::sreg32 dx, x86::sreg32 dy);
     static void pressPointer(x86::reg32 button, bool down);
+
+    /* The system mouse's motion and buttons left to whoever places the
+     * pointer by where it is (movePointer, pressPointer) rather than handed
+     * on as the distance it moved; the wheel still goes straight through. */
+    static void setPlacedByPosition(bool placed);
 };
 
 struct GamepadState

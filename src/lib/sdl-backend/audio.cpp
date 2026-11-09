@@ -1,4 +1,6 @@
 #include <lib/audio.h>
+#include <cstdint>
+#include <cstddef>
 #include <lib/mutex.h>
 #include <SDL3/SDL.h>
 #include <vector>
@@ -93,7 +95,11 @@ void AudioDevice::stop(AudioBuffer* buffer)
 
 
 /* Every playing buffer mixed into one silence-filled block, each adding to what
- * the ones before it left, clamped to 16 bits. */
+ * the ones before it left, clamped to 16 bits.  The block is lifted on its way
+ * out (NFS_VOLUME, 1.5 by default): the game's own levels, right for a 1998 PC
+ * on its own, leave a phone or a laptop quiet beside every other application.
+ * The lift saturates rather than wraps, so a loud mix clips where it would have
+ * run into silence anyway. */
 void AudioDevice::audioCallback22050(void* userdata, SDL_AudioStream* stream, int additional_amount, int /*total_amount*/)
 {
     AudioDevice* audio = reinterpret_cast<AudioDevice*>(userdata);
@@ -103,6 +109,20 @@ void AudioDevice::audioCallback22050(void* userdata, SDL_AudioStream* stream, in
         ++it)
     {
         (*it)->audioCallback22050(buffer.data(), additional_amount);
+    }
+    static const float gain = [] {
+        const char* value = SDL_getenv("NFS_VOLUME");
+        const float parsed = value && *value ? float(SDL_atof(value)) : 1.5f;
+        return parsed >= 0.1f && parsed <= 8.0f ? parsed : 1.5f;
+    }();
+    if (gain != 1.0f)
+    {
+        std::int16_t* samples = reinterpret_cast<std::int16_t*>(buffer.data());
+        for (size_t i = 0; i < buffer.size() / sizeof(std::int16_t); ++i)
+        {
+            const float lifted = float(samples[i]) * gain;
+            samples[i] = std::int16_t(lifted > 32767.0f ? 32767 : lifted < -32768.0f ? -32768 : int(lifted));
+        }
     }
     SDL_PutAudioStreamData(stream, buffer.data(), additional_amount);
     return;

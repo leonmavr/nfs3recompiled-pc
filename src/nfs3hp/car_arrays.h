@@ -24,6 +24,11 @@
  * Array A : 0x554fa8, 16-bit      Array D : 0x5551a2, 16-bit
  * Array B : 0x55500a, 16-bit      Array E : 0x55506c, 32-bit
  * Array C : 0x555138, 16-bit      Array F : 0x555214, 32-bit
+ *
+ * The car menus reach A, B and E through five list records in the game's data
+ * (0x5564ac onwards: the choice a list drives, its name, and the three
+ * tables), so those records are repointed here at startup -- nfs3hp_main.cpp,
+ * patchCarListDescriptors, and tools/apply_car_arrays.py for why.
  */
 namespace nfs3hp
 {

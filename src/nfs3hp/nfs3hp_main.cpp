@@ -9,6 +9,7 @@
 #include <winapi/version.h>
 #include <lib/gliderenderer.h>
 #include "native_thrash.h"
+#include "car_arrays.h"
 #include "dynamic_fullscreen.h"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -2103,6 +2104,71 @@ bool SDLCALL movieKeyWatch(void*, SDL_Event* event)
     }
     return true;
 }
+
+/* The desktop's mouse, placed where it is on the picture, as the phone's mouse
+ * is (NFS3Activity.forwardPointer -> queueMouse).  It used to reach the game
+ * as the distance it moved, in pixels of the window: on a 1920x1080 screen a
+ * menu's 640 across ran three times as fast as the system pointer, the two
+ * parted company at once, and the system pointer -- hidden, but still there --
+ * stopped at the screen's edge while the game's cursor was short of it, or
+ * past it, so parts of the picture could not be reached.  Placed by where it
+ * is, the cursor is under the system pointer wherever the picture is drawn
+ * (the letterbox included), at any size of window.  SDL counts in the
+ * window's points and the picture's rectangle in its pixels, so the place is
+ * scaled by the window's pixel density.  The wheel still goes as it did
+ * (sdl-backend/gamepad.cpp). */
+int s_desktopButtons;
+
+bool SDLCALL desktopMouseWatch(void*, SDL_Event* event)
+{
+    float x, y;
+    SDL_WindowID windowID;
+    switch (event->type)
+    {
+    case SDL_EVENT_MOUSE_MOTION:
+        if (event->motion.which == SDL_TOUCH_MOUSEID)
+            return true;
+        x = event->motion.x;
+        y = event->motion.y;
+        windowID = event->motion.windowID;
+        break;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+    {
+        if (event->button.which == SDL_TOUCH_MOUSEID)
+            return true;
+        int bit = 0;
+        switch (event->button.button)
+        {
+        case SDL_BUTTON_LEFT:   bit = 1; break;
+        case SDL_BUTTON_RIGHT:  bit = 2; break;
+        case SDL_BUTTON_MIDDLE: bit = 4; break;
+        default: return true;
+        }
+        if (event->button.down)
+            s_desktopButtons |= bit;
+        else
+            s_desktopButtons &= ~bit;
+        x = event->button.x;
+        y = event->button.y;
+        windowID = event->button.windowID;
+        break;
+    }
+    default:
+        return true;
+    }
+    if (SDL_Window* window = SDL_GetWindowFromID(windowID))
+    {
+        const float density = SDL_GetWindowPixelDensity(window);
+        if (density > 0.f)
+        {
+            x *= density;
+            y *= density;
+        }
+    }
+    queueMouse(x, y, s_desktopButtons);
+    return true;
+}
 #endif
 
 /* Which of the two on-screen layouts belongs on the screen, told to the Android
@@ -2696,6 +2762,31 @@ static void keyboardDrivingIfNoPad(const std::string& root)
 }
 #endif
 
+/* The car menus' lists are described in the game's data by five records,
+ * 20 bytes each from 0x5564ac: the choice a list drives, its name, then the
+ * three per-car tables it shows -- each car's name text id, whether it is
+ * offered, and its colour (car_arrays.h).  The entries are drawn through
+ * those three pointers, so moving the tables to make room for more than fifty
+ * cars (tools/apply_car_arrays.py) left all five lists -- cars, car2,
+ * carShowcase, carCompare1 and carCompare2 -- pointing at the addresses the
+ * game used to keep them at, which no longer hold anything: the Player Car row
+ * read text 0 of the language's -- the game's own "BAD TEXT INDEX 0" line --
+ * and the car lists scrolled through nothing.  Those pointers are data, out of
+ * the reach of the code patches, so they are repointed here. */
+static void patchCarListDescriptors(win32::WinApplication& app)
+{
+    const x86::reg32 lists[] = { 0x5564ac, 0x5564c0, 0x5564d4, 0x5564e8, 0x5564fc };
+    for (const x86::reg32 list : lists)
+    {
+        NFS2_ASSERT(app.getMemory<x86::reg32>(list + 8) == 0x554fa8);
+        NFS2_ASSERT(app.getMemory<x86::reg32>(list + 12) == 0x55500a);
+        NFS2_ASSERT(app.getMemory<x86::reg32>(list + 16) == 0x55506c);
+        app.getMemory<x86::reg32>(list + 8) = nfs3hp::kCarArrayA;
+        app.getMemory<x86::reg32>(list + 12) = nfs3hp::kCarArrayB;
+        app.getMemory<x86::reg32>(list + 16) = nfs3hp::kCarArrayE;
+    }
+}
+
 int main(int argc, char* argv[])
 {
 #ifdef __ANDROID__
@@ -2814,6 +2905,8 @@ int main(int argc, char* argv[])
         //app.addRegistryKey(win32::HKEY_LOCAL_MACHINE, "SOFTWARE\\Electronic Arts\\Need For Speed III", "Hardware Acceleration", new win32::RegistryValue(x86::reg32(0)));
         app.addRegistryKey(win32::HKEY_LOCAL_MACHINE, "SOFTWARE\\Electronic Arts\\Need For Speed III", "Hardware Acceleration", new win32::RegistryValue(x86::reg32(1)));
 
+        patchCarListDescriptors(app);
+
         /* Car detail is chosen by distance alone -- there is no per-car role
          * anywhere in the selection.  The table at 0x55fdf4 holds four floats
          * per "cardetail" setting: three level-of-detail switch distances and a
@@ -2899,6 +2992,8 @@ int main(int argc, char* argv[])
         SDL_AddEventWatch(backgroundWatch, static_cast<win32::WinApplication*>(&app));
 #ifndef __ANDROID__
         SDL_AddEventWatch(movieKeyWatch, nullptr);
+        win32::Mouse::setPlacedByPosition(true);
+        SDL_AddEventWatch(desktopMouseWatch, nullptr);
 #endif
 
         /* The screen sizes the Graphics menu offers.  The Voodoo2 driver's mode

@@ -18,6 +18,14 @@ src/nfs3hp/car_arrays.h, with room for every car the list can hold.  The
 scan, the code that reads
 the tables back, and the terminator it writes one past the last car are all
 the game's own, unchanged.
+
+One thing this cannot reach: the car menus do not name the arrays in code but
+through five list records in the game's data, twenty bytes each from 0x5564ac
+-- the choice a list drives, its name, and the three tables of A, B and E it
+shows ("cars", "car2", "carShowcase", "carCompare1", "carCompare2").  Left
+pointing at the old addresses those lists came up empty: the Player Car row
+showed the game's own "BAD TEXT INDEX 0" line and the lists scrolled through
+nothing.  nfs3hp_main.cpp repoints them as the game starts.
 """
 from pathlib import Path
 

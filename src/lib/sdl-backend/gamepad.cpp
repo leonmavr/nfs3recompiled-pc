@@ -273,9 +273,19 @@ MouseImpl& mouseImpl()
     return s_impl;
 }
 
+/* Set on the desktop, where the system pointer is placed on the picture
+ * (nfs3hp_main.cpp, desktopMouseWatch): the motion and the buttons arrive
+ * through movePointer and pressPointer instead, and passing them on here as
+ * well would move the game's cursor twice. */
+std::atomic<bool> s_placedByPosition{ false };
+
 bool SDLCALL mouseEventWatch(void* /*userdata*/, SDL_Event* event)
 {
     MouseImpl& m = mouseImpl();
+    if (s_placedByPosition.load(std::memory_order_relaxed)
+        && (event->type == SDL_EVENT_MOUSE_MOTION || event->type == SDL_EVENT_MOUSE_BUTTON_DOWN
+            || event->type == SDL_EVENT_MOUSE_BUTTON_UP))
+        return true;
     switch (event->type)
     {
     case SDL_EVENT_MOUSE_MOTION:
@@ -327,6 +337,11 @@ bool SDLCALL mouseEventWatch(void* /*userdata*/, SDL_Event* event)
     return true;
 }
 
+}
+
+void Mouse::setPlacedByPosition(bool placed)
+{
+    s_placedByPosition.store(placed, std::memory_order_relaxed);
 }
 
 void Mouse::movePointer(x86::sreg32 dx, x86::sreg32 dy)
