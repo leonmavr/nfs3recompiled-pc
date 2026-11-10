@@ -249,6 +249,11 @@ taken from the quad's plane, the corners keep their texture coordinates.
 `NFS_SHADOW_STRETCH` (0.7) sets how far; `0` the original shape.
 `NFS_SOFT_EFFECTS=0` leaves all three pictures as the game has them.
 
+Where the sun is not shining the shadow is fainter (`dimShadow`): in the rain,
+under its overcast sky (Weather, `0x6fd4cc`), its corners' alpha is scaled by
+`NFS_SHADOW_RAIN` (0.55), and at night (`0x6fd4c8`) by `NFS_SHADOW_NIGHT`
+(0.4) -- both together when both hold; 1 keeps the daylight shadow.
+
 ### Wet roads
 
 With Weather on, on a track whose weather is rain (the `type` in its
@@ -1158,6 +1163,7 @@ from the phone; the rest matter for a desktop run.
 | `NFS_HEADLIGHT_REACH`, `NFS_HEADLIGHT_WIDTH` | `2`, `1.4` | How far the headlights' patch on the road reaches and how wide it is, against the original's (0.25 to 4; `1` and `1` are the original). |
 | `NFS_SOFT_EFFECTS` | on | `0`: the headlights' pool, the wet road's light streaks and the cars' shadows as the game draws them, hard-edged. |
 | `NFS_SHADOW_STRETCH` | `0.7` | How far a car's shadow is stretched away from the sun, in its own half sizes (0 to 3; `0` the original). |
+| `NFS_SHADOW_RAIN`, `NFS_SHADOW_NIGHT` | `0.55`, `0.4` | How strong a car's shadow is in the rain and at night, against daylight (0 to 1; `1` unchanged). |
 | `NFS_WET_ROADS` | `1` | How wet the road is in the rain -- darker, puddled, reflecting (0 to 2; `0` never). |
 | `NFS_ORIENTATION` | unset | `auto` allows both landscape directions; anything else pins one. Must be set before `SDL_Init`. |
 | `NFS_CAR_DETAIL_FULL` | on | With Car Detail at High, every car keeps its detailed model and the player's texture size out to the draw distance, in every view, and the limit on how many are drawn at once is lifted. `0` restores the original. |

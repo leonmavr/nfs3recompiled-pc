@@ -23,8 +23,13 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   - Partly done: each car's shadow is stretched away from the track's sun,
     turning as the car turns, and its edges are soft (`NFS_SHADOW_STRETCH`,
     `NFS_SOFT_EFFECTS`). Real shadows (shadow maps) are too costly here.
-  - [ ] Next: shadows for trackside objects; shadow strength by time of day
-    (fainter in rain/overcast and at night).
+  - Done: shadows fainter in the rain/overcast and at night
+    (`NFS_SHADOW_RAIN`, 0.55; `NFS_SHADOW_NIGHT`, 0.4).
+  - [ ] Next: shadows for trackside objects.
+- [ ] More details environment (buildings, grass, fences, rocks, etc.) textures,
+  better sampled maybe?
+- [ ] More detailed car models/less blocky-looking in races and better paint
+  properties.
 
 ### Races/locations
 
@@ -34,6 +39,8 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     (`NFS_HEADLIGHT_REACH`, `NFS_HEADLIGHT_WIDTH`), and fades softly at its
     sides and far end instead of ending in a box (`NFS_SOFT_EFFECTS`).
   - [ ] Next: light on trackside objects (fences, walls) from the headlights.
+- [ ] Emissive light from environmental models that emit light. Note that this
+  is partially implementned by the original game but check if it can improved
 
 ### Oppponents and AI
 
@@ -56,4 +63,12 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 - [ ] Some blatant AI weaknesses/bugs I noticed: often many opponents crash
   together and clump and get stuck. Sometimes when there's a splitting turn with
   a wall in between they don't know where to turn and crash on the wall. I
-  noticed it in rainy locations, idk if it's the case everywhere.
+  noticed it in rainy locations, idk if it's the case everywhere. Sometimes they
+  don't know how to react if they turn by 90 or 180 degrees and don't know how
+  to continue it seems.
+
+### UI
+- [ ] Currently the sides of screen are padded with black as the game was made
+  for narrower resolution. Fill the whole screen all the time (menus: expand
+  main screen, move fields towards the edges, rage: expand the main screen/view)
+  without however stetching/scaling things sideways.

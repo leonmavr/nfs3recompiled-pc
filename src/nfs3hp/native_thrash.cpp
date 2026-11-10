@@ -141,6 +141,37 @@ void stretchShadow(win32::WinApplication* app, win32::ThrashVertex (&v)[4])
     }
 }
 
+/* Port: a car's shadow fainter where the light is: in the rain (Weather,
+ * [0x6fd4cc], under an overcast sky) and at night ([0x6fd4c8]), where the sun
+ * the game casts it from is not shining.  Its corners' alpha, which the
+ * shadow's own alpha is multiplied by, scaled by NFS_SHADOW_RAIN (0.55) and
+ * NFS_SHADOW_NIGHT (0.4), both together when both hold; 1 leaves it as in
+ * daylight. */
+float shadowSetting(const char* name, float fallback)
+{
+    const char* value = SDL_getenv(name);
+    const float parsed = value && *value ? float(SDL_atof(value)) : fallback;
+    return parsed >= 0.0f && parsed <= 1.0f ? parsed : fallback;
+}
+
+void dimShadow(win32::WinApplication* app, win32::ThrashVertex (&v)[4])
+{
+    static const float rain = shadowSetting("NFS_SHADOW_RAIN", 0.55f);
+    static const float night = shadowSetting("NFS_SHADOW_NIGHT", 0.4f);
+    float scale = 1.0f;
+    if (app->getMemory<x86::reg32>(0x6fd4cc) != 0)
+        scale *= rain;
+    if (app->getMemory<x86::reg32>(0x6fd4c8) != 0)
+        scale *= night;
+    if (scale >= 1.0f)
+        return;
+    for (win32::ThrashVertex& corner : v)
+    {
+        const x86::reg32 alpha = corner.color >> 24;
+        corner.color = (corner.color & 0x00ffffffu) | x86::reg32(std::lround(float(alpha) * scale)) << 24;
+    }
+}
+
 /* voodoo2a's data, at its load address (RVA + 0xa82200). */
 constexpr x86::reg32 kColourTable = 0xa93210;  // a colour byte as the float Glide takes, 256 of them
 constexpr x86::reg32 kDepthScale = 0xa9235c;   // z to Glide's ooz
@@ -383,7 +414,10 @@ struct Vertices
             batch(c, v[2]);
             batch(d, v[3]);
             if (direct->drawingShadow())
+            {
+                dimShadow(app, v);
                 stretchShadow(app, v);
+            }
             batch(v[0], v[1], v[2]);
             batch(v[2], v[3], v[0]);
             return true;
