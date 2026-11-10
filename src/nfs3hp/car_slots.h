@@ -29,6 +29,10 @@ x86::reg32 carSlotRecord(x86::reg32 index);
 /* `record` kept for car `index`. */
 void setCarSlotRecord(x86::reg32 index, x86::reg32 record);
 
+/* Every slot emptied: sub_4399f0, when the list of loaded cars is rebuilt or
+ * re-sorted and a place has to be looked up again. */
+void clearCarSlotRecords();
+
 }
 
 #endif /* !NFS3HP_CAR_SLOTS_H_ */

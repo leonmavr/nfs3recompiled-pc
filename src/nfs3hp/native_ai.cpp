@@ -601,6 +601,17 @@ bool aiDrive(win32::WinApplication* app, x86::CPU& cpu)
     if (aiTracing())
     {
         Opponent& o = s_opponents[i];
+        // Which car it is, once a race: the folder name the race gave it, [+0x1e4].
+        static x86::sreg32 s_named[kMaxCars] = {};
+        const x86::sreg32 now = x86::sreg32(app->getMemory<x86::reg32>(kRaceClock));
+        if (now < s_named[i] || s_named[i] == 0)
+        {
+            char name[9] = {};
+            for (int q = 0; q < 8; ++q)
+                name[q] = char(x86::reg8(app->getMemory<x86::reg8>(car + 0x1e4 + q)));
+            SDL_Log("[AI] car %d is %s (driver: %s)", i, name, driverOf(app, car).character);
+        }
+        s_named[i] = now > 0 ? now : 1;
         static x86::sreg32 s_last[kMaxCars] = {};
         const x86::sreg32 tick = x86::sreg32(app->getMemory<x86::reg32>(kRaceClock));
         if (tick - s_last[i] >= kTicksPerSecond || tick < s_last[i])

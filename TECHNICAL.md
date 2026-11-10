@@ -219,6 +219,21 @@ cars' vertices are noted as `sub_49da30` lights them each frame
 triangle whose first corner is one of them (`ThrashRenderer::setCarSurface`).
 `NFS_ROAD_DETAIL=0` leaves it out.
 
+The rest of the world -- walls, buildings, trees, fences, grass, rocks, all
+of it depth tested but not a car and not the road's grain -- gets the same
+noise, finer and fainter (`NFS_OBJECT_DETAIL`, 0.3), at two to a texture and
+on its opaque texels only, so smoke and glass are left alone. The track's
+textures are 64 x 64 (1555 on the disc), stretched over a whole wall or
+hillside, and where one is seen larger than it is -- a texel bigger than a
+pixel -- the GPU's bilinear melted it into a cross-hatched blur. There the
+shader draws it Catmull-Rom instead (`sharpTexture`): the sixteen texels
+around the point in nine bilinear reads, the overshoot clamped. Where a texel
+is a pixel or smaller the GPU's own levels, trilinear and anisotropic, are
+the better filter and are kept, with the two blended across the step.
+`NFS_TEXTURE_SHARP=0` is bilinear again. Ground seen at a grazing angle is
+magnified across and shrunk along at once, so it stays on the GPU's
+anisotropic filtering.
+
 ### Longer headlights
 
 The headlights' patch on the road (`sub_491bc0`, `roadLightNative`) lit at
@@ -960,7 +975,14 @@ the way, all of them "fifty because the retail game has 23":
   with the car count in the dword straight after it, so it could not be made
   longer where it lies. It is now the port's: 512 entries in host memory
   (`src/nfs3hp/native_car_slots.cpp`, `tools/apply_car_slots.py`), which is
-  what `sub_439a50` reads and writes instead of the table. Its bound was also
+  what `sub_439a50` reads and writes instead of the table. The table is a
+  cache: `sub_4399f0` empties it each time the scan rebuilds or re-sorts the
+  list of loaded cars (`sub_439d90`, `sub_438eb0`), so that every place is
+  looked up again. It still cleared the 200 bytes at `0x5f3c00`, so the port's
+  table kept each place's record from the order before: an opponent picked
+  from a class (found by walking the list, `sub_439990`) was raced as whatever
+  car had stood at its place -- police cars among them. `sub_4399f0` now
+  empties the port's table too (`clearCarSlotRecords`). Its bound was also
   still `cmp eax, 0x31` — the first attempt at this only changed the comment
   beside that compare, which is why raising the table did nothing on its own.
 - **Six per-car arrays** the scan fills, at `0x554fa8`, `0x55500a`, `0x555138`
@@ -1227,6 +1249,8 @@ from the phone; the rest matter for a desktop run.
 | `NFS_TEXTURE_FILTER` | on | `0`: textures sampled as the Voodoo did -- the game's one level, no levels made, no anisotropy (Texture filtering and the road's grain). |
 | `NFS_ANISOTROPY` | `8` | Anisotropic filtering of the textures, at most what the GPU offers; `1` for none. |
 | `NFS_ROAD_DETAIL` | `0.35` | How much the road's and the ground's grain lightens and darkens them, 0 to 1; `0` for none. |
+| `NFS_OBJECT_DETAIL` | `0.3` | The same for the rest of the world -- walls, buildings, trees, fences, grass, rocks -- finer, on opaque texels only; `0` for none. |
+| `NFS_TEXTURE_SHARP` | on | `0`: textures seen larger than they are drawn bilinear, as the GPU does, instead of Catmull-Rom. |
 | `NFS_HEADLIGHT_REACH`, `NFS_HEADLIGHT_WIDTH` | `2`, `1.4` | How far the headlights' patch on the road reaches and how wide it is, against the original's (0.25 to 4; `1` and `1` are the original). |
 | `NFS_SOFT_EFFECTS` | on | `0`: the headlights' pool, the wet road's light streaks and the cars' shadows as the game draws them, hard-edged. |
 | `NFS_SHADOW_STRETCH` | `0.7` | How far a car's shadow is stretched away from the sun, in its own half sizes (0 to 3; `0` the original). |
@@ -1251,7 +1275,7 @@ from the phone; the rest matter for a desktop run.
 | `NFS_NATIVE_AI` | on | `0` runs the generated sub_4064f0 and sub_4070c0 instead of their decompiled C++ (`src/nfs3hp/native_ai.h`). A debug build takes it from a launch: `--ez native_ai_off true`. |
 | `NFS_AI_TUNE` | on | `0`: the opponents drive as the game has them -- no getting unstuck, no looking ahead for splits, no flashing, no characters, no extra pace (The opponents' driving, tuned). |
 | `NFS_AI_PACE` | `1.06` | How much harder the opponents pull (their aim for speed times half the difference), 0.5 to 2; `1` the game's difficulty. |
-| `NFS_AI_TRACE` | off | `1` logs each opponent once a second, every step it takes to get unstuck, every split it steers round and every time it flashes the player (`[AI]`). |
+| `NFS_AI_TRACE` | off | `1` logs which car each opponent is at the start of a race, then each opponent once a second, every step it takes to get unstuck, every split it steers round and every time it flashes the player (`[AI]`). |
 | `NFS_NET_PORT` | `9803` | TCP port of network races, as the Modern Patch has it; the launcher's Network screen offers the original's `1030`. |
 | `NFS_NET_TRACE` | off | `1` (extra `net_trace`) writes a network race into the log: EA's comm library events and packet sends (`[COMM]`), up to 400 datagrams per socket instead of 16 (`[NET]`), and each new indirect call target once per thread after the IPX transport opens (`[CALL]`). For finding where two machines stop on the way into a race. |
 | `NFS_FE_NATIVE` | on | `0` leaves every hooked decompiled menu function, the screens' and the engine's, to the generated code (see Decompiled menus); the main menu, what it calls of the menu loop and the dialogs, and the controls' screens are native whole and stay native. |

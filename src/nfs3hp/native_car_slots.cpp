@@ -7,7 +7,8 @@
  * 0x5f3cc8, the next dword -- so a longer table in place would have run into
  * it.  These two hold it instead: same pointers, same order, kCarSlots of
  * them, and tools/apply_car_slots.py has sub_439a50 call them where it used to
- * read and write guest memory.  Nothing else in the game touches the table.
+ * read and write guest memory.  Nothing else in the game touches the table but sub_4399f0, which empties it
+ * when the list is rebuilt or re-sorted (clearCarSlotRecords).
  *
  * Kept as guest addresses -- they are values, not host pointers, and the code
  * that walks them is the game's. */
@@ -30,6 +31,12 @@ void setCarSlotRecord(x86::reg32 index, x86::reg32 record)
 {
     if (index < kCarSlots)
         s_records[index] = record;
+}
+
+void clearCarSlotRecords()
+{
+    for (x86::reg32& record : s_records)
+        record = 0;
 }
 
 }

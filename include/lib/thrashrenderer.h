@@ -121,6 +121,8 @@ private:
         float gamma;
         int fogTable;
         bool detail;            // the ground's grain over it (initGl)
+        bool surface;           // the rest of the world: its own, fainter grain (initGl)
+        bool sharpen;           // drawn in the world: magnified bicubic (initGl)
     };
     friend struct ThrashDraw;
 
@@ -161,7 +163,7 @@ private:
     {
         int position, color, texCoord, combine;
         int transform, fogW, fogTable, fogColor, alphaRef, chromaKey, chromaKeyColor, gamma, wrap, levels, texture,
-            format, detail, detailTexture, detailScale, wet, reflection, screen;
+            format, detail, detailTexture, detailScale, wet, reflection, screen, surface, sharpen;
     } m_locations;
     unsigned int            m_detailTexture = 0;
     bool                    m_carSurface = false;   // the game thread's
@@ -175,6 +177,8 @@ private:
     bool                    m_sceneDrawn = false;       // this frame has drawn some of the world
     void takeReflection(int width, int height);
     float                   m_detailStrength = 0.0f;  // NFS_ROAD_DETAIL; 0 for none
+    float                   m_surfaceStrength = 0.0f; // NFS_OBJECT_DETAIL; 0 for none
+    bool                    m_sharpen = false;        // NFS_TEXTURE_SHARP
     bool                    m_depth16;
     bool                    m_makeMipmaps = false;  // levels made for the textures (initGl)
 

@@ -88,6 +88,8 @@ static const char g_fragmentShader[] =
 "uniform float u_wet;"
 "uniform sampler2D u_reflection;"
 "uniform vec2 u_screen;"
+"uniform float u_surface;"
+"uniform bool u_sharpen;"
 /* Whether a texel is the key colour, compared as GlideRenderer compares it:
  * against the bytes its own conversion to RGBA8 gave the texel -- 565 widened
  * by a shift, 1555 scaled, 4444 and 8888 exact -- so a key matches the texels
@@ -108,9 +110,43 @@ static const char g_fragmentShader[] =
 "    vec2 t = mix(clamp(at, 0.0, size - 1.0), mod(at, size), u_wrap);"
 "    return texelFetch(u_texture, ivec2(t), level);"
 "}"
+/* A texture seen larger than it is (initGl, NFS_TEXTURE_SHARP): Catmull-Rom
+ * over the sixteen texels around the point, in nine bilinear reads, instead
+ * of the GPU's bilinear over four -- the track's 64 x 64 pictures spread over
+ * a wall or a hillside keep their edges instead of melting into a cross-hatched
+ * blur.  Where a texel is a pixel or smaller the GPU's own filtering (the
+ * levels, trilinear, anisotropic) is the better one and is what is used; the
+ * two are blended across the step, so no line shows where one gives way. */
+"vec4 sharpTexture(vec2 uv, vec2 gx, vec2 gy)"
+"{"
+"    vec4 plain = textureGrad(u_texture, uv, gx, gy);"
+"    vec2 size = vec2(textureSize(u_texture, 0));"
+"    float rho = max(length(gx * size), length(gy * size));"
+"    if (rho >= 1.0) return plain;"
+"    vec2 p = uv * size;"
+"    vec2 t1 = floor(p - 0.5) + 0.5;"
+"    vec2 f = p - t1;"
+"    vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));"
+"    vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);"
+"    vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));"
+"    vec2 w3 = f * f * (-0.5 + 0.5 * f);"
+"    vec2 w12 = w1 + w2;"
+"    vec2 a = (t1 - 1.0) / size, b = (t1 + w2 / w12) / size, c = (t1 + 2.0) / size;"
+"    vec4 sum = textureLod(u_texture, vec2(a.x, a.y), 0.0) * w0.x * w0.y"
+"             + textureLod(u_texture, vec2(b.x, a.y), 0.0) * w12.x * w0.y"
+"             + textureLod(u_texture, vec2(c.x, a.y), 0.0) * w3.x * w0.y"
+"             + textureLod(u_texture, vec2(a.x, b.y), 0.0) * w0.x * w12.y"
+"             + textureLod(u_texture, vec2(b.x, b.y), 0.0) * w12.x * w12.y"
+"             + textureLod(u_texture, vec2(c.x, b.y), 0.0) * w3.x * w12.y"
+"             + textureLod(u_texture, vec2(a.x, c.y), 0.0) * w0.x * w3.y"
+"             + textureLod(u_texture, vec2(b.x, c.y), 0.0) * w12.x * w3.y"
+"             + textureLod(u_texture, vec2(c.x, c.y), 0.0) * w3.x * w3.y;"
+"    return mix(plain, clamp(sum, 0.0, 1.0), smoothstep(1.0, 0.6, rho));"
+"}"
 "void main()"
 "{"
 "    vec2 uv = (v_texCoord.st / v_texCoord.p) / 256.0;"
+"    vec2 gx = dFdx(uv), gy = dFdy(uv);"
 "    vec4 textureColor;"
 "    if (u_chromaKey) {"
 "        float size = float(textureSize(u_texture, 0).x);"
@@ -136,12 +172,21 @@ static const char g_fragmentShader[] =
 "        float wsum = wgt.x + wgt.y + wgt.z + wgt.w;"
 "        if (wsum <= 0.0) discard;"
 "        textureColor = (t00 * wgt.x + t10 * wgt.y + t01 * wgt.z + t11 * wgt.w) / wsum;"
+"    } else if (u_sharpen) {"
+"        textureColor = sharpTexture(uv, gx, gy);"
 "    } else {"
 "        textureColor = texture(u_texture, uv);"
 "    }"
 "    vec4 color = vec4(mix(v_color.rgb, v_color.rgb * textureColor.rgb, v_combine.s),"
 "                      mix(v_color.a, v_color.a * textureColor.a, v_combine.t));"
 "    if (color.a <= u_alphaRef) discard;"
+/* The rest of the world's grain (initGl, NFS_OBJECT_DETAIL): the same noise,
+ * fainter and twice to a texture, on the walls, the buildings, the grass and
+ * the rocks -- the opaque texels only, so smoke and glass stay as they are. */
+"    if (u_surface > 0.0 && v_combine.s > 0.5 && v_combine.q > 0.5 && textureColor.a > 0.99) {"
+"        float fine = textureGrad(u_detailTexture, uv * 2.0 + vec2(0.21, 0.53), gx * 2.0, gy * 2.0).r;"
+"        color.rgb *= 1.0 + u_surface * (fine - 0.5) * 2.0;"
+"    }"
 /* The ground's grain (initGl): a fine noise over the texture, in its own
  * coordinates so it lies on the surface, lighter and darker by u_detail.  Far
  * off its mipmaps average to grey and it is gone of itself. */
@@ -454,8 +499,22 @@ void ThrashRenderer::initGl()
         glBindTexture(GL_TEXTURE_2D, 0);
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[GFX] grain on the road and the ground: %.2f", double(m_detailStrength));
     }
+    /* Port: the rest of the world's grain (NFS_OBJECT_DETAIL, 0.3 by default,
+     * 0 for none) -- the same noise as the road's, finer and fainter, on the
+     * walls, buildings, grass and rocks, whose 64 x 64 pictures are stretched
+     * as thin as the road's -- and the textures seen larger than they are
+     * drawn bicubic (NFS_TEXTURE_SHARP, on; 0 for the GPU's bilinear). */
+    const char* objects = SDL_getenv("NFS_OBJECT_DETAIL");
+    m_surfaceStrength = objects && *objects ? float(SDL_atof(objects)) : 0.3f;
+    m_surfaceStrength = m_detailTexture ? SDL_max(0.0f, SDL_min(m_surfaceStrength, 1.0f)) : 0.0f;
+    const char* sharp = SDL_getenv("NFS_TEXTURE_SHARP");
+    m_sharpen = !(sharp && SDL_strcmp(sharp, "0") == 0);
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[GFX] the world's grain %.2f; magnified textures %s", double(m_surfaceStrength),
+                m_sharpen ? "bicubic" : "bilinear");
     glUseProgram(m_program);
     glUniform1i(m_locations.detailTexture, 1);
+    glUniform1f(m_locations.surface, 0.0f);
+    glUniform1i(m_locations.sharpen, 0);
     glUniform1f(m_locations.detailScale, 8.0f);
     glUniform1f(m_locations.detail, 0.0f);
     glUniform1i(m_locations.reflection, 2);
@@ -534,6 +593,8 @@ void ThrashRenderer::compileShaders(int depthBits, const char* renderer)
     m_locations.wet = glGetUniformLocation(m_program, "u_wet");
     m_locations.reflection = glGetUniformLocation(m_program, "u_reflection");
     m_locations.screen = glGetUniformLocation(m_program, "u_screen");
+    m_locations.surface = glGetUniformLocation(m_program, "u_surface");
+    m_locations.sharpen = glGetUniformLocation(m_program, "u_sharpen");
     glUseProgram(m_program);
     glUniform1i(m_locations.texture, 0);
     float w[64];
@@ -616,6 +677,11 @@ void ThrashRenderer::flush()
      * (Blending says nothing: the game leaves it on for nearly everything.)  The shader adds that the draw is fogged, which the 2D
      * screens never are. */
     batch.detail = !m_carSurface && m_zTest && m_zBuffer && !m_chromaKey && (m_wrapS || m_wrapT);
+    /* The rest of the world -- what is depth tested, the car bodies and the
+     * ground's own grain apart: the track's walls, buildings, trees, fences,
+     * the grass and the rocks.  The HUD and the menus are never depth tested. */
+    batch.surface = !batch.detail && !m_carSurface && m_zTest && !m_chromaKey;
+    batch.sharpen = m_zTest && !m_chromaKey;
     m_batches.push_back(batch);
 }
 
@@ -741,6 +807,10 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
         }
         if (m_detailTexture && (!previous || batch.detail != previous->detail))
             glUniform1f(m_locations.detail, batch.detail ? m_detailStrength : 0.0f);
+        if (m_detailTexture && (!previous || batch.surface != previous->surface))
+            glUniform1f(m_locations.surface, batch.surface ? m_surfaceStrength : 0.0f);
+        if (!previous || batch.sharpen != previous->sharpen)
+            glUniform1i(m_locations.sharpen, batch.sharpen && m_sharpen ? 1 : 0);
         if (batch.fogTable != fogTable)
         {
             fogTable = batch.fogTable;

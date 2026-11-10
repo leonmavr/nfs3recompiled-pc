@@ -11239,6 +11239,7 @@ void Application::sub_4399f0(WinApplication* __restrict app, x86::CPU& cpu_)
     // 004399f3  89e5                   -mov ebp, esp
     cpu.ebp = cpu.esp;
     // 004399f5  bbc8000000             -mov ebx, 0xc8
+    clearCarSlotRecords();
     cpu.ebx = 200 /*0xc8*/;
     // 004399fa  b8003c5f00             -mov eax, 0x5f3c00
     cpu.eax = 6241280 /*0x5f3c00*/;

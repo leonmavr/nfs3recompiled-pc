@@ -11,8 +11,8 @@ sub_439a50 turns a car's id into its record:
 Fifty slots, and the car count is kept in the dword straight after the table
 (0x5f3cc8), so it cannot be lengthened where it lies.  The port keeps the table
 instead (src/nfs3hp/native_car_slots.cpp): the same pointers in the same order,
-256 of them, in host memory.  This patch is the three places the table is
-touched -- the bound, the read and the write -- and nothing else: the walk that
+256 of them, in host memory.  This patch is the four places the table is
+touched -- the bound, the read, the write and the clear -- and nothing else: the walk that
 fills a slot, and every caller, are the game's own.
 
 A car's id is one byte in its fedata.eng (TECHNICAL.md, Adding a car), so 256
@@ -53,6 +53,17 @@ SITES = [
     ("00439a97  890495003c5f00", [
         ("app->getMemory<x86::reg32>(x86::reg32(6241280) /* 0x5f3c00 */ + cpu.edx * 4) = cpu.eax;",
          "setCarSlotRecord(cpu.edx, cpu.eax);"),
+    ]),
+    # 004399f5  bbc8000000  -mov ebx, 0xc8   (sub_4399f0: the table cleared)
+    # sub_4399f0 empties the table whenever the scan rebuilds or re-sorts
+    # the list of loaded cars (sub_439d90, sub_438eb0), so that a place is
+    # looked up again in the new order.  It clears 200 bytes at 0x5f3c00,
+    # which is no longer where the table is: the port's has to be emptied
+    # too, or every place keeps the record it had in the old order -- the
+    # opponents picked from a class came out as whatever car had stood at
+    # that place before (police cars among them).
+    ("004399f5  bbc8000000", [
+        ("cpu.ebx = 200 /*0xc8*/;", "clearCarSlotRecords();\n    cpu.ebx = 200 /*0xc8*/;"),
     ]),
 ]
 

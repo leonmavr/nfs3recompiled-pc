@@ -26,8 +26,13 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   - Done: shadows fainter in the rain/overcast and at night
     (`NFS_SHADOW_RAIN`, 0.55; `NFS_SHADOW_NIGHT`, 0.4).
   - [ ] Next: shadows for trackside objects.
-- [ ] More details environment (buildings, grass, fences, rocks, etc.) textures,
+- [x] More details environment (buildings, grass, fences, rocks, etc.) textures,
   better sampled maybe?
+  - Done: textures seen larger than they are drawn Catmull-Rom instead of
+    bilinear (`NFS_TEXTURE_SHARP`), and a fine grain on the rest of the world's
+    opaque surfaces (`NFS_OBJECT_DETAIL`, 0.3).
+  - [ ] Next: ground seen at a grazing angle is still the GPU's anisotropic
+    blur; real detail there needs higher-resolution track textures.
 - [ ] More detailed car models/less blocky-looking in races and better paint
   properties. Maybe like this: Car paint: tag car-body triangles in the native car drawing code. Then add an angle-based shine and a sharper highlight curve on top of the game’s existing reflection map.
 - [ ] Whole-image effects in the final blit: 2–4× anti-aliasing, a light bloom on headlights and sun, and a per-track colour grade. Each is cheap on desktop and can be turned off for weaker machines.
@@ -45,6 +50,11 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   is partially implementned by the original game but check if it can improved
 
 ### Oppponents and AI
+- [x] Bug: a quick race against Class A opponents had police cars (and cars
+  of other classes) in it.
+  - Done: the port's copy of the game's car cache was never emptied when the
+    car list was re-sorted (`sub_4399f0`), so each picked opponent was raced
+    as the car that had stood at its place before. Now emptied with it.
 
 - [x] Research how the opponent AI works and what the AI features/decisions are
   and how they're made.
@@ -100,19 +110,34 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     (+0x660) and back; 3 s later, still there, again. Not in network races.
 
 ### UI
+- [ ] Figure out how to add/create menu elements without breaking the visual
+  style, make them seamless with the style of the game. Can you find any menu
+  assets?
 - [ ] Currently the sides of screen are padded with black as the game was made
   for narrower resolution. Fill the whole screen all the time (menus: expand
   main screen, move fields towards the edges, rage: expand the main screen/view)
   without however stetching/scaling things sideways.
 - [ ] Add those added graphics enhancements in graphics menu in game (e.g. as
   toggleable)
+- [ ] Add difficulty slider instead of just normal and agressive (presets in
+  slider will still be normal and agressive but we can slide in between to
+  adjust opponent AI)
 
 ### Driving
 - [ ] Nitro and nitro UI. However if you add nitro, opponents also need to know
   how to use it (e.g. to prevent them from staying inside the turn or blast it
   when they see enough straight road ahead, however they need to take crashes
-  into account too).
+  into account too). Note that if you nitro, it should be right of the speed
+  meter as a vertical bar if gauge is selected to be on the top part of screen,
+  else as an outer circle around it.
 
 ### Music
 - [ ] In a brief popup in whosse visual style is consistent with game, show
   cyrretnly plating song when it starts and then slide the popup away.
+- [ ] Music control: what tracks play in game, skip current track button.
+- [ ] Radio: be able to add your own tracks.
+
+### Career mode
+- [ ] Add one more game mode other than single player, hot pursuit, etc called
+  Career. There we race, unlock cars, earn money, get body damage on car, fix
+  car, etc.
