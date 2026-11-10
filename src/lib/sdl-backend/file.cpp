@@ -604,6 +604,11 @@ void File::setCurrentDirectory(const char* path)
         s_currentDirectory.append("\\");
 }
 
+const std::string& File::dataDirectory()
+{
+    return s_dataDirectory;
+}
+
 void File::setDataDirectory(const char* path)
 {
     s_dataDirectory = path;

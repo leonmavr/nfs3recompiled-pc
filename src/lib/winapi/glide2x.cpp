@@ -132,6 +132,12 @@ void carSurface(bool on)
         s_directRenderer->setCarSurface(on);
 }
 
+void wetRoad(float wetness)
+{
+    if (s_directRenderer)
+        s_directRenderer->setWetRoad(wetness);
+}
+
 bool screenRect(int& x, int& y, int& w, int& h, int& pictureWidth, int& pictureHeight)
 {
     if (!s_renderer)

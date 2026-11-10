@@ -85,6 +85,9 @@ static const char g_fragmentShader[] =
 "uniform float u_detail;"
 "uniform float u_detailScale;"
 "uniform sampler2D u_detailTexture;"
+"uniform float u_wet;"
+"uniform sampler2D u_reflection;"
+"uniform vec2 u_screen;"
 /* Whether a texel is the key colour, compared as GlideRenderer compares it:
  * against the bytes its own conversion to RGBA8 gave the texel -- 565 widened
  * by a shift, 1555 scaled, 4444 and 8888 exact -- so a key matches the texels
@@ -145,6 +148,43 @@ static const char g_fragmentShader[] =
 "    if (u_detail > 0.0 && v_combine.s > 0.5 && v_combine.q > 0.5) {"
 "        float grain = texture(u_detailTexture, uv * u_detailScale).r;"
 "        color.rgb *= 1.0 + u_detail * (grain - 0.5) * 2.0;"
+/* A wet road (setWetRoad): darker, puddled, and reflecting.  1/w is linear
+ * down the screen over a level surface and reaches 0 at the horizon, so the
+ * horizon's y is here's less 1/w over its rate down the screen.  Seen in the
+ * road, what stands far beyond appears mirrored about the horizon, and what
+ * stands close by just above the point; so the last frame (u_reflection) is
+ * read at five points from here up to the mirror image and blended -- the
+ * streaks a wet road draws under lights.  Strongest at a grazing angle (near
+ * the horizon), faint looking down; only on surfaces that lie level (1/w
+ * changing down the screen, not across), and not from the HUD's top band. */
+"        if (u_wet > 0.0) {"
+"            float puddle = smoothstep(0.42, 0.62, texture(u_detailTexture, uv * 1.3 + vec2(0.37, 0.71)).r);"
+"            float wet = u_wet * (0.55 + 0.45 * puddle);"
+"            color.rgb *= 1.0 - 0.32 * wet;"
+"            float rate = dFdy(v_texCoord.p);"
+"            float across = abs(dFdx(v_texCoord.p));"
+"            if (rate > 0.0 && across < 0.6 * rate) {"
+"                float y = gl_FragCoord.y;"
+"                float horizon = y - v_texCoord.p / rate;"
+"                float below = (y - horizon) / u_screen.y;"
+"                if (horizon > 0.0 && below > 0.0) {"
+"                    float mirror = 2.0 * horizon - y;"
+"                    float ripple = (grain - 0.5) * 0.012 * u_screen.x;"
+"                    vec3 sum = vec3(0.0);"
+"                    vec3 brightest = vec3(0.0);"
+"                    for (int i = 1; i <= 5; ++i) {"
+"                        float ry = mix(y, mirror, float(i) / 5.0);"
+"                        float fade = smoothstep(0.10 * u_screen.y, 0.17 * u_screen.y, ry);"
+"                        vec3 c = texture(u_reflection, vec2((gl_FragCoord.x + ripple * float(i) * 0.4) / u_screen.x, ry / u_screen.y)).rgb * fade;"
+"                        sum += c;"
+"                        brightest = max(brightest, c);"
+"                    }"
+"                    vec3 seen = sum / 5.0 + max(brightest - 0.6, 0.0) * 1.5;"
+"                    float fresnel = 0.08 + 0.55 * (1.0 - smoothstep(0.0, 0.3, below));"
+"                    color.rgb += seen * fresnel * wet * (0.35 + 0.65 * puddle);"
+"                }"
+"            }"
+"        }"
 "    }"
 "    color.rgb = mix(color.rgb, u_fogColor, clamp(v_fog, 0.0, 1.0));"
 "    if (u_gamma != 1.0)"
@@ -190,6 +230,7 @@ struct ThrashDraw
     std::vector<ThrashRenderer::Batch>  batches;
     std::vector<std::array<float, 64>>  fogTables;
     float                               fogColor[3];
+    float                               wetness;
     float                               alphaTestRef;
     x86::reg32                          chromaKeyColor;
     x86::reg32                          width;
@@ -259,6 +300,10 @@ ThrashRenderer::~ThrashRenderer()
                 glDeleteTextures(1, &texture);
         m_glTextures.clear();
         glDeleteSamplers(4, m_samplers);
+        if (m_reflection)
+            glDeleteTextures(1, &m_reflection);
+        if (m_detailTexture)
+            glDeleteTextures(1, &m_detailTexture);
         glDeleteFramebuffers(1, &framebuffer);
         glDeleteRenderbuffers(1, &depthBuffer);
         glDeleteProgram(program);
@@ -413,6 +458,8 @@ void ThrashRenderer::initGl()
     glUniform1i(m_locations.detailTexture, 1);
     glUniform1f(m_locations.detailScale, 8.0f);
     glUniform1f(m_locations.detail, 0.0f);
+    glUniform1i(m_locations.reflection, 2);
+    glUniform1f(m_locations.wet, 0.0f);
     glUseProgram(0);
 }
 
@@ -484,6 +531,9 @@ void ThrashRenderer::compileShaders(int depthBits, const char* renderer)
     m_locations.detail = glGetUniformLocation(m_program, "u_detail");
     m_locations.detailTexture = glGetUniformLocation(m_program, "u_detailTexture");
     m_locations.detailScale = glGetUniformLocation(m_program, "u_detailScale");
+    m_locations.wet = glGetUniformLocation(m_program, "u_wet");
+    m_locations.reflection = glGetUniformLocation(m_program, "u_reflection");
+    m_locations.screen = glGetUniformLocation(m_program, "u_screen");
     glUseProgram(m_program);
     glUniform1i(m_locations.texture, 0);
     float w[64];
@@ -581,6 +631,7 @@ void ThrashRenderer::renderPending()
     draw->fogTables = m_fogTables;
     std::copy(m_fogColor, m_fogColor + 3, draw->fogColor);
     draw->alphaTestRef = m_alphaTestRef;
+    draw->wetness = m_detailTexture ? m_wetness : 0.0f;
     draw->chromaKeyColor = m_chromaKeyColor;
     draw->width = m_renderer->m_width;
     draw->height = m_renderer->m_height;
@@ -594,6 +645,26 @@ void ThrashRenderer::renderPending()
     m_fogTables.resize(1);
     m_fogTableIndex = 0;
     ++m_renderStamp;
+}
+
+/* The picture so far into m_reflection: one copy on the GPU, from the
+ * framebuffer drawPending has bound. */
+void ThrashRenderer::takeReflection(int width, int height)
+{
+    if (!m_reflection || m_reflectionW != width || m_reflectionH != height)
+        return;
+    glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_renderer->m_texture, 0);
+    const GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, m_reflection);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, width, height);
+    glActiveTexture(GL_TEXTURE0);
+    if (scissor)
+        glEnable(GL_SCISSOR_TEST);
+    m_reflectionValid = true;
+    m_reflectionTaken = true;
 }
 
 void ThrashRenderer::drawPending(const ThrashDraw& draw)
@@ -642,8 +713,32 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
         glBindTexture(GL_TEXTURE_2D, m_detailTexture);
         glActiveTexture(GL_TEXTURE0);
     }
+    const bool wet = draw.wetness > 0.0f && m_reflectionValid && m_reflectionW == int(draw.width)
+                     && m_reflectionH == int(draw.height);
+    glUniform1f(m_locations.wet, wet ? draw.wetness : 0.0f);
+    if (wet)
+    {
+        glUniform2f(m_locations.screen, float(draw.width), float(draw.height));
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, m_reflection);
+        glActiveTexture(GL_TEXTURE0);
+    }
     for (const Batch& batch : draw.batches)
     {
+        /* The world drawn, the HUD to come: its first draw is unfogged and
+         * writes no depth, after the world's fogged ones.  That is the picture the
+         * next frame's wet road reflects, without the HUD in it. */
+        if (wet || draw.wetness > 0.0f)
+        {
+            const ThrashVertex& corner = draw.vertices[first];
+            const bool flat = corner.combine[3] == 0 && !batch.zBuffer;
+            if (!flat)
+                m_sceneDrawn = true;
+            else if (m_sceneDrawn && !m_reflectionTaken)
+            {
+                takeReflection(int(draw.width), int(draw.height));
+            }
+        }
         if (m_detailTexture && (!previous || batch.detail != previous->detail))
             glUniform1f(m_locations.detail, batch.detail ? m_detailStrength : 0.0f);
         if (batch.fogTable != fogTable)
@@ -729,7 +824,39 @@ void ThrashRenderer::swap()
     ++counters.frames;
     counters.depth16Frames += m_depth16;
     m_renderer->paceFrame();
-    glthread::post(m_renderer, [this]() {
+    const bool keepFrame = m_wetness > 0.0f && m_detailTexture;
+    const int frameW = int(m_renderer->m_width), frameH = int(m_renderer->m_height);
+    glthread::post(m_renderer, [this, keepFrame, frameW, frameH]() {
+        /* The texture the next frame's wet road reflects (only while the road
+         * is wet); drawPending fills it as the HUD begins. */
+        if (keepFrame)
+        {
+            if (!m_reflection || m_reflectionW != frameW || m_reflectionH != frameH)
+            {
+                if (m_reflection)
+                    glDeleteTextures(1, &m_reflection);
+                glGenTextures(1, &m_reflection);
+                glBindTexture(GL_TEXTURE_2D, m_reflection);
+                glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, frameW, frameH);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                m_reflectionW = frameW;
+                m_reflectionH = frameH;
+            }
+            // A frame that never reached its HUD (a menu) keeps it whole.
+            if (!m_reflectionTaken)
+            {
+                takeReflection(frameW, frameH);
+            }
+        }
+        else
+        {
+            m_reflectionValid = false;
+        }
+        m_reflectionTaken = false;
+        m_sceneDrawn = false;
         glDisable(GL_SCISSOR_TEST);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glUseProgram(0);
@@ -935,6 +1062,7 @@ void ThrashRenderer::setTexture(x86::reg32, x86::reg32 address)
         m_texture = found->second.index;
         m_textureLevels = found->second.levels;
         m_textureFormat = found->second.format;
+        m_textureShadow = found->second.shadow;
     }
     found->second.useStamp = m_renderStamp;
 }
@@ -945,6 +1073,87 @@ void ThrashRenderer::setTexture(x86::reg32, x86::reg32 address)
  * round a bit into OpenGL's 5551.  GlideRenderer widened every one of them to
  * RGBA8 on the CPU first.  The GL thread gives the texture storage of that
  * size, levels and format, or keeps what it had when they are the same. */
+/* Port: three of the game's effect pictures (gamedata/render/pc/sfx.fsh),
+ * made softer as they are uploaded.  Found by their texels, as the full-colour
+ * 32-bit pictures arrive (a 16-bit one, NFS_TEXTURES32=0, is left as it is):
+ *
+ * - "glw2", the headlights' pool the projected headlights lay on the road:
+ *   bright to within a few texels of its square's edge, so the lit road ended
+ *   in a hard-edged box.  It now fades to nothing towards the edges, its reach
+ *   down the road unchanged.
+ * - "glw4", the lights' streak on a wet road: the same, at its sides.
+ * - "shad", a car's shadow: opaque to three texels of its edge.  Its alpha now
+ *   falls off over the outer third of each side, round at the corners.
+ *
+ * Texels as setTextureData holds an 8888 one: B, G, R, A. */
+enum class SoftenedPicture { None, Pool, Streak, Shadow };
+
+static std::uint32_t texelHash(const x86::reg8* data, std::size_t bytes)
+{
+    std::uint32_t hash = 0x811c9dc5u;
+    for (std::size_t i = 0; i < bytes; ++i)
+        hash = (hash ^ data[i]) * 0x01000193u;
+    return hash;
+}
+
+// NFS_SOFT_EFFECTS=0 leaves the three as the game has them.
+static bool softenEffects()
+{
+    static const bool on = [] {
+        const char* value = SDL_getenv("NFS_SOFT_EFFECTS");
+        return !(value && SDL_strcmp(value, "0") == 0);
+    }();
+    return on;
+}
+
+static SoftenedPicture recognise(const std::vector<x86::reg8>& texels, x86::reg32 size)
+{
+    if (size == 128 && texelHash(texels.data(), 128 * 128 * 4) == 0x617d2d72u)
+        return SoftenedPicture::Pool;
+    if (size == 64 && texelHash(texels.data(), 64 * 64 * 4) == 0xa072609fu)
+        return SoftenedPicture::Streak;
+    if (size == 32 && texelHash(texels.data(), 32 * 32 * 4) == 0x3da5cb05u)
+        return SoftenedPicture::Shadow;
+    return SoftenedPicture::None;
+}
+
+static float smoothStep(float edge0, float edge1, float x)
+{
+    const float t = std::min(1.0f, std::max(0.0f, (x - edge0) / (edge1 - edge0)));
+    return t * t * (3.0f - 2.0f * t);
+}
+
+static void soften(std::vector<x86::reg8>& texels, x86::reg32 size, SoftenedPicture picture)
+{
+    for (x86::reg32 y = 0; y < size; ++y)
+        for (x86::reg32 x = 0; x < size; ++x)
+        {
+            // -1 to 1 across the picture, at the texels' centres.
+            const float px = (float(x) + 0.5f) / float(size) * 2.0f - 1.0f;
+            const float py = (float(y) + 0.5f) / float(size) * 2.0f - 1.0f;
+            x86::reg8* t = &texels[(std::size_t(y) * size + x) * 4];
+            if (picture == SoftenedPicture::Shadow)
+            {
+                // A rounded square's distance from the edge, the alpha
+                // falling over the outer third.
+                const float corner = 0.45f;
+                const float qx = std::max(std::fabs(px) - (1.0f - corner), 0.0f);
+                const float qy = std::max(std::fabs(py) - (1.0f - corner), 0.0f);
+                const float inside = 1.0f - (std::sqrt(qx * qx + qy * qy) + std::min(std::max(std::fabs(px), std::fabs(py)) - (1.0f - corner), 0.0f)) / corner;
+                const float alpha = smoothStep(0.0f, 0.75f, inside);
+                t[3] = x86::reg8(std::lround(255.0f * 0.9f * alpha));
+                continue;
+            }
+            // The pool and the streak: dimmed to nothing at the edge, the
+            // pool across its sides and far end, the streak at its sides.
+            const float across = std::fabs(px);
+            const float along = picture == SoftenedPicture::Pool ? std::fabs(py) : 0.0f;
+            const float fade = (1.0f - smoothStep(0.55f, 0.98f, across)) * (1.0f - smoothStep(0.6f, 0.98f, along));
+            for (int c = 0; c < 4; ++c)
+                t[c] = x86::reg8(std::lround(float(t[c]) * fade));
+        }
+}
+
 void ThrashRenderer::setTextureData(x86::reg32, x86::reg32 address, const void* data, x86::reg32 largeMipmap,
                                     x86::reg32 smallMipmap, TextureFormat format)
 {
@@ -961,7 +1170,7 @@ void ThrashRenderer::setTextureData(x86::reg32, x86::reg32 address, const void* 
     auto found = m_textures.find(address);
     if (found == m_textures.end())
     {
-        Texture texture = { m_nextTexture++, 0, 0, 0, 0 };
+        Texture texture = { m_nextTexture++, 0, 0, 0, 0, false };
         found = m_textures.emplace(address, texture).first;
     }
     Texture& texture = found->second;
@@ -983,6 +1192,26 @@ void ThrashRenderer::setTextureData(x86::reg32, x86::reg32 address, const void* 
 
     std::vector<x86::reg8> copied(static_cast<const x86::reg8*>(data),
                                   static_cast<const x86::reg8*>(data) + texels * texelBytes);
+    texture.shadow = false;
+    if (format == TF_ARGB_8888 && softenEffects())
+    {
+        const SoftenedPicture picture = recognise(copied, size);
+        if (picture != SoftenedPicture::None)
+        {
+            soften(copied, size, picture);
+            static bool said[4] = {};
+            if (!said[int(picture)])
+            {
+                said[int(picture)] = true;
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[GFX] softened the game's %s",
+                            picture == SoftenedPicture::Pool ? "headlights' pool"
+                            : picture == SoftenedPicture::Streak ? "lights' streak on a wet road" : "car shadow");
+            }
+            texture.shadow = picture == SoftenedPicture::Shadow;
+        }
+    }
+    if (texture.index == m_texture)
+        m_textureShadow = texture.shadow;
     if (format == TF_ARGB_1555)
     {
         // A1 R5 G5 B5 to R5 G5 B5 A1: the alpha bit from the top to the bottom.

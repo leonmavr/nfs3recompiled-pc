@@ -34,6 +34,9 @@ bool screenRect(int& x, int& y, int& w, int& h, int& pictureWidth, int& pictureH
 /* Port: what is drawn from now on is a car (on) or not (off) -- the road's
  * grain stays off the cars' paint (ThrashRenderer::setCarSurface). */
 void carSurface(bool on);
+/* Port: how wet the road is, 0 to 1 -- its darkening and its reflection
+ * (ThrashRenderer::setWetRoad). */
+void wetRoad(float wetness);
 
 /* The texture atlas: free texels, whole 256x256 tiles among them, and its size
  * in texels.  False while no Glide window is open. */

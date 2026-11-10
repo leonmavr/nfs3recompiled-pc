@@ -228,6 +228,44 @@ past the bonnet. Its length and that ceiling are doubled
 (`NFS_HEADLIGHT_WIDTH`); 1 and 1 are the original. `NFS_NATIVE_CHECK` reports
 the patch as differing from the generated code unless both are 1.
 
+The edge of that patch, the pool the projected headlights lay on the road
+(`glw2` in `gamedata/render/pc/sfx.fsh`) and the lights' streaks on a wet road
+(`glw4`) were bright to within a few texels of their square, so the lit road
+ended in a box. They are recognised by their texels as they are uploaded and
+faded to nothing towards their sides and far end (`soften`,
+`src/lib/thrashrenderer.cpp`); their reach is unchanged.
+
+### Car shadows
+
+A car's shadow (`shad`, same file) was one hard-edged dark square under every
+car whatever the light. Its alpha now falls off over the outer third, round at
+the corners, and the quad is stretched away from the sun: the sun the game
+lights the cars with (`0x55e6a0`) is turned into each car's own axes as
+`sub_49da30` lights it (`native_vertices.cpp`), and when THRASH draws the
+shadow quad (`stretchShadow`, `native_thrash.cpp`) the corners on the side away
+from the sun are pushed out along the quad's own screen edges, so the shadow
+follows the road's perspective and turns as the car does. 1/w and depth are
+taken from the quad's plane, the corners keep their texture coordinates.
+`NFS_SHADOW_STRETCH` (0.7) sets how far; `0` the original shape.
+`NFS_SOFT_EFFECTS=0` leaves all three pictures as the game has them.
+
+### Wet roads
+
+With Weather on, on a track whose weather is rain (the `type` in its
+`3trNNw.hrz`; 2, snow, is left dry), the road is wet (`wetRoadTick`,
+`src/nfs3hp/nfs3hp_main.cpp`; `NFS_WET_ROADS`, 1, how wet, `0` never). On the
+surfaces the grain goes on: darker, with puddles from a second, coarser read of
+the grain texture, and a reflection of the last frame. That frame is copied
+once on the GPU as the HUD starts (its first unfogged draw that writes no
+depth), so the HUD is never reflected. 1/w is linear down the screen over a
+level surface and is 0 at the horizon, so each pixel finds the horizon from
+its own 1/w and its rate down the screen, and reads the copy at five points
+from itself up to its mirror image about the horizon: far things mirror
+exactly, near ones blur upward, and lights draw the streaks a wet road shows.
+It is strongest at a grazing angle and faint looking down; surfaces whose 1/w
+changes across the screen (walls) are left out, as is the top band where the
+mirror and the HUD's bar stand.
+
 ### Projected headlights
 
 With projected headlights the game draws the lit road a second time over
@@ -1118,6 +1156,9 @@ from the phone; the rest matter for a desktop run.
 | `NFS_ANISOTROPY` | `8` | Anisotropic filtering of the textures, at most what the GPU offers; `1` for none. |
 | `NFS_ROAD_DETAIL` | `0.35` | How much the road's and the ground's grain lightens and darkens them, 0 to 1; `0` for none. |
 | `NFS_HEADLIGHT_REACH`, `NFS_HEADLIGHT_WIDTH` | `2`, `1.4` | How far the headlights' patch on the road reaches and how wide it is, against the original's (0.25 to 4; `1` and `1` are the original). |
+| `NFS_SOFT_EFFECTS` | on | `0`: the headlights' pool, the wet road's light streaks and the cars' shadows as the game draws them, hard-edged. |
+| `NFS_SHADOW_STRETCH` | `0.7` | How far a car's shadow is stretched away from the sun, in its own half sizes (0 to 3; `0` the original). |
+| `NFS_WET_ROADS` | `1` | How wet the road is in the rain -- darker, puddled, reflecting (0 to 2; `0` never). |
 | `NFS_ORIENTATION` | unset | `auto` allows both landscape directions; anything else pins one. Must be set before `SDL_Init`. |
 | `NFS_CAR_DETAIL_FULL` | on | With Car Detail at High, every car keeps its detailed model and the player's texture size out to the draw distance, in every view, and the limit on how many are drawn at once is lifted. `0` restores the original. |
 | `NFS_MIRROR_FULL` | on | The rear-view mirror is drawn as the main view is: its distances, the track's detailed models, cars at full detail, the sky with clouds and lightning, car lights and the headlights' light. `0` restores the original short, coarse mirror. |

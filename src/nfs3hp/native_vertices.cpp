@@ -753,7 +753,17 @@ void envMapCoordsNative(win32::WinApplication* app, x86::CPU& cpu)
  * is shown (carVerticesDone, from nfs3hp_main.cpp's onSwap). */
 }  // namespace (the functions above), for the two the other files call
 
-struct CarVertexRange { x86::reg32 first, end; };
+/* With each, where the sun is from the car (+x its right, +z ahead, as its
+ * matrix turns them), level -- for its shadow, which native_thrash.cpp
+ * stretches away from it -- and the box its vertices span on the screen,
+ * worked out when a shadow first asks. */
+struct CarVertexRange
+{
+    x86::reg32 first, end;
+    float sunX, sunZ;
+    bool boxed;
+    float minX, minY, maxX, maxY;
+};
 static std::vector<CarVertexRange> s_carVertices;
 
 bool isCarVertex(x86::reg32 vertex)
@@ -762,6 +772,48 @@ bool isCarVertex(x86::reg32 vertex)
         if (vertex >= range.first && vertex < range.end)
             return true;
     return false;
+}
+
+/* The sun as seen from the car whose vertices lie nearest the screen point
+ * (x, y) -- a shadow's centre.  False when no car was lit this frame. */
+bool carSunNear(win32::WinApplication* app, float x, float y, float& sunX, float& sunZ)
+{
+    float best = 0.0f;
+    const CarVertexRange* nearest = nullptr;
+    for (CarVertexRange& range : s_carVertices)
+    {
+        if (!range.boxed)
+        {
+            range.boxed = true;
+            range.minX = range.minY = 1e30f;
+            range.maxX = range.maxY = -1e30f;
+            for (x86::reg32 v = range.first; v < range.end; v += 0x20)
+            {
+                const float vx = app->getMemory<float>(v), vy = app->getMemory<float>(v + 4);
+                if (!(vx == vx) || !(vy == vy))
+                    continue;
+                range.minX = std::min(range.minX, vx);
+                range.maxX = std::max(range.maxX, vx);
+                range.minY = std::min(range.minY, vy);
+                range.maxY = std::max(range.maxY, vy);
+            }
+        }
+        if (range.maxX < range.minX)
+            continue;
+        const float dx = std::max({ range.minX - x, 0.0f, x - range.maxX });
+        const float dy = std::max({ range.minY - y, 0.0f, y - range.maxY });
+        const float distance = dx * dx + dy * dy;
+        if (!nearest || distance < best)
+        {
+            best = distance;
+            nearest = &range;
+        }
+    }
+    if (!nearest)
+        return false;
+    sunX = nearest->sunX;
+    sunZ = nearest->sunZ;
+    return true;
 }
 
 void carVerticesDone()
@@ -792,9 +844,23 @@ void shadeNormalsNative(win32::WinApplication* app, x86::CPU& cpu)
     const x86::reg32 turned = cpu.ecx;
     const x86::reg32 dots = app->getMemory<x86::reg32>(cpu.eax) + app->getMemory<x86::reg32>(cpu.eax + 4) * 0x84;
     {
+        /* The sun, a world direction at 0x55e6a0 (y up), turned into the
+         * car's own axes: the rows of its matrix are its axes in the world. */
         const x86::reg32 vertices = app->getMemory<x86::reg32>(esp + 4);
+        const x86::reg32 matrix = app->getMemory<x86::reg32>(esp + 8);
+        auto f = [app](x86::reg32 address) { return app->getMemory<float>(address); };
+        const float lx = f(0x55e6a0), ly = f(0x55e6a4), lz = f(0x55e6a8);
+        (void)ly;
+        float sunX = f(matrix) * lx + f(matrix + 8) * lz;
+        float sunZ = f(matrix + 24) * lx + f(matrix + 32) * lz;
+        const float length = std::sqrt(sunX * sunX + sunZ * sunZ);
+        if (length > 1e-4f)
+        {
+            sunX /= length;
+            sunZ /= length;
+        }
         if (s_carVertices.size() < 256)
-            s_carVertices.push_back({ vertices, vertices + count * 0x20 });
+            s_carVertices.push_back({ vertices, vertices + count * 0x20, sunX, sunZ, false, 0, 0, 0, 0 });
     }
     // push esi, edi, ebp; mov ebp, esp; sub esp, 0x14 -- then the two calls
     cpu.ebp = esp - 12;

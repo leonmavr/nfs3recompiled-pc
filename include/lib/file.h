@@ -87,6 +87,7 @@ public:
     static const std::string& getCurrentDirectory();
     static void setCurrentDirectory(const char* path);
     static void setDataDirectory(const char* path);
+    static const std::string& dataDirectory();
     static void setCdDirectory(const char* path);
     /* Called with the path of every file opened only to be read; a path back
      * is opened in its place, an empty string leaves the file as it is. */

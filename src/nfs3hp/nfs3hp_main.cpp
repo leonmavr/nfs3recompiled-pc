@@ -2427,10 +2427,58 @@ void botForceTick(win32::WinApplication* app)
  * controls should be showing and which of the race's buttons, whether the pads'
  * keys go out, the phone's cornering, how the touch buttons steer, and the car
  * detail trace when asked for (NFS_CAR_DETAIL_TRACE). */
+/* Port: the road wet in the rain (thrashrenderer.cpp, setWetRoad).  Weather
+ * is the Location screen's ([0x6fd4cc]); what falls is the track's own -- the
+ * "type" in its gamedata/tracks/trkNNN/3trNNw.hrz, 1 rain and 2 snow, and
+ * snow leaves the road as it is.  Read once for each track a race is on.
+ * NFS_WET_ROADS is how wet (1 by default, 0 for never). */
+float wetnessSetting()
+{
+    static const float setting = [] {
+        const char* value = SDL_getenv("NFS_WET_ROADS");
+        const float parsed = value && *value ? float(SDL_atof(value)) : 1.0f;
+        return parsed >= 0.0f && parsed <= 2.0f ? parsed : 1.0f;
+    }();
+    return setting;
+}
+
+bool trackRains(x86::reg32 track)
+{
+    static x86::reg32 known = 0xffffffff;
+    static bool rains = false;
+    if (track == known)
+        return rains;
+    known = track;
+    rains = true;
+    char name[64];
+    SDL_snprintf(name, sizeof name, "gamedata/tracks/trk%03u/3tr%02uw.hrz", unsigned(track), unsigned(track));
+    const std::string path = win32::File::dataDirectory() + name;
+    size_t size = 0;
+    if (char* text = static_cast<char*>(SDL_LoadFile(path.c_str(), &size)))
+    {
+        const std::string all(text, size);
+        SDL_free(text);
+        const size_t at = all.find("/* type */");
+        if (at != std::string::npos)
+            rains = SDL_atoi(all.c_str() + at + 10 + all.substr(at + 10).find_first_not_of(" \t\r\n")) != 2;
+    }
+    SDL_Log("[WEATHER] track %u: %s", unsigned(track), rains ? "rain, the road wet" : "snow");
+    return rains;
+}
+
+void wetRoadTick(win32::WinApplication* app)
+{
+    float wetness = 0.0f;
+    if (nfs3hp::raceIsRunning() && app->getMemory<x86::reg32>(0x6fd4cc) != 0)
+        wetness = trackRains(app->getMemory<x86::reg32>(0x6fd4ac)) ? wetnessSetting() : 0.0f;
+    win32::glide2x::wetRoad(wetness);
+}
+
 void onSwap(win32::WinApplication* app)
 {
     ++nfs3hp::s_swaps;
     nfs3hp::carVerticesDone();
+    wetRoadTick(app);
 #ifndef __ANDROID__
     scriptTick();
 #endif

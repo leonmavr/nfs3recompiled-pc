@@ -6,6 +6,7 @@
 #include <winapi/glide2x.h>
 #include <SDL3/SDL.h>
 #include <cmath>
+#include <algorithm>
 #include <cstring>
 #include <initializer_list>
 
@@ -35,14 +36,110 @@
 namespace nfs3hp
 {
 
-// native_vertices.cpp: whether a vertex is one of a car's this frame (a port).
+// native_vertices.cpp: whether a vertex is one of a car's this frame, and
+// where the sun is from the car nearest a screen point (ports).
 bool isCarVertex(x86::reg32 vertex);
+bool carSunNear(win32::WinApplication* app, float x, float y, float& sunX, float& sunZ);
 
 win32::ThrashRenderer::Corner thrashCorner(win32::WinApplication* app, x86::reg32 in, float zScale, float wScale);
 void thrashBatchVertex(win32::WinApplication* app, x86::reg32 in, float zScale, float wScale, win32::ThrashVertex& out);
 
 namespace
 {
+
+/* Port: a car's shadow drawn longer on the side away from the sun, as a low
+ * sun casts it, instead of the same square under every car whatever the
+ * light.  The shadow is a quad on the road, its texture's s across the car
+ * and t along it; the sun, from the car the shadow lies under, is in the car's
+ * own axes (carSunNear).  The corners on the far side are pushed out along
+ * the quad's own edges -- so the stretch follows the road's perspective --
+ * by NFS_SHADOW_STRETCH times the quad's half size (0.7; 0 leaves the shadow
+ * as it was), and the whole of it slides a little that way.  1/w and the
+ * depth are planar over a flat quad, so the moved corners take theirs from
+ * the plane the other corners span, and keep their own s and t: the texture
+ * stretches with them. */
+float shadowStretch()
+{
+    static const float stretch = [] {
+        const char* value = SDL_getenv("NFS_SHADOW_STRETCH");
+        const float parsed = value && *value ? float(SDL_atof(value)) : 0.7f;
+        return parsed >= 0.0f && parsed <= 3.0f ? parsed : 0.7f;
+    }();
+    return stretch;
+}
+
+void stretchShadow(win32::WinApplication* app, win32::ThrashVertex (&v)[4])
+{
+    const float stretch = shadowStretch();
+    if (stretch <= 0.0f)
+        return;
+    float cx = 0, cy = 0;
+    float s[4], t[4];
+    for (int i = 0; i < 4; ++i)
+    {
+        if (!(v[i].oow > 0.0f))
+            return;
+        cx += v[i].x * 0.25f;
+        cy += v[i].y * 0.25f;
+        s[i] = v[i].u / v[i].oow;
+        t[i] = v[i].v / v[i].oow;
+    }
+    float sunX, sunZ;
+    if (!carSunNear(app, cx, cy, sunX, sunZ))
+        return;
+    const float sMin = std::min({ s[0], s[1], s[2], s[3] }), sMax = std::max({ s[0], s[1], s[2], s[3] });
+    const float tMin = std::min({ t[0], t[1], t[2], t[3] }), tMax = std::max({ t[0], t[1], t[2], t[3] });
+    if (!(sMax - sMin > 1e-3f) || !(tMax - tMin > 1e-3f))
+        return;
+    // Each corner's place on the quad, -1 to 1 along s and t.
+    float cs[4], ct[4];
+    for (int i = 0; i < 4; ++i)
+    {
+        cs[i] = (s[i] - sMin) / (sMax - sMin) * 2.0f - 1.0f;
+        ct[i] = (t[i] - tMin) / (tMax - tMin) * 2.0f - 1.0f;
+    }
+    // The quad's half extents on the screen along s and along t.
+    float ux = 0, uy = 0, vx = 0, vy = 0;
+    for (int i = 0; i < 4; ++i)
+    {
+        ux += v[i].x * cs[i] * 0.25f;
+        uy += v[i].y * cs[i] * 0.25f;
+        vx += v[i].x * ct[i] * 0.25f;
+        vy += v[i].y * ct[i] * 0.25f;
+    }
+    /* Away from the sun, in the quad's s and t: s runs to the car's right (+x,
+     * as the sun-lit side of its vertices shows) and t towards its back, so
+     * the car's forward (+z) is -t. */
+    const float ds = -sunX, dt = sunZ;
+    // The plane of 1/w and depth over the screen, from three corners.
+    const float x0 = v[0].x, y0 = v[0].y;
+    const float ax = v[1].x - x0, ay = v[1].y - y0, bx = v[2].x - x0, by = v[2].y - y0;
+    const float det = ax * by - ay * bx;
+    if (std::fabs(det) < 1e-6f)
+        return;
+    auto plane = [&](float f0, float f1, float f2, float x, float y) {
+        const float px = x - x0, py = y - y0;
+        const float a = (px * by - py * bx) / det, b = (ax * py - ay * px) / det;
+        return f0 + (f1 - f0) * a + (f2 - f0) * b;
+    };
+    const win32::ThrashVertex before[4] = { v[0], v[1], v[2], v[3] };
+    for (int i = 0; i < 4; ++i)
+    {
+        const float far = std::max(0.0f, cs[i] * ds + ct[i] * dt);
+        const float push = stretch * far + 0.12f * stretch;
+        const float x = before[i].x + (ux * ds + vx * dt) * push;
+        const float y = before[i].y + (uy * ds + vy * dt) * push;
+        const float oow = plane(before[0].oow, before[1].oow, before[2].oow, x, y);
+        if (!(oow > 0.0f))
+            return;
+        v[i].x = x;
+        v[i].y = y;
+        v[i].z = plane(before[0].z, before[1].z, before[2].z, x, y);
+        v[i].u = s[i] * oow;
+        v[i].v = t[i] * oow;
+        v[i].oow = oow;
+    }
+}
 
 /* voodoo2a's data, at its load address (RVA + 0xa82200). */
 constexpr x86::reg32 kColourTable = 0xa93210;  // a colour byte as the float Glide takes, 256 of them
@@ -285,6 +382,8 @@ struct Vertices
             batch(b, v[1]);
             batch(c, v[2]);
             batch(d, v[3]);
+            if (direct->drawingShadow())
+                stretchShadow(app, v);
             batch(v[0], v[1], v[2]);
             batch(v[2], v[3], v[0]);
             return true;

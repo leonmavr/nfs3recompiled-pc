@@ -58,6 +58,12 @@ public:
     /* Port: what is drawn is a car's body, which the ground's grain leaves
      * alone (glide2x::carSurface, from the car's mesh in native_vertices.cpp). */
     void setCarSurface(bool car);
+    /* Port: whether the texture selected is a car's shadow, which
+     * native_thrash.cpp stretches away from the sun. */
+    bool drawingShadow() const { return m_textureShadow; }
+    /* Port: how wet the road is (0 dry to 1), from the frame on; the GL
+     * thread's reflection of the last frame is taken while it is above 0. */
+    void setWetRoad(float wetness) { m_wetness = wetness; }
     void setTexClampMode(bool wrapS, bool wrapT) override;
     void setChromakeyValue(x86::reg32 color) override;
     void setClipWindow(x86::reg32 minX, x86::reg32 minY, x86::reg32 maxX, x86::reg32 maxY) override;
@@ -128,6 +134,7 @@ private:
         x86::reg32 levels;
         x86::reg32 useStamp;
         int format;
+        bool shadow;            // a car's shadow (the port's softening, thrashrenderer.cpp)
     };
 
     void initGl();
@@ -154,10 +161,19 @@ private:
     {
         int position, color, texCoord, combine;
         int transform, fogW, fogTable, fogColor, alphaRef, chromaKey, chromaKeyColor, gamma, wrap, levels, texture,
-            format, detail, detailTexture, detailScale;
+            format, detail, detailTexture, detailScale, wet, reflection, screen;
     } m_locations;
     unsigned int            m_detailTexture = 0;
     bool                    m_carSurface = false;   // the game thread's
+    bool                    m_textureShadow = false;
+    float                   m_wetness = 0.0f;
+    // The GL thread's: the last frame, for the wet road's reflection.
+    unsigned int            m_reflection = 0;
+    int                     m_reflectionW = 0, m_reflectionH = 0;
+    bool                    m_reflectionValid = false;
+    bool                    m_reflectionTaken = false;  // this frame's, as its HUD began
+    bool                    m_sceneDrawn = false;       // this frame has drawn some of the world
+    void takeReflection(int width, int height);
     float                   m_detailStrength = 0.0f;  // NFS_ROAD_DETAIL; 0 for none
     bool                    m_depth16;
     bool                    m_makeMipmaps = false;  // levels made for the textures (initGl)
