@@ -94,6 +94,25 @@ static const char g_fragmentShader[] =
 "uniform float u_surface;"
 "uniform bool u_sharpen;"
 "uniform float u_carShine;"
+"uniform float u_haze;"
+"uniform sampler2D u_sky;"
+"uniform float u_fogW[64];"
+"uniform float u_fogTable[64];"
+/* The fog factor at a pixel's own w, as the vertex shader works it out at the
+ * corners (haze, below): 1/w is linear across the screen, so it is exact. */
+"float pixelFog(float oow)"
+"{"
+"    if (oow <= 0.0) return 0.0;"
+"    float w = 1.0 / oow;"
+"    if (w <= u_fogW[0]) return u_fogTable[0];"
+"    if (w >= u_fogW[63]) return u_fogTable[63];"
+"    int octave = 4 * (int(floatBitsToUint(w) >> 23u) - 127);"
+"    int lo = octave + int(w >= u_fogW[octave + 1]) + int(w >= u_fogW[octave + 2])"
+"           + int(w >= u_fogW[octave + 3]);"
+"    float span = u_fogW[lo + 1] - u_fogW[lo];"
+"    float t = span > 0.0 ? (w - u_fogW[lo]) / span : 0.0;"
+"    return u_fogTable[lo] + (u_fogTable[lo + 1] - u_fogTable[lo]) * t;"
+"}"
 /* Whether a texel is the key colour, compared as GlideRenderer compares it:
  * against the bytes its own conversion to RGBA8 gave the texel -- 565 widened
  * by a shift, 1555 scaled, 4444 and 8888 exact -- so a key matches the texels
@@ -252,7 +271,22 @@ static const char g_fragmentShader[] =
 "        vec3 shaped = (r * 0.45 + r * r * 1.9) * fresnel;"
 "        color.rgb = mix(r, shaped, u_carShine);"
 "    }"
-"    color.rgb = mix(color.rgb, u_fogColor, clamp(v_fog, 0.0, 1.0));"
+/* Haze (initGl, NFS_HAZE): the fog worked out at each pixel instead of at
+ * the corners -- a long polygon no longer fogs in a straight ramp across it --
+ * and fading into the sky behind it rather than into one flat colour: the sky
+ * as the frame drew it before the world (u_sky, taken by takeSky), blurred
+ * down its levels, read at this pixel and brought back from the gamma the
+ * picture went out at.  Far hills turn the sky's own colour where they meet
+ * it, blue above and pale at the horizon, and the seam between the two goes. */
+"    float fog = v_fog;"
+"    vec3 fogColor = u_fogColor;"
+"    if (u_haze > 0.0 && v_combine.q > 0.5) {"
+"        fog = pixelFog(v_texCoord.p);"
+"        vec3 sky = textureLod(u_sky, gl_FragCoord.xy / u_screen, 4.5).rgb;"
+"        sky = pow(max(sky, vec3(0.0)), vec3(max(u_gamma, 0.001)));"
+"        fogColor = mix(u_fogColor, sky, u_haze);"
+"    }"
+"    color.rgb = mix(color.rgb, fogColor, clamp(fog, 0.0, 1.0));"
 "    if (u_gamma != 1.0)"
 "        color.rgb = pow(max(color.rgb, vec3(0.0)), vec3(1.0 / max(u_gamma, 0.001)));"
 "    o_color = color;"
@@ -297,6 +331,7 @@ struct ThrashDraw
     std::vector<std::array<float, 64>>  fogTables;
     float                               fogColor[3];
     float                               wetness;
+    float                               grade[5];
     float                               alphaTestRef;
     x86::reg32                          chromaKeyColor;
     x86::reg32                          width;
@@ -370,6 +405,17 @@ ThrashRenderer::~ThrashRenderer()
             glDeleteTextures(1, &m_reflection);
         if (m_detailTexture)
             glDeleteTextures(1, &m_detailTexture);
+        for (unsigned int texture : { m_sky, m_postCopy, m_bright })
+            if (texture)
+                glDeleteTextures(1, &texture);
+        if (m_postFramebuffer)
+            glDeleteFramebuffers(1, &m_postFramebuffer);
+        if (m_postArray)
+            glDeleteVertexArrays(1, &m_postArray);
+        if (m_brightProgram)
+            glDeleteProgram(m_brightProgram);
+        if (m_compositeProgram)
+            glDeleteProgram(m_compositeProgram);
         glDeleteFramebuffers(1, &framebuffer);
         glDeleteRenderbuffers(1, &depthBuffer);
         glDeleteProgram(program);
@@ -542,11 +588,14 @@ void ThrashRenderer::initGl()
     glUniform1f(m_locations.surface, 0.0f);
     glUniform1i(m_locations.sharpen, 0);
     glUniform1f(m_locations.carShine, 0.0f);
+    glUniform1f(m_locations.haze, 0.0f);
+    glUniform1i(m_locations.sky, 3);
     glUniform1f(m_locations.detailScale, 8.0f);
     glUniform1f(m_locations.detail, 0.0f);
     glUniform1i(m_locations.reflection, 2);
     glUniform1f(m_locations.wet, 0.0f);
     glUseProgram(0);
+    initPost();
 }
 
 static GLuint compileShader(GLenum type, const std::string& defines, const char* body)
@@ -623,6 +672,8 @@ void ThrashRenderer::compileShaders(int depthBits, const char* renderer)
     m_locations.surface = glGetUniformLocation(m_program, "u_surface");
     m_locations.sharpen = glGetUniformLocation(m_program, "u_sharpen");
     m_locations.carShine = glGetUniformLocation(m_program, "u_carShine");
+    m_locations.haze = glGetUniformLocation(m_program, "u_haze");
+    m_locations.sky = glGetUniformLocation(m_program, "u_sky");
     glUseProgram(m_program);
     glUniform1i(m_locations.texture, 0);
     float w[64];
@@ -731,6 +782,7 @@ void ThrashRenderer::renderPending()
     std::copy(m_fogColor, m_fogColor + 3, draw->fogColor);
     draw->alphaTestRef = m_alphaTestRef;
     draw->wetness = m_detailTexture ? m_wetness : 0.0f;
+    std::copy(m_grade, m_grade + 5, draw->grade);
     draw->chromaKeyColor = m_chromaKeyColor;
     draw->width = m_renderer->m_width;
     draw->height = m_renderer->m_height;
@@ -764,6 +816,295 @@ void ThrashRenderer::takeReflection(int width, int height)
         glEnable(GL_SCISSOR_TEST);
     m_reflectionValid = true;
     m_reflectionTaken = true;
+}
+
+/* Port: the whole picture, before its HUD (initGl's NFS_BLOOM, NFS_GRADE and
+ * NFS_AA; each on by default, =0 for off).  As the world is drawn and the HUD
+ * begins -- the moment the wet road's reflection is taken -- the picture is
+ * copied (m_postCopy) and drawn back over itself through one pass:
+ *
+ * - anti-aliased: FXAA as Timothy Lottes first published it, five reads a
+ *   pixel and a blur along the edge it finds, only where the edge is;
+ * - with a glow: what is brighter than most of the picture -- headlights,
+ *   lamps, the sun -- near white, not the sky's blue -- is kept at half size (m_bright, a bright
+ *   pass), spread down that texture's levels and added back from five of
+ *   them, wide and faint over narrow and strong;
+ * - graded: a contrast about the middle grey, a saturation and a tint, the
+ *   track's own (glide2x::colourGrade, from nfs3hp_main.cpp).
+ *
+ * The HUD then draws over it as it always did, and the menus are never
+ * touched: they have no world to come before a HUD. */
+static const char g_postVertexShader[] =
+"out vec2 v_uv;"
+"void main()"
+"{"
+"    vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));"
+"    v_uv = p;"
+"    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);"
+"}";
+
+static const char g_brightShader[] =
+"in vec2 v_uv;"
+"layout (location=0) out vec4 o_color;"
+"uniform sampler2D u_source;"
+"uniform sampler2D u_sky;"
+"uniform bool u_hasSky;"
+/* What glows is what stands brighter than the sky behind it (the haze's
+ * u_sky, blurred): a lamp, a headlight, a tail light at night, the sun's
+ * disc -- not a pale sky at the horizon by day, which is bright only because
+ * it is the sky.  With no sky taken, near white alone. */
+"void main()"
+"{"
+"    vec3 c = texture(u_source, v_uv).rgb;"
+"    float peak = max(c.r, max(c.g, c.b));"
+"    float floorLevel = 0.9;"
+"    if (u_hasSky) {"
+"        vec3 sky = textureLod(u_sky, v_uv, 4.5).rgb;"
+"        floorLevel = max(max(sky.r, max(sky.g, sky.b)) + 0.08, 0.55);"
+"    }"
+"    o_color = vec4(c * smoothstep(floorLevel, floorLevel + 0.2, peak), 1.0);"
+"}";
+
+static const char g_compositeShader[] =
+"in vec2 v_uv;"
+"layout (location=0) out vec4 o_color;"
+"uniform sampler2D u_source;"
+"uniform sampler2D u_bright;"
+"uniform vec2 u_pixel;"
+"uniform float u_bloom;"
+"uniform vec3 u_grade;"      // saturation, contrast, on
+"uniform vec3 u_tint;"
+"uniform bool u_aa;"
+"float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }"
+"vec3 fxaa(vec2 uv)"
+"{"
+"    vec3 nw = texture(u_source, uv + vec2(-1.0, -1.0) * u_pixel).rgb;"
+"    vec3 ne = texture(u_source, uv + vec2( 1.0, -1.0) * u_pixel).rgb;"
+"    vec3 sw = texture(u_source, uv + vec2(-1.0,  1.0) * u_pixel).rgb;"
+"    vec3 se = texture(u_source, uv + vec2( 1.0,  1.0) * u_pixel).rgb;"
+"    vec3 m  = texture(u_source, uv).rgb;"
+"    float lnw = luma(nw), lne = luma(ne), lsw = luma(sw), lse = luma(se), lm = luma(m);"
+"    float lo = min(lm, min(min(lnw, lne), min(lsw, lse)));"
+"    float hi = max(lm, max(max(lnw, lne), max(lsw, lse)));"
+"    if (hi - lo < max(0.0312, hi * 0.125)) return m;"
+"    vec2 dir = vec2(-((lnw + lne) - (lsw + lse)), (lnw + lsw) - (lne + lse));"
+"    float reduce = max((lnw + lne + lsw + lse) * 0.03125, 1.0 / 128.0);"
+"    float scale = 1.0 / (min(abs(dir.x), abs(dir.y)) + reduce);"
+"    dir = clamp(dir * scale, vec2(-8.0), vec2(8.0)) * u_pixel;"
+"    vec3 a = 0.5 * (texture(u_source, uv + dir * (1.0 / 3.0 - 0.5)).rgb"
+"                  + texture(u_source, uv + dir * (2.0 / 3.0 - 0.5)).rgb);"
+"    vec3 b = a * 0.5 + 0.25 * (texture(u_source, uv - dir * 0.5).rgb + texture(u_source, uv + dir * 0.5).rgb);"
+"    float lb = luma(b);"
+"    return (lb < lo || lb > hi) ? a : b;"
+"}"
+"void main()"
+"{"
+"    vec3 c = u_aa ? fxaa(v_uv) : texture(u_source, v_uv).rgb;"
+"    if (u_bloom > 0.0) {"
+"        vec3 glow = textureLod(u_bright, v_uv, 1.0).rgb * 0.30 + textureLod(u_bright, v_uv, 2.0).rgb * 0.25"
+"                  + textureLod(u_bright, v_uv, 3.0).rgb * 0.20 + textureLod(u_bright, v_uv, 4.0).rgb * 0.15"
+"                  + textureLod(u_bright, v_uv, 5.0).rgb * 0.10;"
+"        c += glow * u_bloom;"
+"    }"
+"    if (u_grade.z > 0.0) {"
+"        c = (c - 0.5) * u_grade.y + 0.5;"
+"        c = mix(vec3(luma(c)), c, u_grade.x) * u_tint;"
+"    }"
+"    o_color = vec4(clamp(c, 0.0, 1.0), 1.0);"
+"}";
+
+static GLuint postProgram(GLuint (*compile)(GLenum, const std::string&, const char*), const char* fragmentBody)
+{
+    const GLuint vertex = compile(GL_VERTEX_SHADER, "", g_postVertexShader);
+    const GLuint fragment = compile(GL_FRAGMENT_SHADER, "", fragmentBody);
+    const GLuint program = glCreateProgram();
+    glAttachShader(program, vertex);
+    glAttachShader(program, fragment);
+    glLinkProgram(program);
+    GLint status = 0;
+    glGetProgramiv(program, GL_LINK_STATUS, &status);
+    if (!status)
+    {
+        GLchar log[2048];
+        GLsizei length = 0;
+        glGetProgramInfoLog(program, sizeof log, &length, log);
+        SDL_LogError(SDL_LOG_CATEGORY_RENDER, "[GFX] whole-picture pass: %s", log);
+    }
+    glDeleteShader(vertex);
+    glDeleteShader(fragment);
+    return program;
+}
+
+static float onOff(const char* name, float otherwise)
+{
+    const char* value = SDL_getenv(name);
+    if (!value || !*value)
+        return otherwise;
+    if (SDL_strcmp(value, "0") == 0 || SDL_strcasecmp(value, "off") == 0)
+        return 0.0f;
+    if (SDL_strcasecmp(value, "on") == 0)
+        return otherwise;
+    const float parsed = float(SDL_atof(value));
+    return parsed > 0.0f ? SDL_min(parsed, 2.0f) : otherwise;
+}
+
+void ThrashRenderer::initPost()
+{
+    // Each on unless set to 0 (or "off"); a number for how much, where it has one.
+    m_haze = SDL_min(onOff("NFS_HAZE", 0.8f), 1.0f);
+    m_bloom = onOff("NFS_BLOOM", 0.6f);
+    m_gradeOn = onOff("NFS_GRADE", 1.0f) > 0.0f;
+    m_antialias = onOff("NFS_AA", 1.0f) > 0.0f;
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[GFX] haze %.2f; glow %.2f; colour grade %s; anti-aliasing %s",
+                double(m_haze), double(m_bloom), m_gradeOn ? "on" : "off", m_antialias ? "FXAA" : "off");
+    if (m_bloom > 0.0f || m_gradeOn || m_antialias)
+    {
+        m_brightProgram = postProgram(compileShader, g_brightShader);
+        m_compositeProgram = postProgram(compileShader, g_compositeShader);
+        m_brightSource = glGetUniformLocation(m_brightProgram, "u_source");
+        m_compositeSource = glGetUniformLocation(m_compositeProgram, "u_source");
+        m_compositeBright = glGetUniformLocation(m_compositeProgram, "u_bright");
+        m_compositePixel = glGetUniformLocation(m_compositeProgram, "u_pixel");
+        m_compositeBloom = glGetUniformLocation(m_compositeProgram, "u_bloom");
+        m_compositeGrade = glGetUniformLocation(m_compositeProgram, "u_grade");
+        m_compositeTint = glGetUniformLocation(m_compositeProgram, "u_tint");
+        m_compositeAa = glGetUniformLocation(m_compositeProgram, "u_aa");
+        glGenVertexArrays(1, &m_postArray);
+        glGenFramebuffers(1, &m_postFramebuffer);
+    }
+}
+
+static int levelsFor(int width, int height)
+{
+    int levels = 1;
+    for (int size = SDL_max(width, height); size > 1; size >>= 1)
+        ++levels;
+    return levels;
+}
+
+/* The sky as the frame drew it, before the world: into m_sky with its levels,
+ * for the haze.  From the framebuffer drawPending has bound. */
+void ThrashRenderer::takeSky(int width, int height)
+{
+    m_skyTaken = true;
+    if (!m_sky || m_skyW != width || m_skyH != height)
+    {
+        if (m_sky)
+            glDeleteTextures(1, &m_sky);
+        glGenTextures(1, &m_sky);
+        glBindTexture(GL_TEXTURE_2D, m_sky);
+        glTexStorage2D(GL_TEXTURE_2D, levelsFor(width, height), GL_RGBA8, width, height);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        m_skyW = width;
+        m_skyH = height;
+    }
+    const GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, m_sky);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, width, height);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glActiveTexture(GL_TEXTURE0);
+    if (scissor)
+        glEnable(GL_SCISSOR_TEST);
+    m_skyValid = true;
+}
+
+/* The world's picture through FXAA, the glow and the grade, back into the
+ * framebuffer, before the HUD.  drawPending sets its own state again after. */
+void ThrashRenderer::postProcess(const ThrashDraw& draw)
+{
+    m_postDone = true;
+    if (!m_compositeProgram)
+        return;
+    const int width = int(draw.width), height = int(draw.height);
+    const int halfW = SDL_max(width / 2, 1), halfH = SDL_max(height / 2, 1);
+    if (!m_postCopy || m_postW != width || m_postH != height)
+    {
+        if (m_postCopy)
+            glDeleteTextures(1, &m_postCopy);
+        if (m_bright)
+            glDeleteTextures(1, &m_bright);
+        glGenTextures(1, &m_postCopy);
+        glBindTexture(GL_TEXTURE_2D, m_postCopy);
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, width, height);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glGenTextures(1, &m_bright);
+        glBindTexture(GL_TEXTURE_2D, m_bright);
+        glTexStorage2D(GL_TEXTURE_2D, levelsFor(halfW, halfH), GL_RGBA8, halfW, halfH);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        m_postW = width;
+        m_postH = height;
+    }
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+    glDepthMask(GL_FALSE);
+    glBindSampler(0, 0);
+    glBindSampler(1, 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, m_postCopy);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, width, height);
+    glBindVertexArray(m_postArray);
+    if (m_bloom > 0.0f)
+    {
+        glBindFramebuffer(GL_FRAMEBUFFER, m_postFramebuffer);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_bright, 0);
+        glViewport(0, 0, halfW, halfH);
+        glUseProgram(m_brightProgram);
+        glUniform1i(m_brightSource, 0);
+        glUniform1i(glGetUniformLocation(m_brightProgram, "u_sky"), 3);
+        glUniform1i(glGetUniformLocation(m_brightProgram, "u_hasSky"), m_skyTaken && m_skyW == width && m_skyH == height ? 1 : 0);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, m_bright);
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glActiveTexture(GL_TEXTURE0);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_renderer->m_texture, 0);
+    glViewport(0, 0, width, height);
+    glUseProgram(m_compositeProgram);
+    glUniform1i(m_compositeSource, 0);
+    glUniform1i(m_compositeBright, 1);
+    glUniform2f(m_compositePixel, 1.0f / float(width), 1.0f / float(height));
+    glUniform1f(m_compositeBloom, m_bloom);
+    glUniform3f(m_compositeGrade, draw.grade[3], draw.grade[4], m_gradeOn ? 1.0f : 0.0f);
+    glUniform3f(m_compositeTint, draw.grade[0], draw.grade[1], draw.grade[2]);
+    glUniform1i(m_compositeAa, m_antialias ? 1 : 0);
+    if (m_bloom > 0.0f)
+    {
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, m_bright);
+        glActiveTexture(GL_TEXTURE0);
+    }
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    // Back to the world's state; the batch loop sets the rest as it goes.
+    glUseProgram(m_program);
+    glBindVertexArray(m_vertexArray);
+    glEnable(GL_BLEND);
+    if (m_detailTexture)
+    {
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, m_detailTexture);
+    }
+    if (m_reflection)
+    {
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, m_reflection);
+    }
+    glActiveTexture(GL_TEXTURE0);
 }
 
 void ThrashRenderer::drawPending(const ThrashDraw& draw)
@@ -812,6 +1153,17 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
         glBindTexture(GL_TEXTURE_2D, m_detailTexture);
         glActiveTexture(GL_TEXTURE0);
     }
+    glUniform2f(m_locations.screen, float(draw.width), float(draw.height));
+    // The haze's sky: this frame's once taken (takeSky), until then none.
+    float hazeSet = -1.0f;  // what u_haze holds now (per batch, below)
+    glUniform1f(m_locations.haze, 0.0f);
+    if (m_sky)
+    {
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_2D, m_sky);
+        glActiveTexture(GL_TEXTURE0);
+    }
+    const bool post = m_compositeProgram && (m_bloom > 0.0f || m_gradeOn || m_antialias);
     const bool wet = draw.wetness > 0.0f && m_reflectionValid && m_reflectionW == int(draw.width)
                      && m_reflectionH == int(draw.height);
     glUniform1f(m_locations.wet, wet ? draw.wetness : 0.0f);
@@ -827,15 +1179,42 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
         /* The world drawn, the HUD to come: its first draw is unfogged and
          * writes no depth, after the world's fogged ones.  That is the picture the
          * next frame's wet road reflects, without the HUD in it. */
-        if (wet || draw.wetness > 0.0f)
+        /* And (the port's haze) the sky as it stands before the world's first
+         * draw; and (its whole-picture effects) the world, once, as the HUD
+         * begins. */
+        if (wet || draw.wetness > 0.0f || m_haze > 0.0f || post)
         {
             const ThrashVertex& corner = draw.vertices[first];
             const bool flat = corner.combine[3] == 0 && !batch.zBuffer;
             if (!flat)
-                m_sceneDrawn = true;
-            else if (m_sceneDrawn && !m_reflectionTaken)
             {
-                takeReflection(int(draw.width), int(draw.height));
+                if (!m_sceneDrawn && !m_skyTaken && m_haze > 0.0f)
+                    takeSky(int(draw.width), int(draw.height));
+                m_sceneDrawn = true;
+            }
+            else if (m_sceneDrawn)
+            {
+                if (!m_reflectionTaken && (wet || draw.wetness > 0.0f))
+                    takeReflection(int(draw.width), int(draw.height));
+                if (post && !m_postDone)
+                {
+                    postProcess(draw);
+                    previous = nullptr;   // every state set again below
+                    scissor = false;
+                    fogTable = -1;
+                }
+            }
+        }
+        /* The haze on what is blended over the picture, not on what is added
+         * to it (alphaBlend off): a fogged additive layer -- the haze's own
+         * sky added onto the sky -- only brightened it. */
+        {
+            const float haze = m_skyTaken && m_skyW == int(draw.width) && m_skyH == int(draw.height)
+                               && batch.alphaBlend ? m_haze : 0.0f;
+            if (haze != hazeSet)
+            {
+                glUniform1f(m_locations.haze, haze);
+                hazeSet = haze;
             }
         }
         if (m_detailTexture && (!previous || batch.detail != previous->detail))
@@ -962,6 +1341,8 @@ void ThrashRenderer::swap()
         }
         m_reflectionTaken = false;
         m_sceneDrawn = false;
+        m_skyTaken = false;
+        m_postDone = false;
         glDisable(GL_SCISSOR_TEST);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glUseProgram(0);

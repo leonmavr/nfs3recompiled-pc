@@ -64,6 +64,12 @@ public:
     /* Port: how wet the road is (0 dry to 1), from the frame on; the GL
      * thread's reflection of the last frame is taken while it is above 0. */
     void setWetRoad(float wetness) { m_wetness = wetness; }
+    /* The race's colour grade (glide2x::colourGrade): a tint, a saturation and
+     * a contrast, each 1 for none; the picture before its HUD is graded. */
+    void setColourGrade(float red, float green, float blue, float saturation, float contrast)
+    {
+        m_grade[0] = red; m_grade[1] = green; m_grade[2] = blue; m_grade[3] = saturation; m_grade[4] = contrast;
+    }
     void setTexClampMode(bool wrapS, bool wrapT) override;
     void setChromakeyValue(x86::reg32 color) override;
     void setClipWindow(x86::reg32 minX, x86::reg32 minY, x86::reg32 maxX, x86::reg32 maxY) override;
@@ -164,7 +170,7 @@ private:
     {
         int position, color, texCoord, combine;
         int transform, fogW, fogTable, fogColor, alphaRef, chromaKey, chromaKeyColor, gamma, wrap, levels, texture,
-            format, detail, detailTexture, detailScale, wet, reflection, screen, surface, sharpen, carShine;
+            format, detail, detailTexture, detailScale, wet, reflection, screen, surface, sharpen, carShine, haze, sky;
     } m_locations;
     unsigned int            m_detailTexture = 0;
     bool                    m_carSurface = false;   // the game thread's
@@ -177,6 +183,26 @@ private:
     bool                    m_reflectionTaken = false;  // this frame's, as its HUD began
     bool                    m_sceneDrawn = false;       // this frame has drawn some of the world
     void takeReflection(int width, int height);
+    // The haze's sky and the whole-picture effects (thrashrenderer.cpp, initPost).
+    void initPost();
+    void takeSky(int width, int height);
+    void postProcess(const ThrashDraw& draw);
+    float                   m_grade[5] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };  // the game thread's
+    float                   m_haze = 0.0f;          // NFS_HAZE
+    float                   m_bloom = 0.0f;         // NFS_BLOOM
+    bool                    m_gradeOn = false;      // NFS_GRADE
+    bool                    m_antialias = false;    // NFS_AA
+    unsigned int            m_sky = 0;              // the GL thread's, from here on
+    int                     m_skyW = 0, m_skyH = 0;
+    bool                    m_skyTaken = false;     // this frame's
+    bool                    m_skyValid = false;
+    unsigned int            m_postCopy = 0, m_bright = 0, m_postFramebuffer = 0, m_postArray = 0;
+    unsigned int            m_brightProgram = 0, m_compositeProgram = 0;
+    int                     m_postW = 0, m_postH = 0;
+    bool                    m_postDone = false;     // this frame's
+    int                     m_brightSource = -1, m_compositeSource = -1, m_compositeBright = -1,
+                            m_compositePixel = -1, m_compositeBloom = -1, m_compositeGrade = -1,
+                            m_compositeTint = -1, m_compositeAa = -1;
     float                   m_detailStrength = 0.0f;  // NFS_ROAD_DETAIL; 0 for none
     float                   m_surfaceStrength = 0.0f; // NFS_OBJECT_DETAIL; 0 for none
     bool                    m_sharpen = false;        // NFS_TEXTURE_SHARP

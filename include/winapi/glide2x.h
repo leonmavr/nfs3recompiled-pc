@@ -37,6 +37,9 @@ void carSurface(bool on);
 /* Port: how wet the road is, 0 to 1 -- its darkening and its reflection
  * (ThrashRenderer::setWetRoad). */
 void wetRoad(float wetness);
+/* The race's colour grade: a tint, a saturation and a contrast, each 1 for
+ * none (the native THRASH renderer's whole-picture pass, NFS_GRADE). */
+void colourGrade(float red, float green, float blue, float saturation, float contrast);
 
 /* The texture atlas: free texels, whole 256x256 tiles among them, and its size
  * in texels.  False while no Glide window is open. */

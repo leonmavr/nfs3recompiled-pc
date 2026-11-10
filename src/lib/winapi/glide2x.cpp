@@ -138,6 +138,12 @@ void wetRoad(float wetness)
         s_directRenderer->setWetRoad(wetness);
 }
 
+void colourGrade(float red, float green, float blue, float saturation, float contrast)
+{
+    if (s_directRenderer)
+        s_directRenderer->setColourGrade(red, green, blue, saturation, contrast);
+}
+
 bool screenRect(int& x, int& y, int& w, int& h, int& pictureWidth, int& pictureHeight)
 {
     if (!s_renderer)

@@ -43,8 +43,10 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     or subdivided models (smooth-normal subdivision of car.fce at load).
 - [x] Bug: at night the headlights' pool on the road had a white noise over
   it. Done: the world's grain (`NFS_OBJECT_DETAIL`) is kept off additive draws.
-- [ ] Whole-image effects in the final blit: 2–4× anti-aliasing, a light bloom on headlights and sun, and a per-track colour grade. Each is cheap on desktop and can be turned off for weaker machines.
-- [ ] Haze: fog worked out per pixel with a sky-coloured gradient instead of a flat fog colour gives more depth for almost nothing.
+- [x] Whole-image effects in the final blit: 2–4× anti-aliasing, a light bloom on headlights and sun, and a per-track colour grade. Each is cheap on desktop and can be turned off for weaker machines.
+- [x] Haze: fog worked out per pixel with a sky-coloured gradient instead of a flat fog colour gives more depth for almost nothing.
+  - Done: `NFS_HAZE`, `NFS_BLOOM`, `NFS_GRADE`, `NFS_AA` (FXAA), each on by
+    default, `0` for off. Next: in the game's Graphics menu.
 
 ### Races/locations
 

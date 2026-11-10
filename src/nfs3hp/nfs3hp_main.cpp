@@ -2474,11 +2474,54 @@ void wetRoadTick(win32::WinApplication* app)
     win32::glide2x::wetRoad(wetness);
 }
 
+/* Port: each track's own colour grade (thrashrenderer.cpp, NFS_GRADE), by
+ * the track a race is on ([0x6fd4ac], gamedata/tracks/trkNNN) -- slight, so
+ * that the place reads the way it should: Hometown's autumn warmer, the
+ * desert and the canyons warmer still, the coast and the snow cooler, the
+ * woods a touch greener, the city flatter and harder -- and then the light:
+ * bluer and greyer at night ([0x6fd4c8]), greyer and softer in the weather
+ * ([0x6fd4cc]).  Outside a race, nothing. */
+void colourGradeTick(win32::WinApplication* app)
+{
+    struct Grade { float red, green, blue, saturation, contrast; };
+    static const Grade kTracks[] = {
+        { 1.04f, 1.00f, 0.94f, 1.08f, 1.04f },   // Hometown
+        { 1.06f, 1.00f, 0.92f, 1.10f, 1.06f },   // Redrock Ridge
+        { 0.97f, 1.00f, 1.04f, 1.08f, 1.04f },   // Atlantica
+        { 0.98f, 1.00f, 1.03f, 1.04f, 1.05f },   // Rocky Pass
+        { 0.98f, 1.03f, 0.97f, 1.10f, 1.04f },   // Country Woods
+        { 1.07f, 1.00f, 0.90f, 1.08f, 1.06f },   // Lost Canyons
+        { 0.96f, 1.02f, 1.04f, 1.06f, 1.04f },   // Aquatica
+        { 0.96f, 0.99f, 1.06f, 1.02f, 1.04f },   // The Summit
+        { 0.99f, 1.00f, 1.02f, 0.96f, 1.08f },   // Empire City
+    };
+    Grade grade = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+    if (nfs3hp::raceIsRunning())
+    {
+        const x86::reg32 track = app->getMemory<x86::reg32>(0x6fd4ac);
+        grade = track < sizeof kTracks / sizeof kTracks[0] ? kTracks[track] : Grade{ 1.0f, 1.0f, 1.0f, 1.04f, 1.04f };
+        if (app->getMemory<x86::reg32>(0x6fd4c8) != 0)
+        {
+            grade.red *= 0.95f;
+            grade.green *= 0.98f;
+            grade.blue *= 1.06f;
+            grade.saturation *= 0.88f;
+        }
+        if (app->getMemory<x86::reg32>(0x6fd4cc) != 0)
+        {
+            grade.saturation *= 0.9f;
+            grade.contrast *= 0.97f;
+        }
+    }
+    win32::glide2x::colourGrade(grade.red, grade.green, grade.blue, grade.saturation, grade.contrast);
+}
+
 void onSwap(win32::WinApplication* app)
 {
     ++nfs3hp::s_swaps;
     nfs3hp::carVerticesDone();
     wetRoadTick(app);
+    colourGradeTick(app);
 #ifndef __ANDROID__
     scriptTick();
 #endif

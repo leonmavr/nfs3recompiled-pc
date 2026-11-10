@@ -236,6 +236,39 @@ anisotropic filtering. The grain leaves out what is added onto the picture
 (blending off, which is additive here) -- the headlights' pool, the glows: a
 grain over light lay on the road at night as a white noise.
 
+### Haze, glow, colour grade and anti-aliasing
+
+Four effects on a race's picture, each on by default and off with its
+variable set to `0` (or `off`): `NFS_HAZE`, `NFS_BLOOM`, `NFS_GRADE`,
+`NFS_AA`. The menus are never touched.
+
+**Haze.** The fog was worked out at each corner and mixed into one flat
+colour. Now, for fogged draws blended over the picture, it is worked out at
+each pixel from that pixel's own 1/w (linear across the screen, so exact), and
+it fades into the sky behind the pixel rather than into the flat colour: the
+sky as the frame drew it before the world (`takeSky`, a copy of the
+framebuffer at the world's first draw, with its levels), read blurred at the
+pixel and brought back from the gamma the picture went out at. Far hills take
+the sky's own colour where they meet it. Additive draws keep the old fog: haze
+added onto the sky only brightened it. `NFS_HAZE` takes a number for how far
+towards the sky, 0.8 by default.
+
+**The whole-picture pass.** As the HUD begins -- the same moment the wet
+road's reflection is taken -- the picture is copied and drawn back over itself
+(`postProcess`), before the HUD and the mirror go on top:
+
+- FXAA (Lottes's original): five reads a pixel, and a blur along the edge
+  where it finds one (`NFS_AA`).
+- A glow (`NFS_BLOOM`, 0.6): what stands brighter than the sky behind it --
+  lamps, headlights, tail lights at night, the sun's disc, but not a pale
+  horizon by day -- kept at half size, spread down that texture's levels and
+  added back from five of them.
+- A colour grade (`NFS_GRADE`): a contrast, a saturation and a tint for each
+  track (`colourGradeTick`, nfs3hp_main.cpp): Hometown's autumn warmer,
+  Redrock Ridge and Lost Canyons warmer still, Atlantica, Aquatica and the
+  Summit cooler, Country Woods a touch greener, Empire City flatter and
+  harder; bluer and greyer at night, greyer and softer in the weather.
+
 ### The cars' paint
 
 A car is drawn twice: its body with its own texture, then the reflection the
@@ -1272,6 +1305,10 @@ from the phone; the rest matter for a desktop run.
 | `NFS_ANISOTROPY` | `8` | Anisotropic filtering of the textures, at most what the GPU offers; `1` for none. |
 | `NFS_ROAD_DETAIL` | `0.35` | How much the road's and the ground's grain lightens and darkens them, 0 to 1; `0` for none. |
 | `NFS_OBJECT_DETAIL` | `0.3` | The same for the rest of the world -- walls, buildings, trees, fences, grass, rocks -- finer, on opaque texels only; `0` for none. |
+| `NFS_HAZE` | on (`0.8`) | `0`/`off`: the fog worked out at the corners and mixed into its flat colour, as the game has it. A number: how far the fog fades towards the sky behind (Haze, glow, colour grade and anti-aliasing). |
+| `NFS_BLOOM` | on (`0.6`) | `0`/`off`: no glow around lights brighter than the sky. A number: how strong. |
+| `NFS_GRADE` | on | `0`/`off`: no colour grade per track and light. |
+| `NFS_AA` | on | `0`/`off`: no FXAA over the race's picture. |
 | `NFS_CAR_SHINE` | `1` | How much the cars' reflection is shaped by how the body faces the view -- sharper highlights, stronger towards the edges -- 0 to 1; `0` the game's own (The cars' paint). |
 | `NFS_TEXTURE_SHARP` | on | `0`: textures seen larger than they are drawn bilinear, as the GPU does, instead of Catmull-Rom. |
 | `NFS_HEADLIGHT_REACH`, `NFS_HEADLIGHT_WIDTH` | `2`, `1.4` | How far the headlights' patch on the road reaches and how wide it is, against the original's (0.25 to 4; `1` and `1` are the original). |
