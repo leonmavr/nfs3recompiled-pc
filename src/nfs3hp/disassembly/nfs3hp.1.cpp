@@ -4,6 +4,8 @@
 namespace nfs3hp
 {
 // Port (tools/apply_native_ai.py): defined in native_ai.cpp.
+bool aiDrive(win32::WinApplication* app, x86::CPU& cpu);
+// Port (tools/apply_native_ai.py): defined in native_ai.cpp.
 bool aiHeading(win32::WinApplication* app, x86::CPU& cpu);
 // Port (tools/apply_native_ai.py): defined in native_ai.cpp.
 bool aiPull(win32::WinApplication* app, x86::CPU& cpu);
@@ -10962,6 +10964,11 @@ void Application::sub_408600(WinApplication* __restrict app, x86::CPU& cpu_)
   x86::Local cpu(cpu_);
   NFS2_USE(cpu);
   NFS2_USE(app);
+    if (aiDrive(app, cpu.sync())) /* port: native (tools/apply_native_ai.py) */
+    {
+        cpu.reload();
+        return;
+    }
     // 00408600  53                     -push ebx
     app->getMemory<x86::reg32>(cpu.esp-4) = cpu.ebx;
     cpu.esp -= 4;

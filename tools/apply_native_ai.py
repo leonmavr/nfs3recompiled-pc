@@ -15,6 +15,10 @@ HEADER = "// Port (tools/apply_native_ai.py): defined in native_ai.cpp.\n"
 SITES = [
     ("nfs3hp", "sub_4064f0", "aiPull"),
     ("nfs3hp", "sub_4070c0", "aiHeading"),
+    # Port: an opponent's every frame, before the game's own driving
+    # (native_ai.cpp, aiDrive: the trace, getting unstuck).  It returns false,
+    # so the generated code always runs after it.
+    ("nfs3hp", "sub_408600", "aiDrive"),
 ]
 
 

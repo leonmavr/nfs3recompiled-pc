@@ -533,6 +533,55 @@ on — memory, registers, flags, the FPU and the triangles drawn
 this is about three quarters of the game thread's time. `NFS_NATIVES=0` goes
 back to the generated code, `NFS_THRASH_GL=0` to the old renderer.
 
+### The opponents' driving, tuned
+
+Read from the generated code: every frame `sub_4088f0` sends an opponent to
+`sub_408600`, which picks how it drives -- `sub_4076b0` at speed, `sub_407c30`
+slowly or in reverse (while `[car+0x7d4]` is 1), `sub_407fa0` off its line or
+sliding -- and `sub_4071a0` turns the force and torque they leave into velocity
+(`+0xa4`) and spin (`+0xe4`): an opponent is pushed, not driven through its
+wheels. It reverses (`sub_405fd0`) only when a collision says so, and a
+collision while it reverses with no time set turns it forward again, so two
+cars touching flipped each other back and forth and never parted -- the clumps
+that sat in a pile. Nose to a wall with nothing at its side, it pushed on. The
+game puts a car back on the road (`sub_429100`) only after nine reverses, or
+off the road after 1000 frames under 3 m/s -- half a minute.
+
+`aiDrive` (`src/nfs3hp/native_ai.cpp`, entered at the top of `sub_408600`)
+watches each opponent's progress along the track (its node, `+0x1c`). One that
+has stopped getting anywhere -- slow at the same node, or turned well away from
+the road -- first steers for another line across the road (the lane the game
+gives it, `+0x7b4`, held for four seconds): away from the car ahead of it if
+there is one (from the cars' positions, `+0x130`, against its own axes), or to
+the other half of the road if there is only road ahead -- the wall between the
+two ways of a fork. If that does not free it, it reverses on the game's own
+reverse with a time to stop at, which collisions do not cancel, each driver
+for its own time so a clump comes apart. The one in front of a clump just
+drives off; one with a car right behind it does not reverse into it. Still
+stuck after three tries, the game's own counters are run up so that it is put
+back on the road at once.
+
+A notch harder: every opponent's engine pull (`aiPull`) is times
+`NFS_AI_PACE` (1.06), and the speed it aims for at each point of the track
+(`+0x7b0`, from `sub_409330`) times half that again. And each driver -- the
+racer in its slot (`+0x1f0`), one driver to a slot whatever car it drives --
+has a character of its own (`kDrivers`): its pull, how fast it takes the
+corners, how soon it gives up on a position it is stuck in and how long it
+backs off -- a hothead, a smooth one, a late braker, a steady one, a bully, a
+cautious one and an opportunist. The aim is written once for each value the
+game writes, so it never builds up.
+
+Network races are left as the game drives them (every machine has to drive the
+opponents alike), and everything runs off the race's own clock
+(`[0x7d3684]`, 64 ticks a second). `NFS_AI_TUNE=0` turns all of it off;
+`NFS_AI_TRACE=1` logs each opponent once a second and every step it takes to
+get unstuck (`[AI]`).
+
+Tested on Hometown in the rain, seven opponents over two and a half minutes:
+without it opponents sat stuck for six seconds and more at nodes 527, 561 and
+the pile-ups behind them; with it none was held more than about two seconds,
+and the field ran on average about 4% further (the leaders some 6%).
+
 ### Decompiled menus
 
 The menus are being decompiled too, a screen at a time — not for speed, but to
@@ -1182,6 +1231,9 @@ from the phone; the rest matter for a desktop run.
 | *(release)* | | A release build writes nothing to the log and takes none of these flags: the native code is built with `NFS_RELEASE` (log priority critical, SDL's direct Android logging compiled out through `android/app/jni/sdl_quiet.h`), the Java side logs through `AppLog`/`SDLLog` only when `BuildConfig.DEBUG`. Use the debug build (`-Pandroid10`) for diagnostics. |
 | `NFS_FPU_EXTENDED` | on | Races at the x87's extended precision, as the Modern Patch runs them; `0` races in single precision, as the original (see The x87's precision). Every player of a network race needs the same. A debug build takes it from a launch: `adb shell am start -n dev.nfs3hp.port/.SplashActivity --ez fpu_single_races true`. |
 | `NFS_NATIVE_AI` | on | `0` runs the generated sub_4064f0 and sub_4070c0 instead of their decompiled C++ (`src/nfs3hp/native_ai.h`). A debug build takes it from a launch: `--ez native_ai_off true`. |
+| `NFS_AI_TUNE` | on | `0`: the opponents drive as the game has them -- no getting unstuck, no characters, no extra pace (The opponents' driving, tuned). |
+| `NFS_AI_PACE` | `1.06` | How much harder the opponents pull (their aim for speed times half the difference), 0.5 to 2; `1` the game's difficulty. |
+| `NFS_AI_TRACE` | off | `1` logs each opponent once a second and every step it takes to get unstuck (`[AI]`). |
 | `NFS_NET_PORT` | `9803` | TCP port of network races, as the Modern Patch has it; the launcher's Network screen offers the original's `1030`. |
 | `NFS_NET_TRACE` | off | `1` (extra `net_trace`) writes a network race into the log: EA's comm library events and packet sends (`[COMM]`), up to 400 datagrams per socket instead of 16 (`[NET]`), and each new indirect call target once per thread after the IPX transport opens (`[CALL]`). For finding where two machines stop on the way into a race. |
 | `NFS_FE_NATIVE` | on | `0` leaves every hooked decompiled menu function, the screens' and the engine's, to the generated code (see Decompiled menus); the main menu, what it calls of the menu loop and the dialogs, and the controls' screens are native whole and stay native. |
