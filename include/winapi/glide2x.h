@@ -39,6 +39,8 @@ void carSurface(bool on);
 void wetRoad(float wetness);
 /* The race's colour grade: a tint, a saturation and a contrast, each 1 for
  * none (the native THRASH renderer's whole-picture pass, NFS_GRADE). */
+/* Whether a race is being drawn (the haze and whole-picture pass are for it). */
+void raceView(bool race);
 void colourGrade(float red, float green, float blue, float saturation, float contrast);
 /* The player's headlights in the view (origin, direction, the car's up) and the
  * projection's scale and centre, for lighting what stands beside the road. */

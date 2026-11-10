@@ -2514,6 +2514,7 @@ void colourGradeTick(win32::WinApplication* app)
             grade.contrast *= 0.97f;
         }
     }
+    win32::glide2x::raceView(nfs3hp::raceIsRunning());
     win32::glide2x::colourGrade(grade.red, grade.green, grade.blue, grade.saturation, grade.contrast);
 }
 

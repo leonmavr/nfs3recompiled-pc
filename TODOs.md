@@ -168,7 +168,7 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   low/supressed.
   - Done: the plain limiter gave most of the lift back (a race is wall-to-wall
     peaks); now the peaks are rounded off and a look-ahead limiter catches the
-    rest: a race about 4.5 dB louder on average (`NFS_VOLUME`, 3).
+    rest (`NFS_VOLUME`, 1.8 by ear).
 - [ ] In a brief popup in whosse visual style is consistent with game, show
   cyrretnly plating song when it starts and then slide the popup away.
 - [ ] Music control: what tracks play in game, skip current track button.

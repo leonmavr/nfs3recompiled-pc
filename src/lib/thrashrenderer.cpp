@@ -143,7 +143,9 @@ static const char g_fragmentShader[] =
  * over the sixteen texels around the point, in nine bilinear reads, instead
  * of the GPU's bilinear over four -- the track's 64 x 64 pictures spread over
  * a wall or a hillside keep their edges instead of melting into a cross-hatched
- * blur.  Where a texel is a pixel or smaller the GPU's own filtering (the
+ * blur -- in the world only (what is fogged): the menus' lettering, cut out
+ * of its own small pictures, came out ringed and smeared.  Where a texel is a
+ * pixel or smaller the GPU's own filtering (the
  * levels, trilinear, anisotropic) is the better one and is what is used; the
  * two are blended across the step, so no line shows where one gives way. */
 "vec4 sharpTexture(vec2 uv, vec2 gx, vec2 gy)"
@@ -201,7 +203,7 @@ static const char g_fragmentShader[] =
 "        float wsum = wgt.x + wgt.y + wgt.z + wgt.w;"
 "        if (wsum <= 0.0) discard;"
 "        textureColor = (t00 * wgt.x + t10 * wgt.y + t01 * wgt.z + t11 * wgt.w) / wsum;"
-"    } else if (u_sharpen) {"
+"    } else if (u_sharpen && v_combine.q > 0.5) {"
 "        textureColor = sharpTexture(uv, gx, gy);"
 "    } else {"
 "        textureColor = texture(u_texture, uv);"
@@ -366,6 +368,7 @@ struct ThrashDraw
     float                               grade[5];
     float                               head[14];
     float                               sun[11];
+    bool                                race;
     float                               alphaTestRef;
     x86::reg32                          chromaKeyColor;
     x86::reg32                          width;
@@ -812,7 +815,11 @@ void ThrashRenderer::flush()
     // The player's headlights on the world: the road and its walls (most of
     // the track, `detail`) and everything else in it; not the cars, not light.
     batch.headlit = !m_carSurface && m_zTest && !m_chromaKey && m_alphaBlend;
-    batch.car = m_carSurface;
+    /* The cars, and what the race adds over the world from gamedata/render --
+     * smoke, dust, spray, sparks: 8888 and 4444 pictures where the track's are
+     * 1555 and 565 -- are not things that stand in the sun's way. */
+    batch.car = m_carSurface || (!m_textureShadow && (m_textureFormat == TF_ARGB_8888 || m_textureFormat == TF_ARGB_4444));
+    batch.decal = m_textureShadow;
     m_batches.push_back(batch);
 }
 
@@ -832,6 +839,7 @@ void ThrashRenderer::renderPending()
     std::copy(m_grade, m_grade + 5, draw->grade);
     std::copy(m_head, m_head + 14, draw->head);
     std::copy(m_sun, m_sun + 11, draw->sun);
+    draw->race = m_raceView;
     draw->chromaKeyColor = m_chromaKeyColor;
     draw->width = m_renderer->m_width;
     draw->height = m_renderer->m_height;
@@ -963,19 +971,29 @@ static const char g_compositeShader[] =
 "    float level = smoothstep(0.55, 0.8, abs(dot(normalize(n), u_up)));"
 "    if (level <= 0.0) return 0.0;"
 "    float shade = 0.0;"
-"    for (int i = 1; i <= 14; ++i) {"
-"        float t = 0.08 * float(i * i);"
+/* Each pixel's steps shifted by its own fraction (interleaved gradient
+ * noise), so the places a ray happens to sample do not line up across the
+ * screen into bands; and a ray that passes from in front of the picture to
+ * behind it has gone through what is there, however thick -- a solid wall --
+ * where only the thin was caught before, in stripes. */
+"    float jitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));"
+"    float before = 1.0;"
+"    for (int i = 1; i <= 18; ++i) {"
+"        float s = float(i) - jitter;"
+"        float t = 0.05 * s * s;"
 "        vec3 q = p + u_sun * t;"
 "        if (q.z < 0.5) break;"
 "        vec2 at = (q.xy * u_scale / q.z + u_centre) / u_size;"
 "        if (at.x < 0.0 || at.y < 0.0 || at.x > 1.0 || at.y > 1.0) break;"
-"        if (texture(u_source, at).a < 0.5) continue;"   // a car: casts its own
+"        if (texture(u_source, at).a < 0.5) { before = 1.0; continue; }"   // a car: casts its own
 "        float there = viewZ(at);"
 "        float gap = q.z - there;"
-"        if (gap > 0.05 + 0.02 * t && gap < 0.6 + 0.1 * t) {"
-"            shade = 1.0 - float(i - 1) / 16.0;"
+"        bool through = before < -0.02 && gap > 0.0 && gap < 4.0 + 0.5 * t;"
+"        if ((gap > 0.05 + 0.02 * t && gap < 0.6 + 0.1 * t) || through) {"
+"            shade = 1.0 - s / 22.0;"
 "            break;"
 "        }"
+"        before = gap;"
 "    }"
 "    vec2 edge = min(uv, 1.0 - uv);"
 "    return shade * level * smoothstep(0.0, 0.06, min(edge.x, edge.y));"
@@ -1327,7 +1345,10 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
         glBindTexture(GL_TEXTURE_2D, m_sky);
         glActiveTexture(GL_TEXTURE0);
     }
-    const bool post = m_compositeProgram && (m_bloom > 0.0f || m_gradeOn || m_antialias || draw.sun[0] > 0.0f);
+    /* A race only: a menu's turning car is 3D too, and the pass after it ran
+     * the glow and FXAA over the menu's lettering, ghosting it. */
+    const bool post = draw.race && m_compositeProgram && (m_bloom > 0.0f || m_gradeOn || m_antialias || draw.sun[0] > 0.0f);
+    const float haze = draw.race ? m_haze : 0.0f;
     const bool wet = draw.wetness > 0.0f && m_reflectionValid && m_reflectionW == int(draw.width)
                      && m_reflectionH == int(draw.height);
     glUniform1f(m_locations.wet, wet ? draw.wetness : 0.0f);
@@ -1346,13 +1367,13 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
         /* And (the port's haze) the sky as it stands before the world's first
          * draw; and (its whole-picture effects) the world, once, as the HUD
          * begins. */
-        if (wet || draw.wetness > 0.0f || m_haze > 0.0f || post || headlight > 0.0f)
+        if (wet || draw.wetness > 0.0f || haze > 0.0f || post || headlight > 0.0f)
         {
             const ThrashVertex& corner = draw.vertices[first];
             const bool flat = corner.combine[3] == 0 && !batch.zBuffer;
             if (!flat)
             {
-                if (!m_sceneDrawn && !m_skyTaken && m_haze > 0.0f)
+                if (!m_sceneDrawn && !m_skyTaken && haze > 0.0f)
                     takeSky(int(draw.width), int(draw.height));
                 m_sceneDrawn = true;
             }
@@ -1381,12 +1402,12 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
          * to it (alphaBlend off): a fogged additive layer -- the haze's own
          * sky added onto the sky -- only brightened it. */
         {
-            const float haze = m_skyTaken && m_skyW == int(draw.width) && m_skyH == int(draw.height)
-                               && batch.alphaBlend ? m_haze : 0.0f;
-            if (haze != hazeSet)
+            const float hazeHere = m_skyTaken && m_skyW == int(draw.width) && m_skyH == int(draw.height)
+                                   && batch.alphaBlend ? haze : 0.0f;
+            if (hazeHere != hazeSet)
             {
-                glUniform1f(m_locations.haze, haze);
-                hazeSet = haze;
+                glUniform1f(m_locations.haze, hazeHere);
+                hazeSet = hazeHere;
             }
         }
         if (m_detailTexture && (!previous || batch.detail != previous->detail))
@@ -1425,18 +1446,26 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
         // GR_CMP_ALWAYS keeps the test, and the write, on (the rear-view mirror).
         if (batch.zTest && (!previous || !previous->zTest || batch.zTestAlways != previous->zTestAlways))
             glDepthFunc(batch.zTestAlways ? GL_ALWAYS : GL_LEQUAL);
-        if (!previous || batch.zBuffer != previous->zBuffer)
-            glDepthMask(batch.zBuffer ? GL_TRUE : GL_FALSE);
-        /* A car's pixels leave 0 in the picture's alpha (the rest what they
-         * draw, opaque 1): the shadows of what stands by the road are not
-         * cast by the cars, which have their own (postProcess). */
-        if (!previous || batch.alphaBlend != previous->alphaBlend || batch.car != previous->car)
+        /* A car's shadow lies on the road and leaves its depth as the road's:
+         * written a little above it, its edge stood up as a step, and the
+         * shadows of what stands by the road caught on it in a rim. */
+        if (!previous || batch.zBuffer != previous->zBuffer || batch.decal != previous->decal)
+            glDepthMask(batch.zBuffer && !batch.decal ? GL_TRUE : GL_FALSE);
+        /* A car's pixels leave 0 in the picture's alpha, everything else adds
+         * its own to what is there: the shadows of what stands by the road are
+         * not cast by the cars, which have their own (postProcess) -- and a
+         * car's soft shadow, drawn over the road, keeps the road's 1 under it
+         * (written as its own faint alpha it was taken for a car, and its rim
+         * stood out light inside the shadow of a wall). */
+        if (!previous || batch.alphaBlend != previous->alphaBlend || batch.car != previous->car
+            || batch.decal != previous->decal)
         {
-            const GLenum alphaSource = batch.car ? GL_ZERO : GL_ONE;
+            const GLenum alphaSource = batch.car || batch.decal ? GL_ZERO : GL_ONE;
+            const GLenum alphaKept = batch.car ? GL_ZERO : GL_ONE;
             if (batch.alphaBlend)
-                glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, alphaSource, GL_ZERO);
+                glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, alphaSource, alphaKept);
             else
-                glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE, alphaSource, GL_ZERO);
+                glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE, alphaSource, alphaKept);
         }
         if (!previous || batch.chromaKey != previous->chromaKey)
             glUniform1i(m_locations.chromaKey, batch.chromaKey ? 1 : 0);

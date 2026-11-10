@@ -152,6 +152,12 @@ void sunShadows(float strength, const float sun[3], const float up[3], float sca
         s_directRenderer->setSunShadows(strength, sun, up, scaleX, scaleY, centreX, centreY);
 }
 
+void raceView(bool race)
+{
+    if (s_directRenderer)
+        s_directRenderer->setRaceView(race);
+}
+
 void colourGrade(float red, float green, float blue, float saturation, float contrast)
 {
     if (s_directRenderer)
