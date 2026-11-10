@@ -6,7 +6,11 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 ### Graphics/immersion
 
 - [ ] More realistic snow/mud/ground and finer particles that react to speed
-  (density/height/profile reaction) and fall with gravity.
+  (density/height/profile reaction) and fall with gravity. More realistic and
+  desk spark particles. Currently sparks are triggerd on crash with metal/rock
+  objects and they'rej just a few straight lines. Make them denser depending on
+  speed of impact, die off gradually and desker at the impact point, then
+  spread.
 - [x] Road texture looks too blocky and fake, it shoul be more realistic and a
   bit smoother but still detailed some.
   - Done: mipmaps made for every texture, trilinear + 8x anisotropic
@@ -47,6 +51,9 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 - [x] Haze: fog worked out per pixel with a sky-coloured gradient instead of a flat fog colour gives more depth for almost nothing.
   - Done: `NFS_HAZE`, `NFS_BLOOM`, `NFS_GRADE`, `NFS_AA` (FXAA), each on by
     default, `0` for off. Next: in the game's Graphics menu.
+- [ ] Texture rework. Inspect the texture assets and rework them so that they
+  are of high quality, then bake them in game again. This can include grass,
+  buildings, desert, snow, dirt, fences, trees, etc.
 
 ### Races/locations
 
@@ -133,15 +140,19 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   slider will still be normal and agressive but we can slide in between to
   adjust opponent AI)
 
-### Driving
+### Driving/Gameplay
 - [ ] Nitro and nitro UI. However if you add nitro, opponents also need to know
   how to use it (e.g. to prevent them from staying inside the turn or blast it
   when they see enough straight road ahead, however they need to take crashes
-  into account too). Note that if you nitro, it should be right of the speed
-  meter as a vertical bar if gauge is selected to be on the top part of screen,
+  into account too). Note that if you draw the nitro ui, it should be seamlessly integrated 
+  in the HUD; it should be right of the speed
+  meter as a vertical  bottle-shaped bar if gauge is selected to be on the top part of screen,
   else as an outer circle around it.
+- [ ] More means of police to chase you; e.g. at higher heat levels; helicopter
 
-### Music
+### Music/Sound
+- [ ] Sound quality is great and sound works well but volume is still too
+  low/supressed.
 - [ ] In a brief popup in whosse visual style is consistent with game, show
   cyrretnly plating song when it starts and then slide the popup away.
 - [ ] Music control: what tracks play in game, skip current track button.
