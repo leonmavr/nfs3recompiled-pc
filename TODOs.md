@@ -81,8 +81,23 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     or the other half of the road at a fork's wall), then reverses on a timer
     collisions cannot cancel, and after three tries is put back on the road at
     once instead of after half a minute; clumps come apart (`NFS_AI_TUNE`).
-  - [ ] Next: forks are only handled once a car has hit the wall; choosing the
+  - [x] Next: forks are only handled once a car has hit the wall; choosing the
     branch ahead of time needs the track's fork data read.
+    - Done: each track node's word at +0xc is the road across it in slices; a
+      gap in it is a split (fork, island, pillar). Opponents look ~2.5 s
+      ahead and, if their line runs into a gap, keep to the nearer way round
+      until past it. A car that does hit something now steps a few metres
+      aside (twice) before reversing, instead of crossing to the far edge.
+    - Also fixed: the "car ahead/behind" check read the wrong field (+0x130,
+      a direction, not the position, +0x98) and saw nothing real.
+- [x] Opponent signaling: opponents currently only hit horn. when an opponent is stuck behind player (not other
+  opponents) for some time (like 2 sec) slipstreaming player, he aggressively
+  switches headlines between normal and full scale a view times before going
+  back to default headlight scale. Then waits a few more sec (3 sec) and if
+  still behind player, repeat.
+  - Done: 2 s held up right behind the player (3-16 m, same lane, wanting to
+    go faster, no other car in between) -> four quick flashes to full beam
+    (+0x660) and back; 3 s later, still there, again. Not in network races.
 
 ### UI
 - [ ] Currently the sides of screen are padded with black as the game was made
@@ -91,3 +106,13 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   without however stetching/scaling things sideways.
 - [ ] Add those added graphics enhancements in graphics menu in game (e.g. as
   toggleable)
+
+### Driving
+- [ ] Nitro and nitro UI. However if you add nitro, opponents also need to know
+  how to use it (e.g. to prevent them from staying inside the turn or blast it
+  when they see enough straight road ahead, however they need to take crashes
+  into account too).
+
+### Music
+- [ ] In a brief popup in whosse visual style is consistent with game, show
+  cyrretnly plating song when it starts and then slide the popup away.

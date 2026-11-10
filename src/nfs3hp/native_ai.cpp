@@ -103,6 +103,12 @@ struct Opponent
     float wantWritten = 0.0f;    // the aim [+0x7b0] as the port last left it
     float avoidLateral = 0.0f;   // the line it keeps to, across the road
     float heading = 0.0f;        // the last heading error aiHeading worked out
+    x86::sreg32 forkPast = -1;   // keeping off a split in the road till past this node, or -1
+    x86::sreg32 behindFrom = -1; // since when it has been held up behind the player, or -1
+    x86::sreg32 behindLast = -1; // the last tick it was
+    x86::sreg32 flashFrom = -1;  // since when it has been flashing its lights, or -1
+    x86::reg32 flashKept = 0;    // its lights, [+0x660], as they were before
+    float behindWait = 2.0f;     // seconds held up before it flashes
 };
 Opponent s_opponents[kMaxCars];
 
@@ -153,7 +159,7 @@ const Driver& driverOf(win32::WinApplication* app, x86::reg32 car)
     return kDrivers[slot < sizeof kDrivers / sizeof kDrivers[0] ? slot : 0];
 }
 
-/* What is around a car, from the cars' positions (+0x130) against its own
+/* What is around a car, from the cars' positions (+0x98) against its own
  * heading (+0xd8, the forward row of its matrix): another car nose to tail
  * in front of it, or one right behind it that reversing would back into. */
 struct Surroundings
@@ -167,8 +173,8 @@ struct Surroundings
 Surroundings around(win32::WinApplication* app, x86::reg32 car, int self)
 {
     Surroundings result;
-    const float px = app->getMemory<float>(car + 0x130), py = app->getMemory<float>(car + 0x134),
-                pz = app->getMemory<float>(car + 0x138);
+    const float px = app->getMemory<float>(car + 0x98), py = app->getMemory<float>(car + 0x9c),
+                pz = app->getMemory<float>(car + 0xa0);
     const float fx = app->getMemory<float>(car + 0xd8), fy = app->getMemory<float>(car + 0xdc),
                 fz = app->getMemory<float>(car + 0xe0);
     const float rx = app->getMemory<float>(car + 0xc0), ry = app->getMemory<float>(car + 0xc4),
@@ -178,9 +184,9 @@ Surroundings around(win32::WinApplication* app, x86::reg32 car, int self)
         if (k == self)
             continue;
         const x86::reg32 other = kCars + kCarSize * x86::reg32(k);
-        const float dx = app->getMemory<float>(other + 0x130) - px;
-        const float dy = app->getMemory<float>(other + 0x134) - py;
-        const float dz = app->getMemory<float>(other + 0x138) - pz;
+        const float dx = app->getMemory<float>(other + 0x98) - px;
+        const float dy = app->getMemory<float>(other + 0x9c) - py;
+        const float dz = app->getMemory<float>(other + 0xa0) - pz;
         const float along = dx * fx + dy * fy + dz * fz;
         const float across = dx * rx + dy * ry + dz * rz;
         if (!(across > -2.6f && across < 2.6f))
@@ -210,6 +216,242 @@ void backOff(win32::WinApplication* app, x86::reg32 car, x86::sreg32 tick, float
     app->getMemory<x86::reg8>(car + 0x620) = x86::reg8(app->getMemory<x86::reg8>(car + 0x620) | 0x40);
 }
 
+/* Splits in the road, ahead of time.  Each track node's word at +0xc is the
+ * road across it in slices, a bit to each: set where there is road to drive
+ * on, the lowest set bit at the right-hand edge ([node+0x20] across) and the
+ * highest at the left-hand one ([+0x1c], the negative side of [car+0x7b8]).
+ * Most nodes are one run of set bits; where the road splits -- a fork, an
+ * island, a pillar between the two ways -- there is a gap in it (the game's
+ * camera looks for just that, sub_423fe0, and the opponents never did).  So
+ * every opponent looks a couple of seconds down the road, and when the line
+ * it is aiming for runs into the gap it picks the nearer way round and keeps
+ * to it till it is past. */
+struct RoadAcross
+{
+    unsigned mask = 0;
+    int lo = 0, hi = -1;
+    float left = 0.0f, right = 0.0f, width = 0.0f;   // width: of a slice
+    bool split() const
+    {
+        if (hi < lo)
+            return false;
+        const unsigned run = ((2u << hi) - 1u) & ~((1u << lo) - 1u);
+        return (mask & run) != run;
+    }
+    int sliceAt(float lateral) const
+    {
+        const int k = hi - int((lateral + left) / width);
+        return k < lo ? lo : k > hi ? hi : k;
+    }
+    float edgeOf(int slice) const { return -left + float(hi - slice) * width; }  // its left-hand edge
+};
+
+RoadAcross roadAcross(win32::WinApplication* app, x86::sreg32 node)
+{
+    RoadAcross road;
+    const x86::reg32 record = app->getMemory<x86::reg32>(0x5dd948) + x86::reg32(node) * 0x24;
+    road.mask = app->getMemory<x86::reg16>(record + 0xc);
+    road.left = float(x86::sreg32(app->getMemory<x86::reg32>(record + 0x1c))) / 65536.0f;
+    road.right = float(x86::sreg32(app->getMemory<x86::reg32>(record + 0x20))) / 65536.0f;
+    for (int k = 0; k < 16; ++k)
+        if (road.mask >> k & 1u)
+        {
+            if (road.hi < road.lo)
+                road.lo = k;
+            road.hi = k;
+        }
+    if (road.hi >= road.lo)
+        road.width = (road.left + road.right) / float(road.hi - road.lo + 1);
+    if (!(road.width > 0.5f))
+        road.hi = road.lo - 1;
+    return road;
+}
+
+float nodeDistance(win32::WinApplication* app, x86::sreg32 a, x86::sreg32 b)
+{
+    const x86::reg32 nodes = app->getMemory<x86::reg32>(0x5dd948);
+    float sum = 0.0f;
+    for (int q = 0; q < 3; ++q)
+    {
+        const float d = float(x86::sreg32(app->getMemory<x86::reg32>(nodes + x86::reg32(a) * 0x24 + q * 4))
+                              - x86::sreg32(app->getMemory<x86::reg32>(nodes + x86::reg32(b) * 0x24 + q * 4))) / 65536.0f;
+        sum += d * d;
+    }
+    return SDL_sqrtf(sum);
+}
+
+void forkAhead(win32::WinApplication* app, x86::reg32 car, int i, x86::sreg32 node, x86::sreg32 tick)
+{
+    Opponent& o = s_opponents[i];
+    const x86::sreg32 count = x86::sreg32(app->getMemory<x86::reg32>(0x5dd940));
+    if (count <= 0 || node < 0 || node >= count)
+        return;
+    auto ahead = [&](x86::sreg32 from, x86::sreg32 to) {   // nodes from `from` on to `to`
+        const x86::sreg32 d = to - from;
+        return d < -count / 2 ? d + count : d > count / 2 ? d - count : d;
+    };
+    if (o.forkPast >= 0)
+    {
+        if (ahead(node, o.forkPast) >= 0 && tick < o.avoidUntil)
+            return;
+        o.forkPast = -1;
+        o.avoidUntil = -1;
+    }
+    if (o.avoidUntil >= 0)
+        return;   // stepping out of trouble already (unstick)
+    const float forward = app->getMemory<float>(car + 0x4f4);
+    const float reach = SDL_max(30.0f, (forward < 0.0f ? -forward : forward) * 2.5f);
+    const float half = app->getMemory<float>(car + 0x114);
+    const float aim = app->getMemory<float>(car + 0x7b4);
+    float along = 0.0f;
+    x86::sreg32 previous = node;
+    for (int step = 0; step <= 40 && along <= reach; ++step)
+    {
+        const x86::sreg32 m = (node + step) % count;
+        along += step ? nodeDistance(app, previous, m) : 0.0f;
+        previous = m;
+        const RoadAcross road = roadAcross(app, m);
+        if (!road.split())
+            continue;
+        // The slices its car would cover, there.
+        const int from = road.sliceAt(aim + half), to = road.sliceAt(aim - half);
+        bool clear = true;
+        for (int k = from; k <= to; ++k)
+            clear = clear && (road.mask >> k & 1u);
+        if (clear)
+            return;
+        // The nearer run of road, and in it the line nearest the one it had.
+        float best = 0.0f, bestOff = 1e9f;
+        for (int k = road.lo; k <= road.hi; ++k)
+        {
+            if (!(road.mask >> k & 1u) || (k > road.lo && (road.mask >> (k - 1) & 1u)))
+                continue;
+            int top = k;
+            while (top < road.hi && (road.mask >> (top + 1) & 1u))
+                ++top;
+            const float low = road.edgeOf(top) + half * 1.3f, high = road.edgeOf(k) + road.width - half * 1.3f;
+            const float line = high > low ? (aim < low ? low : aim > high ? high : aim) : (road.edgeOf(top) + road.edgeOf(k) + road.width) * 0.5f;
+            const float off = line > aim ? line - aim : aim - line;
+            if (off < bestOff)
+            {
+                bestOff = off;
+                best = line;
+            }
+        }
+        if (bestOff > 1e8f)
+            return;
+        x86::sreg32 past = m;
+        for (int k = 0; k < 40 && roadAcross(app, (past + 1) % count).split(); ++k)
+            past = (past + 1) % count;
+        o.avoidLateral = best;
+        o.avoidUntil = tick + 8 * kTicksPerSecond;
+        o.forkPast = past;
+        if (aiTracing())
+            SDL_Log("[AI] car %d at node %d: road splits at %d..%d (%.0f m on), aiming %.1f: keeps to %.1f", i, int(node),
+                    int(m), int(past), double(along), double(aim), double(best));
+        return;
+    }
+}
+
+/* Flashing the player out of the way.  An opponent held up right behind the
+ * player -- in its slipstream, wanting to go faster than it is -- for two
+ * seconds flicks its lights between full beam and what they were, [+0x660]
+ * (1 dipped, 2 full beam, 0 off: set at the start of the race by
+ * sub_42bcb0 and not touched again for an opponent), four times, then waits;
+ * three seconds on and still held up, it does it again. */
+constexpr x86::sreg32 kFlashTicks = 6;   // each on or off
+constexpr int kFlashes = 4;
+
+void signal(win32::WinApplication* app, x86::reg32 car, int i)
+{
+    Opponent& o = s_opponents[i];
+    const x86::sreg32 tick = x86::sreg32(app->getMemory<x86::reg32>(kRaceClock));
+    if (o.flashFrom >= 0)
+    {
+        const x86::sreg32 phase = (tick - o.flashFrom) / kFlashTicks;
+        if (phase >= 0 && phase < 2 * kFlashes)
+        {
+            const x86::reg32 bright = o.flashKept == 2 ? 1 : 2;
+            app->getMemory<x86::reg32>(car + 0x660) = phase % 2 == 0 ? bright : o.flashKept;
+            return;
+        }
+        app->getMemory<x86::reg32>(car + 0x660) = o.flashKept;
+        o.flashFrom = -1;
+        o.behindFrom = tick;
+        o.behindWait = 3.0f;
+    }
+    if (tick < x86::sreg32(app->getMemory<x86::reg32>(car + 0x65c)))
+        return;
+    const float px = app->getMemory<float>(car + 0x98), py = app->getMemory<float>(car + 0x9c),
+                pz = app->getMemory<float>(car + 0xa0);
+    const float fx = app->getMemory<float>(car + 0xd8), fy = app->getMemory<float>(car + 0xdc),
+                fz = app->getMemory<float>(car + 0xe0);
+    const float rx = app->getMemory<float>(car + 0xc0), ry = app->getMemory<float>(car + 0xc4),
+                rz = app->getMemory<float>(car + 0xc8);
+    auto relative = [&](x86::reg32 other, float& along, float& across) {
+        const float dx = app->getMemory<float>(other + 0x98) - px, dy = app->getMemory<float>(other + 0x9c) - py,
+                    dz = app->getMemory<float>(other + 0xa0) - pz;
+        along = dx * fx + dy * fy + dz * fz;
+        across = dx * rx + dy * ry + dz * rz;
+    };
+    // The player's car, [0x5efa48]; with two on one screen ([0x6fd3b0] 1) the
+    // second's too, the nearer of them in front.
+    float along = 1e9f, across = 0.0f;
+    x86::reg32 target = 0;
+    for (x86::reg32 p = 0; p < (app->getMemory<x86::reg32>(0x6fd3b0) == 1 ? 2u : 1u); ++p)
+    {
+        const x86::reg32 player = app->getMemory<x86::reg32>(0x5efa48 + p * 4);
+        float a = 0.0f, c = 0.0f;
+        if (!player || player == car)
+            continue;
+        relative(player, a, c);
+        if (!target || (a > 0.0f && (along < 0.0f || a < along)))
+        {
+            target = player;
+            along = a;
+            across = c;
+        }
+    }
+    if (!target)
+        return;
+    const float speed = app->getMemory<float>(car + 0x4f4);
+    const float want = app->getMemory<float>(car + 0x7b0);
+    const float facing = fx * app->getMemory<float>(target + 0xd8) + fy * app->getMemory<float>(target + 0xdc)
+                         + fz * app->getMemory<float>(target + 0xe0);
+    bool behind = along > 3.0f && along < 16.0f && across > -2.5f && across < 2.5f && facing > 0.9f
+                  && speed > 10.0f && want > speed + 1.0f && app->getMemory<x86::reg32>(car + 0x7d4) != 1;
+    // Held up by the player, not by another opponent in between.
+    for (int k = 0; behind && k < 8; ++k)
+    {
+        const x86::reg32 other = kCars + kCarSize * x86::reg32(k);
+        if (k == i || other == target)
+            continue;
+        float a = 0.0f, c = 0.0f;
+        relative(other, a, c);
+        if (a > 0.0f && a < along && c > -2.5f && c < 2.5f)
+            behind = false;
+    }
+    if (behind)
+    {
+        if (o.behindFrom < 0)
+            o.behindFrom = tick;
+        o.behindLast = tick;
+    }
+    else if (o.behindFrom >= 0 && tick - o.behindLast > kTicksPerSecond / 2)
+    {
+        o.behindFrom = -1;
+        o.behindWait = 2.0f;
+    }
+    if (behind && o.behindFrom >= 0 && float(tick - o.behindFrom) >= o.behindWait * kTicksPerSecond)
+    {
+        o.flashKept = app->getMemory<x86::reg32>(car + 0x660);
+        o.flashFrom = tick;
+        if (aiTracing())
+            SDL_Log("[AI] car %d held up %.1fs behind the player (%.1f m): flashes its lights", i,
+                    double(tick - o.behindFrom) / kTicksPerSecond, double(along));
+    }
+}
+
 void unstick(win32::WinApplication* app, x86::reg32 car, int i)
 {
     Opponent& o = s_opponents[i];
@@ -218,11 +460,14 @@ void unstick(win32::WinApplication* app, x86::reg32 car, int i)
     // A new race, or the car put back somewhere else: start over.
     if (tick < o.lastTick || tick - o.lastTick > kTicksPerSecond || node < o.node - 30 || node > o.node + 30)
     {
+        if (o.flashFrom >= 0 && tick >= o.lastTick)
+            app->getMemory<x86::reg32>(car + 0x660) = o.flashKept;
         o = Opponent();
         o.node = node;
         o.progressAt = tick;
     }
     o.lastTick = tick;
+    forkAhead(app, car, i, node, tick);
     /* After getting stuck it keeps to another line across the road for a
      * while (unstick, below): the lane the game gives it, [+0x7b4], set each
      * frame before sub_408870 steers it there. */
@@ -279,13 +524,10 @@ void unstick(win32::WinApplication* app, x86::reg32 car, int i)
         return;
     }
     /* In a clump the one in front drives away and the ones behind make room:
-     * each steps aside from the car ahead of it, and backs off only when
-     * there is nothing right behind it to back into.  The road runs from
+     * each steps aside from the car ahead of it before it backs off.  The road runs from
      * -left to right across ([node+0x1c] and [+0x20], 16.16), the car half as
      * wide as [+0x114]. */
     const Surroundings near = around(app, car, i);
-    if (near.blockedBehind && !near.blockedAhead && o.tries < 2)
-        return;
     const x86::reg32 record = app->getMemory<x86::reg32>(0x5dd948) + x86::reg32(node) * 0x24;
     const float left = float(x86::sreg32(app->getMemory<x86::reg32>(record + 0x1c))) / 65536.0f;
     const float right = float(x86::sreg32(app->getMemory<x86::reg32>(record + 0x20))) / 65536.0f;
@@ -297,22 +539,34 @@ void unstick(win32::WinApplication* app, x86::reg32 car, int i)
             return;
         o.avoidLateral = target < lowest ? lowest : target > highest ? highest : target;
         o.avoidUntil = tick + 4 * kTicksPerSecond;
+        o.forkPast = -1;
         if (aiTracing())
             SDL_Log("[AI] car %d %s at node %d across %.1f (road %.1f..%.1f): keeps to %.1f", i, why, int(node),
                     double(lateral), double(-left), double(right), double(o.avoidLateral));
     };
-    if (o.avoidUntil < 0)
+    if (o.avoidUntil < 0 || o.forkPast >= 0)
     {
         if (near.blockedAhead)
             keepTo(lateral + (near.aheadAcross > 0.0f ? -1.0f : 1.0f) * 4.0f * half, "behind a car");
         else if (turned < 0.12f)
-            // Facing the right way, nothing ahead but the road itself: the wall
-            // between the two ways of a fork.  The other half of the road.
-            keepTo(lateral >= (right - left) * 0.5f ? -left : right, "against a wall");
+        {
+            /* Facing the right way, nothing ahead but the road itself: a wall,
+             * a post, the island between the two ways of a fork that the
+             * look ahead (forkAhead) did not know of.  A few metres aside,
+             * to where there is more road first, the other way next try --
+             * not across to the far edge, which on a wide stretch is the
+             * kerb and the buildings. */
+            const bool roomier = lateral < (right - left) * 0.5f;
+            const bool toRight = o.tries % 2 == 0 ? roomier : !roomier;
+            keepTo(lateral + (toRight ? 1.0f : -1.0f) * 5.0f * half, "against a wall");
+        }
     }
-    if (near.blockedAhead && near.blockedBehind && o.tries < 2)
+    if (o.tries < 2 && (near.blockedAhead || near.blockedBehind || turned < 0.3f))
     {
-        // Hemmed in: only the step aside, until it has had a chance to work.
+        /* The step aside first, twice, and backing off only when that has
+         * not worked: reversing at once, in a crowd or in the wet, only
+         * backs into the next car or spins on the spot (the races with it
+         * so came out slower). */
         ++o.tries;
         o.progressAt = tick + kTicksPerSecond;
         return;
@@ -340,7 +594,10 @@ bool aiDrive(win32::WinApplication* app, x86::CPU& cpu)
     if (i < 0)
         return false;
     if (aiTuned() && !networkRace(app))
+    {
         unstick(app, car, i);
+        signal(app, car, i);
+    }
     if (aiTracing())
     {
         Opponent& o = s_opponents[i];

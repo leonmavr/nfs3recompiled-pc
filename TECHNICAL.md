@@ -552,14 +552,32 @@ watches each opponent's progress along the track (its node, `+0x1c`). One that
 has stopped getting anywhere -- slow at the same node, or turned well away from
 the road -- first steers for another line across the road (the lane the game
 gives it, `+0x7b4`, held for four seconds): away from the car ahead of it if
-there is one (from the cars' positions, `+0x130`, against its own axes), or to
-the other half of the road if there is only road ahead -- the wall between the
-two ways of a fork. If that does not free it, it reverses on the game's own
-reverse with a time to stop at, which collisions do not cancel, each driver
-for its own time so a clump comes apart. The one in front of a clump just
-drives off; one with a car right behind it does not reverse into it. Still
-stuck after three tries, the game's own counters are run up so that it is put
-back on the road at once.
+there is one (from the cars' positions, `+0x98`, against its own axes), or a
+few metres aside, to the roomier side first, if there is only road ahead -- a
+post, a wall, the island between the two ways of a fork. It gets two chances
+at that before it reverses, on the game's own reverse with a time to stop at,
+which collisions do not cancel, each driver for its own time so a clump comes
+apart; reversing straight away, in a crowd or in the wet, only backed into the
+next car. Still stuck after three tries, the game's own counters are run up so
+that it is put back on the road at once.
+
+Splits ahead are seen before they are hit. Each track node (`[0x5dd948]`, 36
+bytes) has at `+0xc` a word that is the road across it in slices, a bit each,
+set where there is road: the lowest set bit at the right-hand edge (`+0x20`),
+the highest at the left-hand one (`+0x1c`), evenly between. Most nodes are one
+run of set bits; a fork, an island or a pillar is a gap in it (the game's
+camera looks for exactly that, `sub_423fe0`; its opponents never did). Each
+opponent looks about two and a half seconds down the road (`forkAhead`), and
+when the line it aims for would cover a gap it keeps to the nearer way round,
+as close to its line as that leaves room for, until it is past.
+
+Held up right behind the player -- 3 to 16 m behind, in the same lane, facing
+the same way, wanting to go faster than it is, with no other car in between --
+for two seconds, an opponent flashes its lights (`signal`): its headlights,
+`[car+0x660]` (0 off, 1 dipped, 2 full beam; set at the start of the race by
+`sub_42bcb0` and left alone after for an opponent), flick to full beam and
+back four times, about a tenth of a second each, then go back as they were.
+Three seconds on and still held up, it does it again.
 
 A notch harder: every opponent's engine pull (`aiPull`) is times
 `NFS_AI_PACE` (1.06), and the speed it aims for at each point of the track
@@ -1231,9 +1249,9 @@ from the phone; the rest matter for a desktop run.
 | *(release)* | | A release build writes nothing to the log and takes none of these flags: the native code is built with `NFS_RELEASE` (log priority critical, SDL's direct Android logging compiled out through `android/app/jni/sdl_quiet.h`), the Java side logs through `AppLog`/`SDLLog` only when `BuildConfig.DEBUG`. Use the debug build (`-Pandroid10`) for diagnostics. |
 | `NFS_FPU_EXTENDED` | on | Races at the x87's extended precision, as the Modern Patch runs them; `0` races in single precision, as the original (see The x87's precision). Every player of a network race needs the same. A debug build takes it from a launch: `adb shell am start -n dev.nfs3hp.port/.SplashActivity --ez fpu_single_races true`. |
 | `NFS_NATIVE_AI` | on | `0` runs the generated sub_4064f0 and sub_4070c0 instead of their decompiled C++ (`src/nfs3hp/native_ai.h`). A debug build takes it from a launch: `--ez native_ai_off true`. |
-| `NFS_AI_TUNE` | on | `0`: the opponents drive as the game has them -- no getting unstuck, no characters, no extra pace (The opponents' driving, tuned). |
+| `NFS_AI_TUNE` | on | `0`: the opponents drive as the game has them -- no getting unstuck, no looking ahead for splits, no flashing, no characters, no extra pace (The opponents' driving, tuned). |
 | `NFS_AI_PACE` | `1.06` | How much harder the opponents pull (their aim for speed times half the difference), 0.5 to 2; `1` the game's difficulty. |
-| `NFS_AI_TRACE` | off | `1` logs each opponent once a second and every step it takes to get unstuck (`[AI]`). |
+| `NFS_AI_TRACE` | off | `1` logs each opponent once a second, every step it takes to get unstuck, every split it steers round and every time it flashes the player (`[AI]`). |
 | `NFS_NET_PORT` | `9803` | TCP port of network races, as the Modern Patch has it; the launcher's Network screen offers the original's `1030`. |
 | `NFS_NET_TRACE` | off | `1` (extra `net_trace`) writes a network race into the log: EA's comm library events and packet sends (`[COMM]`), up to 400 datagrams per socket instead of 16 (`[NET]`), and each new indirect call target once per thread after the IPX transport opens (`[CALL]`). For finding where two machines stop on the way into a race. |
 | `NFS_FE_NATIVE` | on | `0` leaves every hooked decompiled menu function, the screens' and the engine's, to the generated code (see Decompiled menus); the main menu, what it calls of the menu loop and the dialogs, and the controls' screens are native whole and stay native. |
