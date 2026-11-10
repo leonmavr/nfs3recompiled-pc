@@ -33,8 +33,16 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     opaque surfaces (`NFS_OBJECT_DETAIL`, 0.3).
   - [ ] Next: ground seen at a grazing angle is still the GPU's anisotropic
     blur; real detail there needs higher-resolution track textures.
-- [ ] More detailed car models/less blocky-looking in races and better paint
+- [x] More detailed car models/less blocky-looking in races and better paint
   properties. Maybe like this: Car paint: tag car-body triangles in the native car drawing code. Then add an angle-based shine and a sharper highlight curve on top of the game’s existing reflection map.
+  - Done (paint): each reflecting vertex's facing, from the reflection's own
+    view-space normals, rides with the vertex; the reflection pass is shaped
+    by it -- weaker face-on, stronger at the edges, sharper highlights
+    (`NFS_CAR_SHINE`).
+  - [ ] Next (models): the meshes are the game's own; less blocky needs new
+    or subdivided models (smooth-normal subdivision of car.fce at load).
+- [x] Bug: at night the headlights' pool on the road had a white noise over
+  it. Done: the world's grain (`NFS_OBJECT_DETAIL`) is kept off additive draws.
 - [ ] Whole-image effects in the final blit: 2–4× anti-aliasing, a light bloom on headlights and sun, and a per-track colour grade. Each is cheap on desktop and can be turned off for weaker machines.
 - [ ] Haze: fog worked out per pixel with a sky-coloured gradient instead of a flat fog colour gives more depth for almost nothing.
 
@@ -141,3 +149,7 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 - [ ] Add one more game mode other than single player, hot pursuit, etc called
   Career. There we race, unlock cars, earn money, get body damage on car, fix
   car, etc.
+
+### Performance
+- [ ] Races take quite long to load by defaul. Find out if you and reduce
+  loading times by caching anything etc.

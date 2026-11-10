@@ -66,6 +66,8 @@ bool extendedRaces();
 x86::reg32 mirrorAsMain(x86::reg32 kind);
 double mirrorCarScale(double scale);
 
+static void noteCarFacing(win32::WinApplication* app, x86::reg32 vertices, x86::reg32 turned, x86::reg32 count);  // below
+
 namespace
 {
 
@@ -727,6 +729,7 @@ void envMapCoordsNative(win32::WinApplication* app, x86::CPU& cpu)
         compared = LastWideCompare();
         envMapLoop<NearestMath>(app, count, turned, vertices, ebx, compared);
     }
+    noteCarFacing(app, vertices, turned, count);
     const x86::reg32 in = turned + count * 0xc;
     const x86::reg32 out = vertices + count * 0x20;
 
@@ -765,6 +768,42 @@ struct CarVertexRange
     float minX, minY, maxX, maxY;
 };
 static std::vector<CarVertexRange> s_carVertices;
+
+/* Port: how squarely each of a car's reflecting vertices faces the view, as
+ * sub_49db70 turns its normal into the view for the reflection's sphere map
+ * (|z| of the turned normal): a byte, 1 edge-on to 255 face-on, 0 for none.
+ * THRASH's drawing passes it with the vertex (thrashBatchVertex), and the
+ * shader shapes the car's reflection by it (thrashrenderer.cpp, u_carShine).
+ * Kept with the frame's other car vertices, and cleared with them. */
+struct CarFacingRange
+{
+    x86::reg32 first, end;
+    std::vector<x86::reg8> facing;
+};
+static std::vector<CarFacingRange> s_carFacing;
+
+static void noteCarFacing(win32::WinApplication* app, x86::reg32 vertices, x86::reg32 turned, x86::reg32 count)
+{
+    if (s_carFacing.size() >= 256 || count == 0 || count > 0x10000)
+        return;
+    CarFacingRange range{ vertices, vertices + count * 0x20, {} };
+    range.facing.resize(count);
+    for (x86::reg32 k = 0; k < count; ++k)
+    {
+        const float z = app->getMemory<float>(turned + k * 0xc + 8);
+        const float facing = z < 0.0f ? -z : z;
+        range.facing[k] = x86::reg8(1 + int(std::min(facing, 1.0f) * 254.0f + 0.5f));
+    }
+    s_carFacing.push_back(std::move(range));
+}
+
+x86::reg8 carFacing(x86::reg32 vertex)
+{
+    for (auto it = s_carFacing.rbegin(); it != s_carFacing.rend(); ++it)
+        if (vertex >= it->first && vertex < it->end && (vertex - it->first) % 0x20 == 0)
+            return it->facing[(vertex - it->first) / 0x20];
+    return 0;
+}
 
 bool isCarVertex(x86::reg32 vertex)
 {
@@ -819,6 +858,7 @@ bool carSunNear(win32::WinApplication* app, float x, float y, float& sunX, float
 void carVerticesDone()
 {
     s_carVertices.clear();
+    s_carFacing.clear();
     win32::glide2x::carSurface(false);
 }
 

@@ -39,6 +39,7 @@ namespace nfs3hp
 // native_vertices.cpp: whether a vertex is one of a car's this frame, and
 // where the sun is from the car nearest a screen point (ports).
 bool isCarVertex(x86::reg32 vertex);
+x86::reg8 carFacing(x86::reg32 vertex);
 bool carSunNear(win32::WinApplication* app, float x, float y, float& sunX, float& sunZ);
 
 win32::ThrashRenderer::Corner thrashCorner(win32::WinApplication* app, x86::reg32 in, float zScale, float wScale);
@@ -2031,6 +2032,8 @@ void thrashBatchVertex(win32::WinApplication* app, x86::reg32 in, float zScale, 
     out.color = x86::reg32(x86::reg8(colourAt(app, in, 0x12))) | x86::reg32(x86::reg8(colourAt(app, in, 0x11))) << 8
               | x86::reg32(x86::reg8(colourAt(app, in, 0x10))) << 16
               | x86::reg32(x86::reg8(colourAt(app, in, 0x13))) << 24;
+    // Port: how squarely a car's reflecting vertex faces the view, 0 for any other.
+    out.combine[2] = carFacing(in);
 }
 
 /* The same vertex as ThrashRenderer's corner: what its drawTriangle keeps of

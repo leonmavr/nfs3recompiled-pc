@@ -33,6 +33,7 @@ static const char g_vertexShader[] = ""
 "out vec4 v_color;"
 "out float v_fog;"
 "flat out vec4 v_combine;"
+"out float v_facing;"
 "uniform mat4 u_transform;"
 "uniform float u_fogW[64];"
 "uniform float u_fogTable[64];"
@@ -53,6 +54,7 @@ static const char g_vertexShader[] = ""
 "{"
 "    v_texCoord = g_texCoord;"
 "    v_combine = g_combine;"
+"    v_facing = g_combine.p;"
 "    v_color = g_color;"
 "    v_fog = g_combine.q > 0.5 ? fogFactor(g_texCoord.p) : 0.0;"
 "    gl_Position = u_transform * vec4(g_position, 1.0);"
@@ -71,6 +73,7 @@ static const char g_fragmentShader[] =
 "in vec3 v_texCoord;"
 "in vec4 v_color;"
 "flat in vec4 v_combine;"
+"in float v_facing;"
 "in float v_fog;"
 "layout (location=0) out vec4 o_color;"
 "uniform sampler2D u_texture;"
@@ -90,6 +93,7 @@ static const char g_fragmentShader[] =
 "uniform vec2 u_screen;"
 "uniform float u_surface;"
 "uniform bool u_sharpen;"
+"uniform float u_carShine;"
 /* Whether a texel is the key colour, compared as GlideRenderer compares it:
  * against the bytes its own conversion to RGBA8 gave the texel -- 565 widened
  * by a shift, 1555 scaled, 4444 and 8888 exact -- so a key matches the texels
@@ -230,6 +234,23 @@ static const char g_fragmentShader[] =
 "                }"
 "            }"
 "        }"
+"    }"
+/* A car's paint (initGl, NFS_CAR_SHINE): its reflection, the pass the game
+ * adds over the body from a sphere map, shaped by how squarely the body faces
+ * the view there (v_facing, per vertex from the reflection's own normals,
+ * 1 edge-on to 255 face-on): faint where the paint faces the eye, strong
+ * towards the edges as a lacquer reflects (Schlick's curve), and its bright
+ * parts brought up and its dim ones down, so the highlights are sharp spots
+ * and streaks instead of a wash over the whole car.  Facing interpolates
+ * smoothly across each triangle, so the shine follows the body's curves
+ * rather than its facets. */
+"    if (u_carShine > 0.0 && v_facing > 0.5) {"
+"        float facing = clamp((v_facing - 1.0) / 254.0, 0.0, 1.0);"
+"        float edge = 1.0 - facing;"
+"        float fresnel = 0.3 + 2.2 * edge * edge * edge;"
+"        vec3 r = color.rgb;"
+"        vec3 shaped = (r * 0.45 + r * r * 1.9) * fresnel;"
+"        color.rgb = mix(r, shaped, u_carShine);"
 "    }"
 "    color.rgb = mix(color.rgb, u_fogColor, clamp(v_fog, 0.0, 1.0));"
 "    if (u_gamma != 1.0)"
@@ -507,14 +528,20 @@ void ThrashRenderer::initGl()
     const char* objects = SDL_getenv("NFS_OBJECT_DETAIL");
     m_surfaceStrength = objects && *objects ? float(SDL_atof(objects)) : 0.3f;
     m_surfaceStrength = m_detailTexture ? SDL_max(0.0f, SDL_min(m_surfaceStrength, 1.0f)) : 0.0f;
+    /* And the cars' paint (NFS_CAR_SHINE, 1 by default, 0 for the game's own
+     * reflection): see u_carShine in the shader. */
+    const char* shine = SDL_getenv("NFS_CAR_SHINE");
+    m_carShine = shine && *shine ? float(SDL_atof(shine)) : 1.0f;
+    m_carShine = SDL_max(0.0f, SDL_min(m_carShine, 1.0f));
     const char* sharp = SDL_getenv("NFS_TEXTURE_SHARP");
     m_sharpen = !(sharp && SDL_strcmp(sharp, "0") == 0);
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[GFX] the world's grain %.2f; magnified textures %s", double(m_surfaceStrength),
-                m_sharpen ? "bicubic" : "bilinear");
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[GFX] the world's grain %.2f; magnified textures %s; the cars' shine %.2f",
+                double(m_surfaceStrength), m_sharpen ? "bicubic" : "bilinear", double(m_carShine));
     glUseProgram(m_program);
     glUniform1i(m_locations.detailTexture, 1);
     glUniform1f(m_locations.surface, 0.0f);
     glUniform1i(m_locations.sharpen, 0);
+    glUniform1f(m_locations.carShine, 0.0f);
     glUniform1f(m_locations.detailScale, 8.0f);
     glUniform1f(m_locations.detail, 0.0f);
     glUniform1i(m_locations.reflection, 2);
@@ -595,6 +622,7 @@ void ThrashRenderer::compileShaders(int depthBits, const char* renderer)
     m_locations.screen = glGetUniformLocation(m_program, "u_screen");
     m_locations.surface = glGetUniformLocation(m_program, "u_surface");
     m_locations.sharpen = glGetUniformLocation(m_program, "u_sharpen");
+    m_locations.carShine = glGetUniformLocation(m_program, "u_carShine");
     glUseProgram(m_program);
     glUniform1i(m_locations.texture, 0);
     float w[64];
@@ -679,9 +707,14 @@ void ThrashRenderer::flush()
     batch.detail = !m_carSurface && m_zTest && m_zBuffer && !m_chromaKey && (m_wrapS || m_wrapT);
     /* The rest of the world -- what is depth tested, the car bodies and the
      * ground's own grain apart: the track's walls, buildings, trees, fences,
-     * the grass and the rocks.  The HUD and the menus are never depth tested. */
-    batch.surface = !batch.detail && !m_carSurface && m_zTest && !m_chromaKey;
+     * the grass and the rocks.  The HUD and the menus are never depth tested.
+     * Not what is added onto the picture (alphaBlend off is GL_ONE, additive
+     * here): the headlights' pool, the glows -- light, not a surface, and a
+     * grain over it came out as a white noise lying on the road at night. */
+    batch.surface = !batch.detail && !m_carSurface && m_zTest && !m_chromaKey && m_alphaBlend;
     batch.sharpen = m_zTest && !m_chromaKey;
+    // The car's reflection: the pass added (alphaBlend off) over its body.
+    batch.carShine = m_carSurface && !m_alphaBlend;
     m_batches.push_back(batch);
 }
 
@@ -809,6 +842,8 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
             glUniform1f(m_locations.detail, batch.detail ? m_detailStrength : 0.0f);
         if (m_detailTexture && (!previous || batch.surface != previous->surface))
             glUniform1f(m_locations.surface, batch.surface ? m_surfaceStrength : 0.0f);
+        if (!previous || batch.carShine != previous->carShine)
+            glUniform1f(m_locations.carShine, batch.carShine ? m_carShine : 0.0f);
         if (!previous || batch.sharpen != previous->sharpen)
             glUniform1i(m_locations.sharpen, batch.sharpen && m_sharpen ? 1 : 0);
         if (batch.fogTable != fogTable)
@@ -1538,6 +1573,7 @@ void ThrashRenderer::drawCorners(const Corner& a, const Corner& b, const Corner&
         out[i].u = in->sow;
         out[i].v = in->tow;
         out[i].oow = in->oow;
+        out[i].combine[2] = 0;
     }
     finishTriangle(out);
 }
@@ -1566,7 +1602,11 @@ void ThrashRenderer::finishTriangle(ThrashVertex* out)
         }
     }
     for (int i = 0; i < 3; ++i)
+    {
+        const x86::reg8 facing = out[i].combine[2];  // the car's paint (thrashBatchVertex); 0 for the rest
         std::memcpy(out[i].combine, combine, sizeof combine);
+        out[i].combine[2] = facing;
+    }
     m_vertexCount += 3;
     GlideCounters& counters = GlideRenderer::counters();
     ++counters.triangles;

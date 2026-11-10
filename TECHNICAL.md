@@ -232,7 +232,29 @@ is a pixel or smaller the GPU's own levels, trilinear and anisotropic, are
 the better filter and are kept, with the two blended across the step.
 `NFS_TEXTURE_SHARP=0` is bilinear again. Ground seen at a grazing angle is
 magnified across and shrunk along at once, so it stays on the GPU's
-anisotropic filtering.
+anisotropic filtering. The grain leaves out what is added onto the picture
+(blending off, which is additive here) -- the headlights' pool, the glows: a
+grain over light lay on the road at night as a white noise.
+
+### The cars' paint
+
+A car is drawn twice: its body with its own texture, then the reflection the
+game adds over it (blending off, additive) from a sphere map, whose
+coordinates `sub_49db70` works out from each vertex's normal turned into the
+view (`envMapCoordsNative`). With those turned normals at hand, the port keeps
+how squarely each vertex faces the view -- `|z|`, a byte, 1 edge-on to 255
+face-on -- for the frame (`noteCarFacing`, `carFacing`), and THRASH's drawing
+passes it with the vertex (`thrashBatchVertex`, the vertex's spare third
+combine byte; every other vertex carries 0). In the reflection pass the shader
+shapes the reflection by it (`u_carShine`): faint where the paint faces the
+eye, strong towards the edges as a lacquer's is (a Schlick-like
+`0.3 + 2.2 (1 - facing)^3`), and its dim parts brought down and its bright
+ones up (`0.45 r + 1.9 r^2`), so the highlights are spots and streaks along
+the fenders and the deck rather than a wash over the whole car. The facing is
+interpolated across each triangle, so the shine follows the body's curves and
+not its facets. `NFS_CAR_SHINE` scales it, 1 by default; 0 is the game's own
+reflection. The models themselves are the game's: their polygon counts are
+what they are.
 
 ### Longer headlights
 
@@ -1250,6 +1272,7 @@ from the phone; the rest matter for a desktop run.
 | `NFS_ANISOTROPY` | `8` | Anisotropic filtering of the textures, at most what the GPU offers; `1` for none. |
 | `NFS_ROAD_DETAIL` | `0.35` | How much the road's and the ground's grain lightens and darkens them, 0 to 1; `0` for none. |
 | `NFS_OBJECT_DETAIL` | `0.3` | The same for the rest of the world -- walls, buildings, trees, fences, grass, rocks -- finer, on opaque texels only; `0` for none. |
+| `NFS_CAR_SHINE` | `1` | How much the cars' reflection is shaped by how the body faces the view -- sharper highlights, stronger towards the edges -- 0 to 1; `0` the game's own (The cars' paint). |
 | `NFS_TEXTURE_SHARP` | on | `0`: textures seen larger than they are drawn bilinear, as the GPU does, instead of Catmull-Rom. |
 | `NFS_HEADLIGHT_REACH`, `NFS_HEADLIGHT_WIDTH` | `2`, `1.4` | How far the headlights' patch on the road reaches and how wide it is, against the original's (0.25 to 4; `1` and `1` are the original). |
 | `NFS_SOFT_EFFECTS` | on | `0`: the headlights' pool, the wet road's light streaks and the cars' shadows as the game draws them, hard-edged. |
