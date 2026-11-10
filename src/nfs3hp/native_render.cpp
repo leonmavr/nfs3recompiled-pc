@@ -3,6 +3,7 @@
 #include "dynamic_fullscreen.h"
 #include <SDL3/SDL.h>
 #include <cmath>
+#include <winapi/glide2x.h>
 #include <cstring>
 
 /* a * b + c fused into one fma rounds once where the x87 rounds twice. */
@@ -15848,8 +15849,69 @@ bool colouredTriangles(win32::WinApplication* app, x86::CPU& cpu)
     return true;
 }
 
+/* Port: the sun as the view sees it, for the shadows the renderer casts from
+ * what stands beside the road (thrashrenderer.cpp, the whole-picture pass;
+ * NFS_OBJECT_SHADOWS).  The sky is the first thing drawn of a view (sub_47a190,
+ * the view in eax); for the frame's first, the direction towards the sun the
+ * cars are lit from ([0x55e6a0], the world's -- shadeNormalsNative lights a
+ * vertex whose normal has a positive dot with it)
+ * turned into the view by its rows (+0x44), with the projection's scale and
+ * centre ([0x56009c] .. [0x5600a8]) to bring a pixel back into the view from
+ * the depth buffer, and the player's car's up, for what lies level.  The
+ * strength is NFS_OBJECT_SHADOWS (0.45, 0 or off for none), fainter in the
+ * rain and at night as the cars' own are (NFS_SHADOW_RAIN, NFS_SHADOW_NIGHT). */
+static bool s_sunNoted = false;
+
+static float settingOr(const char* name, float fallback, float most)
+{
+    const char* value = SDL_getenv(name);
+    if (!value || !*value)
+        return fallback;
+    if (SDL_strcmp(value, "0") == 0 || SDL_strcasecmp(value, "off") == 0)
+        return 0.0f;
+    if (SDL_strcasecmp(value, "on") == 0)
+        return fallback;
+    const float parsed = float(SDL_atof(value));
+    return parsed >= 0.0f && parsed <= most ? parsed : fallback;
+}
+
+static void noteSun(win32::WinApplication* app, x86::reg32 view)
+{
+    if (s_sunNoted || !view)
+        return;
+    s_sunNoted = true;
+    const Memory m{app};
+    auto f = [&](x86::reg32 address) { return float(m.load(address)); };
+    static const float strength = settingOr("NFS_OBJECT_SHADOWS", 0.45f, 1.0f);
+    static const float rain = settingOr("NFS_SHADOW_RAIN", 0.55f, 1.0f);
+    static const float night = settingOr("NFS_SHADOW_NIGHT", 0.4f, 1.0f);
+    float amount = strength;
+    if (m.word(0x6fd4cc) != 0)
+        amount *= rain;
+    if (m.word(0x6fd4c8) != 0)
+        amount *= night;
+    const float light[3] = { f(0x55e6a0), f(0x55e6a4), f(0x55e6a8) };
+    float sun[3];
+    for (int k = 0; k < 3; ++k)
+        sun[k] = light[0] * f(view + 0x44 + 4 * k) + light[1] * f(view + 0x50 + 4 * k) + light[2] * f(view + 0x5c + 4 * k);
+    // Which way is up in the view, for what lies level: the player's car's up (+0xcc).
+    float up[3] = { 0.0f, 0.0f, 0.0f };
+    if (const x86::reg32 car = m.word(0x5efa48))
+        for (int k = 0; k < 3; ++k)
+            up[k] = f(car + 0xcc) * f(view + 0x44 + 4 * k) + f(car + 0xd0) * f(view + 0x50 + 4 * k)
+                    + f(car + 0xd4) * f(view + 0x5c + 4 * k);
+    const float length = std::sqrt(sun[0] * sun[0] + sun[1] * sun[1] + sun[2] * sun[2]);
+    if (!(length > 1e-4f) || f(0x56009c) == 0.0f || f(0x5600a0) == 0.0f || f(0xa9235c) == 0.0f)
+        amount = 0.0f;
+    else
+        for (float& v : sun)
+            v /= length;
+    win32::glide2x::sunShadows(amount, sun, up, f(0x56009c), f(0x5600a0), f(0x5600a4), f(0x5600a8));
+}
+
 bool sky(win32::WinApplication* app, x86::CPU& cpu)
 {
+    noteSun(app, cpu.eax);
     if (nativeOriginalRunning() || !nativesEnabled() || !renderNativeOn(0x47a190))
         return false;
     if (nativeChecking())
@@ -16132,8 +16194,83 @@ bool bouncers(win32::WinApplication* app, x86::CPU& cpu)
     return true;
 }
 
+/* Port: where the player's headlights are, for the renderer to light the
+ * walls, fences, trees and objects with them (thrashrenderer.cpp,
+ * u_headlight; NFS_HEADLIGHT_OBJECTS).  sub_491bc0 is asked for each car's
+ * headlight patch with the view it is drawn in (eax) and the car
+ * ([esp+0x1c], its matrix at +0xc0); for the player's car, the lamps -- two metres ahead of its
+ * centre and half a metre up, along its forward axis (+0xd8) dipped a
+ * little -- are turned into the view as sub_4bf4c0 turns a point (the rows at
+ * view+0x44, then view+0x38 added), and handed over with the projection's
+ * scale and centre ([0x56009c] .. [0x5600a8]).  Once a frame is enough; a
+ * quarter of a second without has them off (headlightsFrameDone). */
+static bool s_headlightNoted = false;
+
+static void noteHeadlight(win32::WinApplication* app, x86::CPU& cpu)
+{
+    const Memory m{app};
+    const x86::reg32 view = cpu.eax;
+    // [esp+0x1c] is the car's matrix (+0xc0), its rows right, up and forward.
+    const x86::reg32 rows = m.word(cpu.esp + 0x1c);
+    if (s_headlightNoted || !view || !rows || rows != m.word(0x5efa48) + 0xc0)
+        return;
+    const x86::reg32 car = rows - 0xc0;
+    auto f = [&](x86::reg32 address) { return float(m.load(address)); };
+    float pos[3], fwd[3], up[3];
+    for (int k = 0; k < 3; ++k)
+    {
+        pos[k] = f(car + 0x98 + 4 * k);
+        fwd[k] = f(car + 0xd8 + 4 * k);
+        up[k] = f(car + 0xcc + 4 * k);
+    }
+    float origin[3], aim[3];
+    for (int k = 0; k < 3; ++k)
+    {
+        origin[k] = pos[k] + fwd[k] * 2.0f + up[k] * 0.5f;
+        aim[k] = fwd[k] - up[k] * 0.06f;
+    }
+    float o[3], d[3];
+    for (int k = 0; k < 3; ++k)
+    {
+        o[k] = origin[0] * f(view + 0x44 + 4 * k) + origin[1] * f(view + 0x50 + 4 * k)
+               + origin[2] * f(view + 0x5c + 4 * k) + f(view + 0x38 + 4 * k);
+        d[k] = aim[0] * f(view + 0x44 + 4 * k) + aim[1] * f(view + 0x50 + 4 * k) + aim[2] * f(view + 0x5c + 4 * k);
+    }
+    float u[3];
+    for (int k = 0; k < 3; ++k)
+        u[k] = up[0] * f(view + 0x44 + 4 * k) + up[1] * f(view + 0x50 + 4 * k) + up[2] * f(view + 0x5c + 4 * k);
+    const float length = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    if (!(length > 1e-4f))
+        return;
+    for (float& v : d)
+        v /= length;
+    s_headlightNoted = true;
+    win32::glide2x::headlights(true, o, d, u, f(0x56009c), f(0x5600a0), f(0x5600a4), f(0x5600a8));
+}
+
+void headlightsFrameDone()
+{
+    // A frame with no sky drawn (a menu) casts nothing.
+    if (!s_sunNoted)
+    {
+        const float none[3] = { 0.0f, 0.0f, 0.0f };
+        win32::glide2x::sunShadows(0.0f, none, none, 1.0f, 1.0f, 0.0f, 0.0f);
+    }
+    s_sunNoted = false;
+    // Not asked for every frame: off only after a quarter of a second without.
+    static int s_framesWithout = 0;
+    s_framesWithout = s_headlightNoted ? 0 : s_framesWithout + 1;
+    if (s_framesWithout == 15)
+    {
+        const float none[3] = { 0.0f, 0.0f, 0.0f };
+        win32::glide2x::headlights(false, none, none, none, 1.0f, 1.0f, 0.0f, 0.0f);
+    }
+    s_headlightNoted = false;
+}
+
 bool roadLight(win32::WinApplication* app, x86::CPU& cpu)
 {
+    noteHeadlight(app, cpu);
     if (nativeOriginalRunning() || !singlePrecision(cpu) || cpu.flags.df || !renderNativeOn(0x491bc0))
         return false;
     if (nativeChecking())

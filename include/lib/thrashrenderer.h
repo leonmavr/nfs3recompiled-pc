@@ -66,6 +66,32 @@ public:
     void setWetRoad(float wetness) { m_wetness = wetness; }
     /* The race's colour grade (glide2x::colourGrade): a tint, a saturation and
      * a contrast, each 1 for none; the picture before its HUD is graded. */
+    /* The player's headlights in the view, and the projection (glide2x::headlights). */
+    void setHeadlights(bool on, const float origin[3], const float direction[3], const float up[3], float scaleX,
+                       float scaleY, float centreX, float centreY)
+    {
+        for (int k = 0; k < 3; ++k)
+            m_head[11 + k] = up[k];
+        m_head[0] = on ? 1.0f : 0.0f;
+        for (int k = 0; k < 3; ++k)
+        {
+            m_head[1 + k] = origin[k];
+            m_head[4 + k] = direction[k];
+        }
+        m_head[7] = scaleX; m_head[8] = scaleY; m_head[9] = centreX; m_head[10] = centreY;
+    }
+    /* The sun in the view for the shadows of what stands by the road (glide2x::sunShadows). */
+    void setSunShadows(float strength, const float sun[3], const float up[3], float scaleX, float scaleY,
+                       float centreX, float centreY)
+    {
+        m_sun[0] = strength;
+        for (int k = 0; k < 3; ++k)
+        {
+            m_sun[1 + k] = sun[k];
+            m_sun[8 + k] = up[k];
+        }
+        m_sun[4] = scaleX; m_sun[5] = scaleY; m_sun[6] = centreX; m_sun[7] = centreY;
+    }
     void setColourGrade(float red, float green, float blue, float saturation, float contrast)
     {
         m_grade[0] = red; m_grade[1] = green; m_grade[2] = blue; m_grade[3] = saturation; m_grade[4] = contrast;
@@ -130,6 +156,8 @@ private:
         bool surface;           // the rest of the world: its own, fainter grain (initGl)
         bool sharpen;           // drawn in the world: magnified bicubic (initGl)
         bool carShine;          // a car's reflection pass, shaped by its facing (initGl)
+        bool headlit;           // lit by the player's headlights in the shader (initGl)
+        bool car;               // a car's: 0 into the picture's alpha (postProcess's shadows)
     };
     friend struct ThrashDraw;
 
@@ -170,7 +198,7 @@ private:
     {
         int position, color, texCoord, combine;
         int transform, fogW, fogTable, fogColor, alphaRef, chromaKey, chromaKeyColor, gamma, wrap, levels, texture,
-            format, detail, detailTexture, detailScale, wet, reflection, screen, surface, sharpen, carShine, haze, sky;
+            format, detail, detailTexture, detailScale, wet, reflection, screen, surface, sharpen, carShine, haze, sky, headlight, headOrigin, headDir, headUp, projection, projCentre;
     } m_locations;
     unsigned int            m_detailTexture = 0;
     bool                    m_carSurface = false;   // the game thread's
@@ -188,6 +216,10 @@ private:
     void takeSky(int width, int height);
     void postProcess(const ThrashDraw& draw);
     float                   m_grade[5] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };  // the game thread's
+    float                   m_head[14] = {};        // the game thread's: on, origin, direction, projection, up
+    float                   m_headStrength = 0.0f;  // NFS_HEADLIGHT_OBJECTS
+    float                   m_sun[11] = {};         // the game thread's: strength, sun, projection, up
+    unsigned int            m_postDepth = 0, m_depthFramebuffer = 0;  // the GL thread's: the depth, copied
     float                   m_haze = 0.0f;          // NFS_HAZE
     float                   m_bloom = 0.0f;         // NFS_BLOOM
     bool                    m_gradeOn = false;      // NFS_GRADE
@@ -200,9 +232,12 @@ private:
     unsigned int            m_brightProgram = 0, m_compositeProgram = 0;
     int                     m_postW = 0, m_postH = 0;
     bool                    m_postDone = false;     // this frame's
+    bool                    m_hudBegun = false;     // this frame's
     int                     m_brightSource = -1, m_compositeSource = -1, m_compositeBright = -1,
                             m_compositePixel = -1, m_compositeBloom = -1, m_compositeGrade = -1,
-                            m_compositeTint = -1, m_compositeAa = -1;
+                            m_compositeTint = -1, m_compositeAa = -1, m_compositeDepth = -1, m_compositeShadow = -1,
+                            m_compositeSun = -1, m_compositeScale = -1, m_compositeCentre = -1, m_compositeUp = -1,
+                            m_compositeSize = -1;
     float                   m_detailStrength = 0.0f;  // NFS_ROAD_DETAIL; 0 for none
     float                   m_surfaceStrength = 0.0f; // NFS_OBJECT_DETAIL; 0 for none
     bool                    m_sharpen = false;        // NFS_TEXTURE_SHARP

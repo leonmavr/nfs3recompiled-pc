@@ -29,7 +29,9 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     `NFS_SOFT_EFFECTS`). Real shadows (shadow maps) are too costly here.
   - Done: shadows fainter in the rain/overcast and at night
     (`NFS_SHADOW_RAIN`, 0.55; `NFS_SHADOW_NIGHT`, 0.4).
-  - [ ] Next: shadows for trackside objects.
+  - [x] Next: shadows for trackside objects.
+    - Done: cast from the depth buffer towards the sun onto level ground
+      (`NFS_OBJECT_SHADOWS`, 0.45); not by cars, which have their own.
 - [x] More details environment (buildings, grass, fences, rocks, etc.) textures,
   better sampled maybe?
   - Done: textures seen larger than they are drawn Catmull-Rom instead of
@@ -62,7 +64,9 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   - Done: the headlights' patch reaches twice as far and is 1.4x as wide
     (`NFS_HEADLIGHT_REACH`, `NFS_HEADLIGHT_WIDTH`), and fades softly at its
     sides and far end instead of ending in a box (`NFS_SOFT_EFFECTS`).
-  - [ ] Next: light on trackside objects (fences, walls) from the headlights.
+  - [x] Next: light on trackside objects (fences, walls) from the headlights.
+    - Done: walls, fences, trees, buildings lit by the player's headlights in
+      the shader (`NFS_HEADLIGHT_OBJECTS`, 1.6).
 - [ ] Emissive light from environmental models that emit light. Note that this
   is partially implementned by the original game but check if it can improved
 
@@ -125,6 +129,11 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   - Done: 2 s held up right behind the player (3-16 m, same lane, wanting to
     go faster, no other car in between) -> four quick flashes to full beam
     (+0x660) and back; 3 s later, still there, again. Not in network races.
+- [ ] Better police AI; based on chased player's style, how far he is, whether
+  he is in their vision or not, adjust number of vehicles, strategy (e.g. rush
+  to catch up, ram from side, trap from sides like a block, brake/drift in front
+  of player to block him, smarter road blocks, spike strip -> not sure if we
+  have a spike strip graphic, etc)
 
 ### UI
 - [ ] Figure out how to add/create menu elements without breaking the visual
@@ -149,10 +158,17 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   meter as a vertical  bottle-shaped bar if gauge is selected to be on the top part of screen,
   else as an outer circle around it.
 - [ ] More means of police to chase you; e.g. at higher heat levels; helicopter
+- [ ] Car visual customization; vinyls (at least some simple ones, like stripes,
+  stars, checkflag flags, tribals)
+- [ ] Car visual customization; bodykits and spoiler and side vents, rims etc - these
+  also change the performance/weight distribution/traction.
 
 ### Music/Sound
-- [ ] Sound quality is great and sound works well but volume is still too
+- [x] Sound quality is great and sound works well but volume is still too
   low/supressed.
+  - Done: the plain limiter gave most of the lift back (a race is wall-to-wall
+    peaks); now the peaks are rounded off and a look-ahead limiter catches the
+    rest: a race about 4.5 dB louder on average (`NFS_VOLUME`, 3).
 - [ ] In a brief popup in whosse visual style is consistent with game, show
   cyrretnly plating song when it starts and then slide the popup away.
 - [ ] Music control: what tracks play in game, skip current track button.
@@ -166,3 +182,8 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 ### Performance
 - [ ] Races take quite long to load by defaul. Find out if you and reduce
   loading times by caching anything etc.
+
+### Infrastructure
+- [ ] Asset extractor (roads, signposts, buildings, etc) and re-injecter. Figure
+  out a way to export assets and view/edit them in a tool, or add custom assets
+  and place them in locations in games.

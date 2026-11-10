@@ -138,6 +138,20 @@ void wetRoad(float wetness)
         s_directRenderer->setWetRoad(wetness);
 }
 
+void headlights(bool on, const float origin[3], const float direction[3], const float up[3], float scaleX, float scaleY,
+                float centreX, float centreY)
+{
+    if (s_directRenderer)
+        s_directRenderer->setHeadlights(on, origin, direction, up, scaleX, scaleY, centreX, centreY);
+}
+
+void sunShadows(float strength, const float sun[3], const float up[3], float scaleX, float scaleY, float centreX,
+                float centreY)
+{
+    if (s_directRenderer)
+        s_directRenderer->setSunShadows(strength, sun, up, scaleX, scaleY, centreX, centreY);
+}
+
 void colourGrade(float red, float green, float blue, float saturation, float contrast)
 {
     if (s_directRenderer)

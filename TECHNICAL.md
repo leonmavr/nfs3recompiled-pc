@@ -269,6 +269,41 @@ road's reflection is taken -- the picture is copied and drawn back over itself
   Summit cooler, Country Woods a touch greener, Empire City flatter and
   harder; bluer and greyer at night, greyer and softer in the weather.
 
+### Headlights on what stands by the road
+
+The game lights the road with the headlights (a patch of light it lays on it,
+`sub_491bc0`) and the cars with each other's, but a wall, a fence, a tree or a
+building stood in the dark however close. The shader lights them now. Each
+frame `sub_491bc0` is asked for the player's car's patch with the view it is
+drawn in; the lamps -- two metres ahead of the car and half a metre up, along
+its forward axis dipped a little -- are turned into that view as `sub_4bf4c0`
+turns a point (`noteHeadlight`, native_render.cpp). In the shader a pixel's
+place in the view comes back from the screen and its own 1/w through the same
+projection, and its facing from how that place changes across the screen. It
+gets a cone of light from the lamps, bright on the axis and soft to the edge,
+falling off with distance, brighter on what faces them, a quarter as bright on
+what lies level (the road has its patch already); its texture's colour lit by
+that is added. Only where it is dark (by the fog's colour), only on what is
+blended over the picture, not on the cars or after the HUD has begun (the
+mirror). `NFS_HEADLIGHT_OBJECTS`, 1.6.
+
+### Shadows of what stands by the road
+
+The cars cast shadows (quads the game lays under them, stretched away from the
+sun by the port); nothing else did. Now the whole-picture pass casts them from
+everything in the depth buffer, before the HUD. The depth buffer holds 1 - 1/z
+(as the game's vertices give THRASH their depth), so each pixel's place in the
+view comes back from it and the projection; from there a ray goes towards the
+sun ([0x55e6a0], turned into the view as the sky is drawn, `noteSun`), its steps
+growing to some fifteen metres, each brought back to the screen; where the
+picture there is nearer than the ray by more than a hair and less than a
+thing's thickness, the pixel is in shadow -- the darker the nearer. Cast only
+onto what lies level (the road, the verges, the ground; a fence's own rails
+went grey), not by the cars, which have their own (their pixels leave 0 in the
+picture's alpha), and faded at the screen's edges, past which what casts may
+lie. Fainter in the rain and at night as the cars' own are.
+`NFS_OBJECT_SHADOWS`, 0.45.
+
 ### The cars' paint
 
 A car is drawn twice: its body with its own texture, then the reflection the
@@ -1342,7 +1377,9 @@ from the phone; the rest matter for a desktop run.
 | `NFS_FE_NATIVE_OFF` | unset | A list of generated functions, `sub_437e00,sub_438260`, left to the generated code while the other decompiled ones run. |
 | `NFS_NATIVE_CHECK` | off | `1` runs each native stand-in against the generated code and logs any difference (`[NATIVE]`). The polygon and car loops are compared over all of guest memory once a second. Slow, and draws some triangles twice. `clip` checks only the stand-ins of the clipping (both ways to the screen, the car's quad mesh included), the track, the effects, the car lights and detail, the objects and the vector math, every call; the small helpers called from hundreds of places are checked on every 64th call. |
 | `NFS_AUDIO_RATE` | unset | The output's own sample rate. The game mixes at 22050 Hz and SDL converts to this; a device opened at any other rate is resampled by Android, off its low-latency path. Unset, the device opens at SDL's default. |
-| `NFS_VOLUME` | `2.5` | How far the game's sound is lifted on its way to the device (`include/lib/loudness.h`, applied in `src/nfs3hp/native_sound.cpp`), 0.1 to 8. A limiter holds the lifted sound under -1 dBFS, easing back over 150 ms, so quiet passages come up by the whole lift and loud ones are held rather than clipped; `1` leaves the mix as the game made it. The Audio screen's own sliders start at 50%, and raising them is the other way up. |
+| `NFS_VOLUME` | `3` | How far the game's sound is lifted on its way to the device (`include/lib/loudness.h`, applied in `src/nfs3hp/native_sound.cpp`), 0.1 to 8. Above -6 dBFS the lifted sound's peaks are rounded off (a soft saturator), and a limiter that looks 3 ms ahead holds what is left under -1 dBFS; `1` leaves the mix as the game made it. A race comes out about -7.5 dBFS on average, against -12 with the plain limiter before. The Audio screen's own sliders start at 50%, and raising them is the other way up. |
+| `NFS_HEADLIGHT_OBJECTS` | on (`1.6`) | `0`/`off`: the player's headlights light only the road, as the game has them. A number: how bright they are on the walls, fences, trees and buildings (Headlights on what stands by the road). |
+| `NFS_OBJECT_SHADOWS` | on (`0.45`) | `0`/`off`: no shadows from what stands by the road. A number: how dark (Shadows of what stands by the road); fainter in the rain and at night by `NFS_SHADOW_RAIN` and `NFS_SHADOW_NIGHT`. |
 | `NFS_SND_MIX` | on | `0` leaves the game's sound mixer (`sub_500864` and everything under it) to its generated code instead of `src/nfs3hp/native_mixer.cpp`. `NFS_SND_CHECK=1` (debug) mixes each block natively and with the generated code and logs any byte that differs (`[SNDCHK]`); a block that calls the game, to refill a stream or end a sound, is left to the generated code. |
 | `NFS_TOUCH_STEER_LEFT` etc. | unset | Keys the touch overlay sends for steering and the pedals, so that endpoint can report them as axes. |
 | `NFS_GAMEPAD1_SOUTH` etc. | built-in defaults | What a pad button sends, as `NFS_GAMEPAD<n>_<BUTTON>`: an SDL key name (`Space`, `Return`), `axis:steer_left`, `axis:steer_right`, `axis:accelerate`, `axis:brake`, or empty for nothing. `_UI` after it is the same button in the menus. `LEFT_TRIGGER` and `RIGHT_TRIGGER` are the triggers read as buttons, empty by default; the launcher gives them the pedals' keys for a pad set to Digital. |

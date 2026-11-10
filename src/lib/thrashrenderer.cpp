@@ -95,6 +95,12 @@ static const char g_fragmentShader[] =
 "uniform bool u_sharpen;"
 "uniform float u_carShine;"
 "uniform float u_haze;"
+"uniform float u_headlight;"
+"uniform vec3 u_headOrigin;"
+"uniform vec3 u_headDir;"
+"uniform vec3 u_headUp;"
+"uniform vec2 u_projScale;"
+"uniform vec2 u_projCentre;"
 "uniform sampler2D u_sky;"
 "uniform float u_fogW[64];"
 "uniform float u_fogTable[64];"
@@ -203,6 +209,32 @@ static const char g_fragmentShader[] =
 "    vec4 color = vec4(mix(v_color.rgb, v_color.rgb * textureColor.rgb, v_combine.s),"
 "                      mix(v_color.a, v_color.a * textureColor.a, v_combine.t));"
 "    if (color.a <= u_alphaRef) discard;"
+/* The player's headlights on what stands beside and across the road (initGl,
+ * NFS_HEADLIGHT_OBJECTS): the walls, fences, trees, signs and buildings, which
+ * the game's own patch of light on the road never reached.  The pixel's
+ * place in the view comes back from the screen and its own 1/w through the
+ * projection (u_projScale, u_projCentre: what sub_4bf4c0 uses), its facing
+ * from how that place changes across the screen; the lamps' place and aim are
+ * the game's (native_render.cpp, noteHeadlight).  A cone, bright on its axis
+ * and soft to its edge, falling off with distance, brighter on what faces the
+ * lamps -- and the surface's own texture colour lit by it, added. */
+"    if (u_headlight > 0.0 && v_combine.s > 0.5 && v_combine.q > 0.5) {"
+"        float z = 1.0 / max(v_texCoord.p, 1e-6);"
+"        vec3 P = vec3((gl_FragCoord.xy - u_projCentre) * z / u_projScale, z);"
+"        vec3 L = u_headOrigin - P;"
+"        float dist = length(L);"
+"        vec3 toLight = L / max(dist, 1e-3);"
+"        float cone = smoothstep(0.82, 0.97, dot(-toLight, u_headDir));"
+"        float reach = 1.0 / (1.0 + dist * dist / 400.0) * (1.0 - smoothstep(45.0, 70.0, dist));"
+"        vec3 n = cross(dFdx(P), dFdy(P));"
+"        vec3 nn = dot(n, n) > 0.0 ? normalize(n) : -toLight;"
+"        float facing = abs(dot(nn, toLight));"
+/* What lies level -- the road, which has the game's own patch of light, and
+ * the ground -- gets a quarter of it; what stands up gets all of it. */
+"        float level = smoothstep(0.6, 0.9, abs(dot(nn, u_headUp)));"
+"        float lit = u_headlight * cone * reach * (0.3 + 0.7 * facing) * mix(1.0, 0.25, level);"
+"        color.rgb += textureColor.rgb * vec3(1.0, 0.96, 0.86) * lit;"
+"    }"
 /* The rest of the world's grain (initGl, NFS_OBJECT_DETAIL): the same noise,
  * fainter and twice to a texture, on the walls, the buildings, the grass and
  * the rocks -- the opaque texels only, so smoke and glass stay as they are. */
@@ -332,6 +364,8 @@ struct ThrashDraw
     float                               fogColor[3];
     float                               wetness;
     float                               grade[5];
+    float                               head[14];
+    float                               sun[11];
     float                               alphaTestRef;
     x86::reg32                          chromaKeyColor;
     x86::reg32                          width;
@@ -405,11 +439,13 @@ ThrashRenderer::~ThrashRenderer()
             glDeleteTextures(1, &m_reflection);
         if (m_detailTexture)
             glDeleteTextures(1, &m_detailTexture);
-        for (unsigned int texture : { m_sky, m_postCopy, m_bright })
+        for (unsigned int texture : { m_sky, m_postCopy, m_bright, m_postDepth })
             if (texture)
                 glDeleteTextures(1, &texture);
         if (m_postFramebuffer)
             glDeleteFramebuffers(1, &m_postFramebuffer);
+        if (m_depthFramebuffer)
+            glDeleteFramebuffers(1, &m_depthFramebuffer);
         if (m_postArray)
             glDeleteVertexArrays(1, &m_postArray);
         if (m_brightProgram)
@@ -590,6 +626,7 @@ void ThrashRenderer::initGl()
     glUniform1f(m_locations.carShine, 0.0f);
     glUniform1f(m_locations.haze, 0.0f);
     glUniform1i(m_locations.sky, 3);
+    glUniform1f(m_locations.headlight, 0.0f);
     glUniform1f(m_locations.detailScale, 8.0f);
     glUniform1f(m_locations.detail, 0.0f);
     glUniform1i(m_locations.reflection, 2);
@@ -673,6 +710,12 @@ void ThrashRenderer::compileShaders(int depthBits, const char* renderer)
     m_locations.sharpen = glGetUniformLocation(m_program, "u_sharpen");
     m_locations.carShine = glGetUniformLocation(m_program, "u_carShine");
     m_locations.haze = glGetUniformLocation(m_program, "u_haze");
+    m_locations.headlight = glGetUniformLocation(m_program, "u_headlight");
+    m_locations.headOrigin = glGetUniformLocation(m_program, "u_headOrigin");
+    m_locations.headDir = glGetUniformLocation(m_program, "u_headDir");
+    m_locations.headUp = glGetUniformLocation(m_program, "u_headUp");
+    m_locations.projection = glGetUniformLocation(m_program, "u_projScale");
+    m_locations.projCentre = glGetUniformLocation(m_program, "u_projCentre");
     m_locations.sky = glGetUniformLocation(m_program, "u_sky");
     glUseProgram(m_program);
     glUniform1i(m_locations.texture, 0);
@@ -766,6 +809,10 @@ void ThrashRenderer::flush()
     batch.sharpen = m_zTest && !m_chromaKey;
     // The car's reflection: the pass added (alphaBlend off) over its body.
     batch.carShine = m_carSurface && !m_alphaBlend;
+    // The player's headlights on the world: the road and its walls (most of
+    // the track, `detail`) and everything else in it; not the cars, not light.
+    batch.headlit = !m_carSurface && m_zTest && !m_chromaKey && m_alphaBlend;
+    batch.car = m_carSurface;
     m_batches.push_back(batch);
 }
 
@@ -783,6 +830,8 @@ void ThrashRenderer::renderPending()
     draw->alphaTestRef = m_alphaTestRef;
     draw->wetness = m_detailTexture ? m_wetness : 0.0f;
     std::copy(m_grade, m_grade + 5, draw->grade);
+    std::copy(m_head, m_head + 14, draw->head);
+    std::copy(m_sun, m_sun + 11, draw->sun);
     draw->chromaKeyColor = m_chromaKeyColor;
     draw->width = m_renderer->m_width;
     draw->height = m_renderer->m_height;
@@ -830,7 +879,9 @@ void ThrashRenderer::takeReflection(int width, int height)
  *   pass), spread down that texture's levels and added back from five of
  *   them, wide and faint over narrow and strong;
  * - graded: a contrast about the middle grey, a saturation and a tint, the
- *   track's own (glide2x::colourGrade, from nfs3hp_main.cpp).
+ *   track's own (glide2x::colourGrade, from nfs3hp_main.cpp);
+ * - shadowed: what stands by the road casts on what lies behind it, away from
+ *   the sun, worked out from the depth buffer (sunShadow, below).
  *
  * The HUD then draws over it as it always did, and the menus are never
  * touched: they have no world to come before a HUD. */
@@ -875,7 +926,60 @@ static const char g_compositeShader[] =
 "uniform vec3 u_grade;"      // saturation, contrast, on
 "uniform vec3 u_tint;"
 "uniform bool u_aa;"
+"uniform sampler2D u_depth;"
+"uniform float u_shadow;"
+"uniform vec3 u_sun;"
+"uniform vec2 u_scale;"
+"uniform vec2 u_centre;"
+"uniform vec3 u_up;"
+"uniform vec2 u_size;"
 "float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }"
+/* The shadows of what stands by the road (initPost, NFS_OBJECT_SHADOWS): from
+ * each pixel's place in the view -- the depth buffer holds 1 - 1/z (as the
+ * game's vertices give THRASH their depth), so z comes back as 1 / (1 - d);
+ * the screen through the projection --
+ * a ray towards the sun, its steps growing, each brought back to the screen;
+ * where the picture there is nearer than the ray by more than a hair and less
+ * than a thing's thickness, something stands between this pixel and the sun.
+ * Soft: the nearer the blocking step, the darker, and faded towards the edges
+ * of the screen, where what casts may lie beyond it. */
+"float viewZ(vec2 uv) { return 1.0 / max(1.0 - texture(u_depth, uv).r, 1e-5); }"
+"float sunShadow(vec2 uv)"
+"{"
+"    float d = texture(u_depth, uv).r;"
+"    if (d >= 0.9999 || texture(u_source, uv).a < 0.5) return 0.0;"
+"    float z = 1.0 / max(1.0 - d, 1e-5);"
+"    if (z < 1.0) return 0.0;"
+"    vec3 p = vec3((uv * u_size - u_centre) * z / u_scale, z);"
+/* Cast onto what lies level -- the road, the verges, the ground -- not onto
+ * what stands: a fence's own rails, a wall, shaded by themselves, only went
+ * grey.  Level from the depth of the pixels beside it. */
+"    vec2 px = 1.0 / u_size;"
+"    float zx = viewZ(uv + vec2(px.x, 0.0)), zy = viewZ(uv + vec2(0.0, px.y));"
+"    vec3 ax = vec3(((uv + vec2(px.x, 0.0)) * u_size - u_centre) * zx / u_scale, zx) - p;"
+"    vec3 ay = vec3(((uv + vec2(0.0, px.y)) * u_size - u_centre) * zy / u_scale, zy) - p;"
+"    vec3 n = cross(ax, ay);"
+"    if (dot(n, n) <= 0.0) return 0.0;"
+"    float level = smoothstep(0.55, 0.8, abs(dot(normalize(n), u_up)));"
+"    if (level <= 0.0) return 0.0;"
+"    float shade = 0.0;"
+"    for (int i = 1; i <= 14; ++i) {"
+"        float t = 0.08 * float(i * i);"
+"        vec3 q = p + u_sun * t;"
+"        if (q.z < 0.5) break;"
+"        vec2 at = (q.xy * u_scale / q.z + u_centre) / u_size;"
+"        if (at.x < 0.0 || at.y < 0.0 || at.x > 1.0 || at.y > 1.0) break;"
+"        if (texture(u_source, at).a < 0.5) continue;"   // a car: casts its own
+"        float there = viewZ(at);"
+"        float gap = q.z - there;"
+"        if (gap > 0.05 + 0.02 * t && gap < 0.6 + 0.1 * t) {"
+"            shade = 1.0 - float(i - 1) / 16.0;"
+"            break;"
+"        }"
+"    }"
+"    vec2 edge = min(uv, 1.0 - uv);"
+"    return shade * level * smoothstep(0.0, 0.06, min(edge.x, edge.y));"
+"}"
 "vec3 fxaa(vec2 uv)"
 "{"
 "    vec3 nw = texture(u_source, uv + vec2(-1.0, -1.0) * u_pixel).rgb;"
@@ -900,6 +1004,8 @@ static const char g_compositeShader[] =
 "void main()"
 "{"
 "    vec3 c = u_aa ? fxaa(v_uv) : texture(u_source, v_uv).rgb;"
+"    if (u_shadow > 0.0)"
+"        c *= 1.0 - u_shadow * sunShadow(v_uv);"
 "    if (u_bloom > 0.0) {"
 "        vec3 glow = textureLod(u_bright, v_uv, 1.0).rgb * 0.30 + textureLod(u_bright, v_uv, 2.0).rgb * 0.25"
 "                  + textureLod(u_bright, v_uv, 3.0).rgb * 0.20 + textureLod(u_bright, v_uv, 4.0).rgb * 0.15"
@@ -952,12 +1058,12 @@ void ThrashRenderer::initPost()
 {
     // Each on unless set to 0 (or "off"); a number for how much, where it has one.
     m_haze = SDL_min(onOff("NFS_HAZE", 0.8f), 1.0f);
+    m_headStrength = onOff("NFS_HEADLIGHT_OBJECTS", 1.6f);
     m_bloom = onOff("NFS_BLOOM", 0.6f);
     m_gradeOn = onOff("NFS_GRADE", 1.0f) > 0.0f;
     m_antialias = onOff("NFS_AA", 1.0f) > 0.0f;
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[GFX] haze %.2f; glow %.2f; colour grade %s; anti-aliasing %s",
-                double(m_haze), double(m_bloom), m_gradeOn ? "on" : "off", m_antialias ? "FXAA" : "off");
-    if (m_bloom > 0.0f || m_gradeOn || m_antialias)
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[GFX] haze %.2f; glow %.2f; colour grade %s; anti-aliasing %s; headlights on objects %.2f",
+                double(m_haze), double(m_bloom), m_gradeOn ? "on" : "off", m_antialias ? "FXAA" : "off", double(m_headStrength));
     {
         m_brightProgram = postProgram(compileShader, g_brightShader);
         m_compositeProgram = postProgram(compileShader, g_compositeShader);
@@ -969,6 +1075,14 @@ void ThrashRenderer::initPost()
         m_compositeGrade = glGetUniformLocation(m_compositeProgram, "u_grade");
         m_compositeTint = glGetUniformLocation(m_compositeProgram, "u_tint");
         m_compositeAa = glGetUniformLocation(m_compositeProgram, "u_aa");
+        m_compositeDepth = glGetUniformLocation(m_compositeProgram, "u_depth");
+        m_compositeShadow = glGetUniformLocation(m_compositeProgram, "u_shadow");
+        m_compositeSun = glGetUniformLocation(m_compositeProgram, "u_sun");
+        m_compositeScale = glGetUniformLocation(m_compositeProgram, "u_scale");
+        m_compositeCentre = glGetUniformLocation(m_compositeProgram, "u_centre");
+        m_compositeUp = glGetUniformLocation(m_compositeProgram, "u_up");
+        m_compositeSize = glGetUniformLocation(m_compositeProgram, "u_size");
+        glGenFramebuffers(1, &m_depthFramebuffer);
         glGenVertexArrays(1, &m_postArray);
         glGenFramebuffers(1, &m_postFramebuffer);
     }
@@ -1035,6 +1149,18 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        if (m_postDepth)
+            glDeleteTextures(1, &m_postDepth);
+        glGenTextures(1, &m_postDepth);
+        glBindTexture(GL_TEXTURE_2D, m_postDepth);
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_DEPTH_COMPONENT16, width, height);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindFramebuffer(GL_FRAMEBUFFER, m_depthFramebuffer);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, m_postDepth, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
         glGenTextures(1, &m_bright);
         glBindTexture(GL_TEXTURE_2D, m_bright);
         glTexStorage2D(GL_TEXTURE_2D, levelsFor(halfW, halfH), GL_RGBA8, halfW, halfH);
@@ -1055,6 +1181,15 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, m_postCopy);
     glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, width, height);
+    const bool shadows = draw.sun[0] > 0.0f;
+    if (shadows)
+    {
+        // The world's depth, for its shadows: a copy, as the buffer stays bound.
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, m_framebuffer);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_depthFramebuffer);
+        glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
+    }
     glBindVertexArray(m_postArray);
     if (m_bloom > 0.0f)
     {
@@ -1082,6 +1217,19 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
     glUniform3f(m_compositeGrade, draw.grade[3], draw.grade[4], m_gradeOn ? 1.0f : 0.0f);
     glUniform3f(m_compositeTint, draw.grade[0], draw.grade[1], draw.grade[2]);
     glUniform1i(m_compositeAa, m_antialias ? 1 : 0);
+    glUniform1f(m_compositeShadow, shadows ? draw.sun[0] : 0.0f);
+    if (shadows)
+    {
+        glUniform1i(m_compositeDepth, 2);
+        glUniform3f(m_compositeSun, draw.sun[1], draw.sun[2], draw.sun[3]);
+        glUniform2f(m_compositeScale, draw.sun[4], draw.sun[5]);
+        glUniform2f(m_compositeCentre, draw.sun[6], draw.sun[7]);
+        glUniform3f(m_compositeUp, draw.sun[8], draw.sun[9], draw.sun[10]);
+        glUniform2f(m_compositeSize, float(width), float(height));
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, m_postDepth);
+        glActiveTexture(GL_TEXTURE0);
+    }
     if (m_bloom > 0.0f)
     {
         glActiveTexture(GL_TEXTURE1);
@@ -1155,6 +1303,22 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
     }
     glUniform2f(m_locations.screen, float(draw.width), float(draw.height));
     // The haze's sky: this frame's once taken (takeSky), until then none.
+    /* The player's headlights, this frame's (setHeadlights): as strong as
+     * NFS_HEADLIGHT_OBJECTS, and only where it is dark -- by the fog's colour,
+     * the light of the hour -- so a rainy afternoon's dipped lamps add next to
+     * nothing. */
+    float headlight = 0.0f;
+    if (!m_hudBegun && draw.head[0] > 0.0f && m_headStrength > 0.0f && draw.head[7] != 0.0f && draw.head[8] != 0.0f)
+    {
+        const float sky = 0.299f * draw.fogColor[0] + 0.587f * draw.fogColor[1] + 0.114f * draw.fogColor[2];
+        const float dark = 1.0f - SDL_min(1.0f, sky / 0.45f);
+        headlight = m_headStrength * dark * dark;
+        glUniform3f(m_locations.headOrigin, draw.head[1], draw.head[2], draw.head[3]);
+        glUniform3f(m_locations.headDir, draw.head[4], draw.head[5], draw.head[6]);
+        glUniform3f(m_locations.headUp, draw.head[11], draw.head[12], draw.head[13]);
+        glUniform2f(m_locations.projection, draw.head[7], draw.head[8]);
+        glUniform2f(m_locations.projCentre, draw.head[9], draw.head[10]);
+    }
     float hazeSet = -1.0f;  // what u_haze holds now (per batch, below)
     glUniform1f(m_locations.haze, 0.0f);
     if (m_sky)
@@ -1163,7 +1327,7 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
         glBindTexture(GL_TEXTURE_2D, m_sky);
         glActiveTexture(GL_TEXTURE0);
     }
-    const bool post = m_compositeProgram && (m_bloom > 0.0f || m_gradeOn || m_antialias);
+    const bool post = m_compositeProgram && (m_bloom > 0.0f || m_gradeOn || m_antialias || draw.sun[0] > 0.0f);
     const bool wet = draw.wetness > 0.0f && m_reflectionValid && m_reflectionW == int(draw.width)
                      && m_reflectionH == int(draw.height);
     glUniform1f(m_locations.wet, wet ? draw.wetness : 0.0f);
@@ -1182,7 +1346,7 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
         /* And (the port's haze) the sky as it stands before the world's first
          * draw; and (its whole-picture effects) the world, once, as the HUD
          * begins. */
-        if (wet || draw.wetness > 0.0f || m_haze > 0.0f || post)
+        if (wet || draw.wetness > 0.0f || m_haze > 0.0f || post || headlight > 0.0f)
         {
             const ThrashVertex& corner = draw.vertices[first];
             const bool flat = corner.combine[3] == 0 && !batch.zBuffer;
@@ -1194,6 +1358,14 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
             }
             else if (m_sceneDrawn)
             {
+                // The HUD has begun; what follows (the mirror's own view among it) is
+                // not lit by the lamps of this one.
+                if (!m_hudBegun)
+                {
+                    m_hudBegun = true;
+                    headlight = 0.0f;
+                    glUniform1f(m_locations.headlight, 0.0f);
+                }
                 if (!m_reflectionTaken && (wet || draw.wetness > 0.0f))
                     takeReflection(int(draw.width), int(draw.height));
                 if (post && !m_postDone)
@@ -1221,6 +1393,8 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
             glUniform1f(m_locations.detail, batch.detail ? m_detailStrength : 0.0f);
         if (m_detailTexture && (!previous || batch.surface != previous->surface))
             glUniform1f(m_locations.surface, batch.surface ? m_surfaceStrength : 0.0f);
+        if (!previous || batch.headlit != previous->headlit)
+            glUniform1f(m_locations.headlight, batch.headlit ? headlight : 0.0f);
         if (!previous || batch.carShine != previous->carShine)
             glUniform1f(m_locations.carShine, batch.carShine ? m_carShine : 0.0f);
         if (!previous || batch.sharpen != previous->sharpen)
@@ -1253,12 +1427,16 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
             glDepthFunc(batch.zTestAlways ? GL_ALWAYS : GL_LEQUAL);
         if (!previous || batch.zBuffer != previous->zBuffer)
             glDepthMask(batch.zBuffer ? GL_TRUE : GL_FALSE);
-        if (!previous || batch.alphaBlend != previous->alphaBlend)
+        /* A car's pixels leave 0 in the picture's alpha (the rest what they
+         * draw, opaque 1): the shadows of what stands by the road are not
+         * cast by the cars, which have their own (postProcess). */
+        if (!previous || batch.alphaBlend != previous->alphaBlend || batch.car != previous->car)
         {
+            const GLenum alphaSource = batch.car ? GL_ZERO : GL_ONE;
             if (batch.alphaBlend)
-                glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO);
+                glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, alphaSource, GL_ZERO);
             else
-                glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE, GL_ONE, GL_ZERO);
+                glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE, alphaSource, GL_ZERO);
         }
         if (!previous || batch.chromaKey != previous->chromaKey)
             glUniform1i(m_locations.chromaKey, batch.chromaKey ? 1 : 0);
@@ -1343,6 +1521,7 @@ void ThrashRenderer::swap()
         m_sceneDrawn = false;
         m_skyTaken = false;
         m_postDone = false;
+        m_hudBegun = false;
         glDisable(GL_SCISSOR_TEST);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glUseProgram(0);

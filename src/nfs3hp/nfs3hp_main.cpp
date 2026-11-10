@@ -161,6 +161,7 @@ void dialogEmblem(bool drawing)
 }
 
 void carVerticesDone();  // native_vertices.cpp
+void headlightsFrameDone();  // native_render.cpp
 
 bool raceIsRunning()
 {
@@ -2520,6 +2521,7 @@ void onSwap(win32::WinApplication* app)
 {
     ++nfs3hp::s_swaps;
     nfs3hp::carVerticesDone();
+    nfs3hp::headlightsFrameDone();
     wetRoadTick(app);
     colourGradeTick(app);
 #ifndef __ANDROID__

@@ -40,6 +40,14 @@ void wetRoad(float wetness);
 /* The race's colour grade: a tint, a saturation and a contrast, each 1 for
  * none (the native THRASH renderer's whole-picture pass, NFS_GRADE). */
 void colourGrade(float red, float green, float blue, float saturation, float contrast);
+/* The player's headlights in the view (origin, direction, the car's up) and the
+ * projection's scale and centre, for lighting what stands beside the road. */
+void headlights(bool on, const float origin[3], const float direction[3], const float up[3], float scaleX, float scaleY,
+                float centreX, float centreY);
+/* The sun and up in the view, the projection, and how dark
+ * the shadows of what stands beside the road are (0 for none). */
+void sunShadows(float strength, const float sun[3], const float up[3], float scaleX, float scaleY, float centreX,
+                float centreY);
 
 /* The texture atlas: free texels, whole 256x256 tiles among them, and its size
  * in texels.  False while no Glide window is open. */

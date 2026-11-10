@@ -2,6 +2,7 @@
 #define LIB_LOUDNESS_H_
 
 #include <SDL3/SDL.h>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 
@@ -15,61 +16,131 @@ namespace win32
  * screen at its default 50% -- but beside music and video, mastered louder and
  * compressed, it sounds it.  A plain multiply cannot make it louder: a race
  * already reaches full scale, so a lift alone only clips, harshly, where it is
- * loud.  So the lift (NFS_VOLUME, 2.5 -- +8 dB -- by default, 0.1 to 8; 1
- * leaves the mix as the game made it) goes through a limiter: wherever the
- * lifted sound would pass -1 dBFS the gain is pulled down at once, and it eases
- * back over about 150 ms, the same for every channel so the stereo picture
- * holds.  Quiet passages come up by the whole lift; loud ones are held under
- * full scale instead of clipped.
+ * loud.
  *
- * One per stream, used from that stream's thread only: it keeps its gain from
- * one block to the next. */
+ * The first version lifted it (+8 dB) into a plain peak limiter, and that
+ * gave back most of the lift: a race's mix is wall-to-wall peaks (the
+ * engine's buzz alone is one every few milliseconds), so the limiter sat
+ * pulled down all the time, and a race came out about 4 dB louder for an
+ * 8 dB lift -- and lifting further did nothing at all (measured: +6 dB more
+ * lift, +0.3 dB out).  No gain riding can make a signal like that louder;
+ * rounding its peaks off can.  So now:
+ *
+ * 1. The lift, NFS_VOLUME: 3 (+9.5 dB) by default, 0.1 to 8; 1 leaves the mix
+ *    as the game made it (and none of the rest is done).
+ * 2. A soft saturator: up to -6 dBFS the lifted sound is left as it is; above
+ *    it each sample is bent smoothly (tanh) towards -0.7 dBFS instead of
+ *    rising further -- the peaks rounded, as tape or a valve would round them.
+ * 3. A limiter that looks 3 ms ahead, as the safety under it: the gain is
+ *    brought down over those 3 ms before a peak arrives, to hold it under
+ *    -1 dBFS, and eases back over 80 ms.  The output is 3 ms later.
+ *
+ * A race comes out about 4.5 dB louder on average than with the first
+ * version (-7.5 dBFS against -12), the menus and quiet passages 2 to 3 dB.
+ * The same gain for every channel, so the stereo picture holds.  One per
+ * stream, used from that stream's thread only: it keeps its state from one
+ * block to the next. */
 class Loudness
 {
 public:
     Loudness()
     {
         const char* value = SDL_getenv("NFS_VOLUME");
-        const float parsed = value && *value ? float(SDL_atof(value)) : 2.5f;
-        m_lift = parsed >= 0.1f && parsed <= 8.0f ? parsed : 2.5f;
+        const float parsed = value && *value ? float(SDL_atof(value)) : 3.0f;
+        m_lift = parsed >= 0.1f && parsed <= 8.0f ? parsed : 3.0f;
         setRate(22050);
     }
 
     void setRate(int rate)
     {
-        m_release = 1.0f - SDL_expf(-1.0f / (0.150f * float(rate > 0 ? rate : 22050)));
+        const float r = float(rate > 0 ? rate : 22050);
+        if (r == m_rate)
+            return;
+        m_rate = r;
+        m_release = 1.0f - SDL_expf(-1.0f / (0.080f * r));
+        m_ahead = std::size_t(0.003f * r) + 1;
+        if (m_ahead > kMaxAhead)
+            m_ahead = kMaxAhead;
+        m_attack = 1.0f - SDL_expf(-3.0f / float(m_ahead));
+        m_at = 0;
+        m_filled = 0;
     }
 
-    /* 16-bit samples, `channels` to a frame, levelled in place. */
+    /* 16-bit samples, `channels` to a frame (at most 8), levelled in place. */
     void apply(std::int16_t* samples, std::size_t frames, std::size_t channels)
     {
-        if (m_lift == 1.0f || channels == 0)
+        if (m_lift == 1.0f || channels == 0 || channels > kMaxChannels)
             return;
         const float ceiling = 32767.0f * 0.891f;  // -1 dBFS
+        const float knee = 32767.0f * 0.5f;         // -6 dBFS
+        const float top = 32767.0f * 0.92f;         // -0.7 dBFS
         for (std::size_t f = 0; f < frames; ++f)
         {
             std::int16_t* frame = samples + f * channels;
+            // 1 and 2: lifted, and its peaks rounded off.
+            float in[kMaxChannels];
             float peak = 0.0f;
             for (std::size_t c = 0; c < channels; ++c)
             {
-                const float level = SDL_fabsf(float(frame[c])) * m_lift;
-                peak = level > peak ? level : peak;
+                float v = float(frame[c]) * m_lift;
+                const float a = SDL_fabsf(v);
+                if (a > knee)
+                {
+                    const float bent = knee + (top - knee) * std::tanh((a - knee) / (top - knee));
+                    v = v < 0.0f ? -bent : bent;
+                }
+                in[c] = v;
+                peak = SDL_fabsf(v) > peak ? SDL_fabsf(v) : peak;
             }
-            const float wanted = peak > ceiling ? ceiling / peak : 1.0f;
-            m_gain = wanted < m_gain ? wanted : m_gain + (wanted - m_gain) * m_release;
-            const float scale = m_lift * m_gain;
+            // 3: what this frame will need, and the frame from 3 ms ago out.
+            const float needed = peak > ceiling ? ceiling / peak : 1.0f;
+            Delayed& slot = m_line[m_at];
+            float out[kMaxChannels];
+            const bool full = m_filled >= m_ahead;
+            if (full)
+                for (std::size_t c = 0; c < channels; ++c)
+                    out[c] = slot.sample[c];
+            for (std::size_t c = 0; c < channels; ++c)
+                slot.sample[c] = in[c];
+            slot.needed = needed;
+            m_at = (m_at + 1) % m_ahead;
+            if (!full)
+                ++m_filled;
+            float lowest = 1.0f;
+            for (std::size_t k = 0; k < m_filled; ++k)
+                lowest = m_line[k].needed < lowest ? m_line[k].needed : lowest;
+            m_gain = lowest < m_gain ? m_gain + (lowest - m_gain) * m_attack : m_gain + (lowest - m_gain) * m_release;
             for (std::size_t c = 0; c < channels; ++c)
             {
-                const float out = float(frame[c]) * scale;
-                frame[c] = std::int16_t(out > 32767.0f ? 32767 : out < -32768.0f ? -32768 : int(out));
+                float v = full ? out[c] * m_gain : 0.0f;
+                // The soft knee: the last decibel to full scale bent, not cut.
+                const float a = SDL_fabsf(v);
+                if (a > ceiling)
+                {
+                    const float over = (a - ceiling) / (32767.0f - ceiling);
+                    const float bent = ceiling + (32767.0f - ceiling) * (over / (1.0f + over));
+                    v = v < 0.0f ? -bent : bent;
+                }
+                frame[c] = std::int16_t(v > 32767.0f ? 32767 : v < -32768.0f ? -32768 : int(v));
             }
         }
     }
 
 private:
-    float m_lift = 2.5f;
+    static constexpr std::size_t kMaxChannels = 8;
+    static constexpr std::size_t kMaxAhead = 512;
+    struct Delayed
+    {
+        float sample[kMaxChannels];
+        float needed;
+    };
+    float m_lift = 3.0f;
+    float m_rate = 0.0f;
     float m_release = 0.0f;  // a frame's share of the way back
+    float m_attack = 0.0f;   // ... and down, over the look-ahead
     float m_gain = 1.0f;     // the limiter's own, 1 when idle
+    std::size_t m_ahead = 1, m_at = 0, m_filled = 0;
+    Delayed m_line[kMaxAhead] = {};
 };
 
 }
