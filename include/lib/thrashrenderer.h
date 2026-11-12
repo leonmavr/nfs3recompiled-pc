@@ -95,6 +95,8 @@ public:
     /* Whether a race is being drawn (glide2x::raceView): the haze and the
      * whole-picture pass are for it alone, never the menus. */
     void setRaceView(bool race) { m_raceView = race; }
+    /* How fast the first player goes, m/s (glide2x::motion): the motion blur's. */
+    void setMotion(float speed) { m_speed = speed; }
     void setColourGrade(float red, float green, float blue, float saturation, float contrast)
     {
         m_grade[0] = red; m_grade[1] = green; m_grade[2] = blue; m_grade[3] = saturation; m_grade[4] = contrast;
@@ -238,11 +240,13 @@ private:
     bool                    m_postDone = false;     // this frame's
     bool                    m_hudBegun = false;     // this frame's
     bool                    m_raceView = false;     // the game thread's
+    float                   m_speed = 0.0f;         // the game thread's
+    float                   m_motionBlur = 0.0f;    // NFS_MOTION_BLUR
     int                     m_brightSource = -1, m_compositeSource = -1, m_compositeBright = -1,
                             m_compositePixel = -1, m_compositeBloom = -1, m_compositeGrade = -1,
                             m_compositeTint = -1, m_compositeAa = -1, m_compositeDepth = -1, m_compositeShadow = -1,
                             m_compositeSun = -1, m_compositeScale = -1, m_compositeCentre = -1, m_compositeUp = -1,
-                            m_compositeSize = -1;
+                            m_compositeSize = -1, m_compositeBlur = -1;
     float                   m_detailStrength = 0.0f;  // NFS_ROAD_DETAIL; 0 for none
     float                   m_surfaceStrength = 0.0f; // NFS_OBJECT_DETAIL; 0 for none
     bool                    m_sharpen = false;        // NFS_TEXTURE_SHARP

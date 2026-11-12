@@ -2515,6 +2515,20 @@ void colourGradeTick(win32::WinApplication* app)
         }
     }
     win32::glide2x::raceView(nfs3hp::raceIsRunning());
+    /* And how fast the first player goes, for the motion blur
+     * (thrashrenderer.cpp, NFS_MOTION_BLUR): its car's speed ([0x5efa48],
+     * +0xb8), 0 while the race's clock ([0x7d3684]) stands -- a pause, the
+     * countdown -- and in split screen, where each view has its own car. */
+    {
+        static x86::reg32 s_clock = 0;
+        const x86::reg32 clock = app->getMemory<x86::reg32>(0x7d3684);
+        float speed = 0.0f;
+        const x86::reg32 car = app->getMemory<x86::reg32>(0x5efa48);
+        if (nfs3hp::raceIsRunning() && car && clock != s_clock && app->getMemory<x86::reg32>(0x6fd3b0) != 1)
+            speed = SDL_fabsf(app->getMemory<float>(car + 0xb8));
+        s_clock = clock;
+        win32::glide2x::motion(speed == speed ? speed : 0.0f);
+    }
     win32::glide2x::colourGrade(grade.red, grade.green, grade.blue, grade.saturation, grade.contrast);
 }
 

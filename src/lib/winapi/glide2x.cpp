@@ -158,6 +158,12 @@ void raceView(bool race)
         s_directRenderer->setRaceView(race);
 }
 
+void motion(float speed)
+{
+    if (s_directRenderer)
+        s_directRenderer->setMotion(speed);
+}
+
 void colourGrade(float red, float green, float blue, float saturation, float contrast)
 {
     if (s_directRenderer)

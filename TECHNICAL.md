@@ -304,6 +304,47 @@ picture's alpha), and faded at the screen's edges, past which what casts may
 lie. Fainter in the rain and at night as the cars' own are.
 `NFS_OBJECT_SHADOWS`, 0.45.
 
+### Sparks off walls
+
+A car's collision effects come each frame from `sub_42ac40`. What the car
+touches is `[car+0x170]`: a wall or barrier is 0x40000 in the high word with
+its material in the low byte, and the table at 0x553740 gives each material's
+particles -- 3 sparks (1, 2, 4: metal, and the stone walls of Atlantica and
+the desert's canyons are 4), 2 dust (3, 5, 7), 0 nothing. The game threw a
+burst (`sub_4cac20`, thirty of particle kind 3 at full strength) only while
+scraping at over 22 m/s; a hit made one spark. `collisionEffects`
+(`src/nfs3hp/native_effects.cpp`, hooked at the top of `sub_42ac40` by
+`tools/apply_native_effects.py`) adds a burst as strong as a hit over 5 m/s
+(full at 10), and one while scraping from 6 m/s, on spark and dust materials
+alike. A burst takes the car's velocity (`+0xa4`), which sent it into the
+wall, out of sight; for the added bursts the velocity is bounced off the wall
+first (its normal from the car's centre to the contact point) and handed back
+after. `NFS_SPARKS` (2) multiplies kind 3's burst size (`[0x560ce4]`) for
+every burst, the game's too; 0 leaves the game's sparks alone.
+
+### Speed you can feel
+
+**The camera pulled back.** `sub_422850` turns a camera -- its place, then its
+axes a row each: right, up, the way it looks -- into a view's matrix.
+`cameraToView` (native_effects.cpp, hooked at its top) moves the first
+player's main chase camera back along the way it looks, and up a quarter of
+that, before the matrix is made, so everything after -- culling, the copy of
+the view the game keeps -- agrees. How far eases towards the throttle's share
+(`0x79c339`, 0 to 255) of `NFS_CAMERA_PULL` (1.2 m), out over about a second
+and in over half of one, by the race's clock. A chase camera is one 3 to 15 m
+from the car and looking at it: not the cockpit or bumper views, not the
+replay's television cameras.
+
+**Motion blur.** In the whole-picture pass (`motionBlur`): moving forward at v,
+a still point at depth z drifts across the screen away from its centre by its
+distance from it times v dt / z, so the near verges and walls streak and the
+horizon stands. Each pixel is averaged with eight more along that line, the
+length from the depth buffer and the first player's speed (`[car+0xb8]`, sent
+each frame by `colourGradeTick`, 0 while the race's clock stands); a shutter
+of a ninetieth of a second times `NFS_MOTION_BLUR` (2, picked by eye), from 10 m/s, whole
+from 35, at most 48 pixels. The cars (0 in the picture's alpha) are neither
+blurred nor taken into the blur around them.
+
 ### The cars' paint
 
 A car is drawn twice: its body with its own texture, then the reflection the
@@ -1379,6 +1420,9 @@ from the phone; the rest matter for a desktop run.
 | `NFS_AUDIO_RATE` | unset | The output's own sample rate. The game mixes at 22050 Hz and SDL converts to this; a device opened at any other rate is resampled by Android, off its low-latency path. Unset, the device opens at SDL's default. |
 | `NFS_VOLUME` | `1.8` | How far the game's sound is lifted on its way to the device (`include/lib/loudness.h`, applied in `src/nfs3hp/native_sound.cpp`), 0.1 to 8. Above -2.5 dBFS the lifted sound's peaks are rounded off (a soft saturator), and a limiter that looks 3 ms ahead holds what is left under -1 dBFS; `1` leaves the mix as the game made it. Higher is louder but rounds off more of the sound. The Audio screen's own sliders start at 50%, and raising them is the other way up. |
 | `NFS_HEADLIGHT_OBJECTS` | on (`1.6`) | `0`/`off`: the player's headlights light only the road, as the game has them. A number: how bright they are on the walls, fences, trees and buildings (Headlights on what stands by the road). |
+| `NFS_MOTION_BLUR` | on (`2`) | `0`/`off`: no motion blur. A number: how long the shutter, times a ninetieth of a second (Speed you can feel). |
+| `NFS_CAMERA_PULL` | `1.2` | How far back, in metres, the chase camera eases under full throttle; `0`/`off` for none. |
+| `NFS_SPARKS` | `2` | How many times the sparks of a burst, and whether walls throw them on hits and scrapes; `0`/`off`: the game's own (Sparks off walls). |
 | `NFS_OBJECT_SHADOWS` | on (`0.45`) | `0`/`off`: no shadows from what stands by the road. A number: how dark (Shadows of what stands by the road); fainter in the rain and at night by `NFS_SHADOW_RAIN` and `NFS_SHADOW_NIGHT`. |
 | `NFS_SND_MIX` | on | `0` leaves the game's sound mixer (`sub_500864` and everything under it) to its generated code instead of `src/nfs3hp/native_mixer.cpp`. `NFS_SND_CHECK=1` (debug) mixes each block natively and with the generated code and logs any byte that differs (`[SNDCHK]`); a block that calls the game, to refill a stream or end a sound, is left to the generated code. |
 | `NFS_TOUCH_STEER_LEFT` etc. | unset | Keys the touch overlay sends for steering and the pedals, so that endpoint can report them as axes. |

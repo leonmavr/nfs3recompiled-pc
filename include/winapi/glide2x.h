@@ -41,6 +41,8 @@ void wetRoad(float wetness);
  * none (the native THRASH renderer's whole-picture pass, NFS_GRADE). */
 /* Whether a race is being drawn (the haze and whole-picture pass are for it). */
 void raceView(bool race);
+/* How fast the first player goes, m/s (the motion blur; 0 for none). */
+void motion(float speed);
 void colourGrade(float red, float green, float blue, float saturation, float contrast);
 /* The player's headlights in the view (origin, direction, the car's up) and the
  * projection's scale and centre, for lighting what stands beside the road. */

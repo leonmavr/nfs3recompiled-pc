@@ -369,6 +369,7 @@ struct ThrashDraw
     float                               head[14];
     float                               sun[11];
     bool                                race;
+    float                               speed;
     float                               alphaTestRef;
     x86::reg32                          chromaKeyColor;
     x86::reg32                          width;
@@ -840,6 +841,7 @@ void ThrashRenderer::renderPending()
     std::copy(m_head, m_head + 14, draw->head);
     std::copy(m_sun, m_sun + 11, draw->sun);
     draw->race = m_raceView;
+    draw->speed = m_speed;
     draw->chromaKeyColor = m_chromaKeyColor;
     draw->width = m_renderer->m_width;
     draw->height = m_renderer->m_height;
@@ -941,6 +943,7 @@ static const char g_compositeShader[] =
 "uniform vec2 u_centre;"
 "uniform vec3 u_up;"
 "uniform vec2 u_size;"
+"uniform float u_blur;"
 "float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }"
 /* The shadows of what stands by the road (initPost, NFS_OBJECT_SHADOWS): from
  * each pixel's place in the view -- the depth buffer holds 1 - 1/z (as the
@@ -998,6 +1001,37 @@ static const char g_compositeShader[] =
 "    vec2 edge = min(uv, 1.0 - uv);"
 "    return shade * level * smoothstep(0.0, 0.06, min(edge.x, edge.y));"
 "}"
+/* Speed you can feel, 2 (initPost, NFS_MOTION_BLUR): the world smeared along
+ * the way it streams past.  Going forward at v, a point still in the world at
+ * z in the view moves on the screen away from the screen's centre by its
+ * distance from it times v dt / z -- the near verges and walls streak, the
+ * horizon stands -- so each pixel is averaged with eight more along that line
+ * behind it, u_blur being v times the shutter.  The cars are left sharp: their
+ * own pixels (0 in the picture's alpha) are not blurred, and are not taken
+ * into the blur of what lies around them.  NFS_MOTION_BLUR 2 by default. */
+"vec3 motionBlur(vec2 uv, vec3 c)"
+"{"
+"    if (texture(u_source, uv).a < 0.5) return c;"
+"    float d = texture(u_depth, uv).r;"
+"    if (d >= 0.9999) return c;"
+"    float z = 1.0 / max(1.0 - d, 1e-5);"
+"    vec2 away = uv * u_size - u_centre;"
+"    vec2 trail = away * min(u_blur / max(z, 1.0), 0.25);"
+"    float len = length(trail);"
+"    if (len < 1.0) return c;"
+"    trail *= min(len, 48.0) / len;"
+"    vec3 sum = c;"
+"    float n = 1.0;"
+"    for (int i = 1; i <= 8; ++i) {"
+"        vec2 at = uv - trail * (float(i) / 8.0) / u_size;"
+"        vec4 s = texture(u_source, at);"
+"        if (s.a < 0.5) continue;"
+"        float w = 1.0 - float(i) / 10.0;"
+"        sum += s.rgb * w;"
+"        n += w;"
+"    }"
+"    return sum / n;"
+"}"
 "vec3 fxaa(vec2 uv)"
 "{"
 "    vec3 nw = texture(u_source, uv + vec2(-1.0, -1.0) * u_pixel).rgb;"
@@ -1022,6 +1056,8 @@ static const char g_compositeShader[] =
 "void main()"
 "{"
 "    vec3 c = u_aa ? fxaa(v_uv) : texture(u_source, v_uv).rgb;"
+"    if (u_blur > 0.0)"
+"        c = motionBlur(v_uv, c);"
 "    if (u_shadow > 0.0)"
 "        c *= 1.0 - u_shadow * sunShadow(v_uv);"
 "    if (u_bloom > 0.0) {"
@@ -1077,11 +1113,14 @@ void ThrashRenderer::initPost()
     // Each on unless set to 0 (or "off"); a number for how much, where it has one.
     m_haze = SDL_min(onOff("NFS_HAZE", 0.8f), 1.0f);
     m_headStrength = onOff("NFS_HEADLIGHT_OBJECTS", 1.6f);
+    m_motionBlur = onOff("NFS_MOTION_BLUR", 2.0f);
     m_bloom = onOff("NFS_BLOOM", 0.6f);
     m_gradeOn = onOff("NFS_GRADE", 1.0f) > 0.0f;
     m_antialias = onOff("NFS_AA", 1.0f) > 0.0f;
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[GFX] haze %.2f; glow %.2f; colour grade %s; anti-aliasing %s; headlights on objects %.2f",
-                double(m_haze), double(m_bloom), m_gradeOn ? "on" : "off", m_antialias ? "FXAA" : "off", double(m_headStrength));
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                "[GFX] haze %.2f; glow %.2f; colour grade %s; anti-aliasing %s; headlights on objects %.2f; motion blur %.2f",
+                double(m_haze), double(m_bloom), m_gradeOn ? "on" : "off", m_antialias ? "FXAA" : "off", double(m_headStrength),
+                double(m_motionBlur));
     {
         m_brightProgram = postProgram(compileShader, g_brightShader);
         m_compositeProgram = postProgram(compileShader, g_compositeShader);
@@ -1100,6 +1139,7 @@ void ThrashRenderer::initPost()
         m_compositeCentre = glGetUniformLocation(m_compositeProgram, "u_centre");
         m_compositeUp = glGetUniformLocation(m_compositeProgram, "u_up");
         m_compositeSize = glGetUniformLocation(m_compositeProgram, "u_size");
+        m_compositeBlur = glGetUniformLocation(m_compositeProgram, "u_blur");
         glGenFramebuffers(1, &m_depthFramebuffer);
         glGenVertexArrays(1, &m_postArray);
         glGenFramebuffers(1, &m_postFramebuffer);
@@ -1200,9 +1240,14 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
     glBindTexture(GL_TEXTURE_2D, m_postCopy);
     glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, width, height);
     const bool shadows = draw.sun[0] > 0.0f;
-    if (shadows)
+    /* The motion blur's length: v times a shutter of a ninetieth of a second
+     * by NFS_MOTION_BLUR, coming in from 10 m/s and whole from 35. */
+    const float ramp = SDL_max(0.0f, SDL_min(1.0f, (draw.speed - 10.0f) / 25.0f));
+    const float blur = m_motionBlur * draw.speed * ramp * ramp * (3.0f - 2.0f * ramp) / 90.0f;
+    const bool needDepth = shadows || blur > 0.0f;
+    if (needDepth)
     {
-        // The world's depth, for its shadows: a copy, as the buffer stays bound.
+        // The world's depth, for its shadows and its blur: a copy, as the buffer stays bound.
         glBindFramebuffer(GL_READ_FRAMEBUFFER, m_framebuffer);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_depthFramebuffer);
         glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
@@ -1236,7 +1281,8 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
     glUniform3f(m_compositeTint, draw.grade[0], draw.grade[1], draw.grade[2]);
     glUniform1i(m_compositeAa, m_antialias ? 1 : 0);
     glUniform1f(m_compositeShadow, shadows ? draw.sun[0] : 0.0f);
-    if (shadows)
+    glUniform1f(m_compositeBlur, blur);
+    if (needDepth)
     {
         glUniform1i(m_compositeDepth, 2);
         glUniform3f(m_compositeSun, draw.sun[1], draw.sun[2], draw.sun[3]);
@@ -1347,7 +1393,8 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
     }
     /* A race only: a menu's turning car is 3D too, and the pass after it ran
      * the glow and FXAA over the menu's lettering, ghosting it. */
-    const bool post = draw.race && m_compositeProgram && (m_bloom > 0.0f || m_gradeOn || m_antialias || draw.sun[0] > 0.0f);
+    const bool post = draw.race && m_compositeProgram
+                      && (m_bloom > 0.0f || m_gradeOn || m_antialias || draw.sun[0] > 0.0f || m_motionBlur > 0.0f);
     const float haze = draw.race ? m_haze : 0.0f;
     const bool wet = draw.wetness > 0.0f && m_reflectionValid && m_reflectionW == int(draw.width)
                      && m_reflectionH == int(draw.height);

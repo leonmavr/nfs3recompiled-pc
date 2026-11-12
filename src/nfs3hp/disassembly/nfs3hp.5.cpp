@@ -3,6 +3,8 @@
 
 namespace nfs3hp
 {
+// Port (tools/apply_native_effects.py): defined in native_effects.cpp.
+bool cameraToView(win32::WinApplication* app, x86::CPU& cpu);
 
 /* align: skip 0x90 */
 void Application::sub_41e3c0(WinApplication* __restrict app, x86::CPU& cpu_)
@@ -19954,6 +19956,11 @@ void Application::sub_422850(WinApplication* __restrict app, x86::CPU& cpu_)
   x86::Local cpu(cpu_);
   NFS2_USE(cpu);
   NFS2_USE(app);
+    if (cameraToView(app, cpu.sync())) /* port: native (tools/apply_native_effects.py) */
+    {
+        cpu.reload();
+        return;
+    }
     // 00422850  53                     -push ebx
     app->getMemory<x86::reg32>(cpu.esp-4) = cpu.ebx;
     cpu.esp -= 4;

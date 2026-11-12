@@ -11,6 +11,10 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   objects and they'rej just a few straight lines. Make them denser depending on
   speed of impact, die off gradually and desker at the impact point, then
   spread.
+  - Partly done (sparks): every burst twice as many (`NFS_SPARKS`, 2), and
+    walls throw them on a hit over 5 m/s and when scraped from 6 m/s (the
+    game only above 22 m/s), stone and concrete too, bounced off the wall
+    instead of into it. Next: gravity, fade, a hot core at the impact point.
 - [x] Road texture looks too blocky and fake, it shoul be more realistic and a
   bit smoother but still detailed some.
   - Done: mipmaps made for every texture, trilinear + 8x anisotropic
@@ -56,6 +60,14 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 - [ ] Texture rework. Inspect the texture assets and rework them so that they
   are of high quality, then bake them in game again. This can include grass,
   buildings, desert, snow, dirt, fences, trees, etc.
+- [ ] softer emissive light glow from where lights glow (headlights, tail
+  lights)
+- [x] Motion blur (that gets stronger with higher speeds) on the environemtn
+  mostly (not as much on cars) or other cheap but effective speed-feel
+  enhancement techniques.
+  - Done: the world smeared away from the screen's centre by speed over its
+    distance (from the depth buffer), from 10 m/s, whole from 35; the cars
+    stay sharp (`NFS_MOTION_BLUR`, 2).
 
 ### Races/locations
 
@@ -157,11 +169,18 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   in the HUD; it should be right of the speed
   meter as a vertical  bottle-shaped bar if gauge is selected to be on the top part of screen,
   else as an outer circle around it.
-- [ ] More means of police to chase you; e.g. at higher heat levels; helicopter
+- [ ] More means/more effective stratgies of police to chase you; e.g. at higher heat levels; helicopter
 - [ ] Car visual customization; vinyls (at least some simple ones, like stripes,
   stars, checkflag flags, tribals)
 - [ ] Car visual customization; bodykits and spoiler and side vents, rims etc - these
   also change the performance/weight distribution/traction.
+- [x] Make speeding more immersive, i.e. gently pull camera back on pressing
+  acceleration button up to some small distance , pull back in when releasing
+  it.
+  - Done: the chase camera eases back up to 1.2 m by the throttle, and in
+    again when let go (`NFS_CAMERA_PULL`).
+- [ ] If you tackle tail light and headlight emission, upon speeding if it's
+  light, leave a few trailing headlights (that shrink) with speeding.
 
 ### Music/Sound
 - [x] Sound quality is great and sound works well but volume is still too
@@ -173,6 +192,10 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   cyrretnly plating song when it starts and then slide the popup away.
 - [ ] Music control: what tracks play in game, skip current track button.
 - [ ] Radio: be able to add your own tracks.
+- [ ] Doppler Effect: Passing rival cars, tunnel walls, and roadside barriers 
+creates rapid whooshing sounds that rise and fall in pitch as you fly past them. 
+Obviously this effect depends on speed.
+
 
 ### Career mode
 - [ ] Add one more game mode other than single player, hot pursuit, etc called
