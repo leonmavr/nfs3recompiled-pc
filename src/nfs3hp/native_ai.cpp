@@ -1,6 +1,7 @@
 #include "native_ai.h"
 #include <nfs3hp.h>
 #include <SDL3/SDL.h>
+#include <cmath>
 #include <cstring>
 
 /* The opponents' driving, decompiled (native_ai.h), entered from the top of
@@ -595,33 +596,90 @@ void unstick(win32::WinApplication* app, x86::reg32 car, int i)
 
 }  // namespace
 
-/* Port: traffic lighter (NFS_TRAFFIC_WEIGHT, 0.5 by default; 0 or off for the
- * game's), so a car that hits it is not stopped dead.  A car's mass is at
- * [+0xb0] with its inverse at [+0xb4], its three moments of inertia at +0xf0
- * .. +0xf8 with theirs at +0xfc .. +0x104 (the masses read from a race: 1472
- * the player's car, 1700 a traffic van, each beside 1 over it); all are
- * scaled together, so a lighter car turns as a lighter car would.  Done the
- * first time a traffic car ([+0x200] & 0x10, sub_428700) is driven, and again
- * whenever its mass is not the one set (a new race, a car made again). */
-static float trafficWeight()
+/* Port: traffic lighter (NFS_TRAFFIC_WEIGHT, 0.5 by default), so a car that
+ * hits it is not stopped dead, and the cops heavier (NFS_COP_WEIGHT, 1.25), so
+ * they shove harder; 0 or off for the game's.  A car's mass is at [+0xb0]
+ * with its inverse at [+0xb4], its three moments of inertia at +0xf0 .. +0xf8
+ * with theirs at +0xfc .. +0x104 (the masses read from a race: 1472 the
+ * player's car, 1700 a traffic van, each beside 1 over it); all are scaled
+ * together, so the car turns as one of that weight would.  The game's own
+ * driving of these cars (sub_4071a0) never reads the mass -- they are pushed
+ * by their pull, not driven through their wheels -- so only how they hit and
+ * are hit changes, not how fast they go.  Done the first time a traffic car
+ * ([+0x200] & 0x10, sub_428700) or a cop ([+0x200] & 0x20) is driven here,
+ * and again whenever its mass is not the one set (a new race, a car made
+ * again). */
+bool pursuitHolds(win32::WinApplication* app, x86::reg32 car);  // native_pursuit.cpp
+
+/* Port: the cops' cars tuned up (NFS_COP_PACE; 0 or off for the game's), so
+ * they can catch what they chase.  An opponent -- a cop too -- is pushed by a
+ * pull it reads from its car's table by its speed (sub_4064f0: [car+0x528] +
+ * 0x2ec, a float for each m/s up to 111, at [car+0x7c4]), and aims for a
+ * speed the game sets ([+0x7b0]).  A tuned cop's pull is the table read at its
+ * speed over `top` -- the curve stretched up the speeds, so it keeps pulling
+ * where the stock car runs out -- times `pull`, and its aim is times `top`:
+ *
+ *   the Pursuit Corvette (traffic/pursuit/0005)   pull 1.20, top 1.12
+ *   the Pursuit Diablo (traffic/pursuit/0001)     pull 1.15, top 1.15
+ *   the rest of the force (0000, 0002-0004)       pull 1.10, top 1.08
+ *
+ * Which is which by the folder the race gave the car ([+0x1e4], "0005").  A
+ * cop is [+0x200] & 0x20 (sub_428700); the player's own cop car is not
+ * driven here. */
+struct CopTune
 {
-    static const float weight = [] {
-        const char* value = SDL_getenv("NFS_TRAFFIC_WEIGHT");
+    float pull = 1.0f, top = 1.0f;
+};
+
+static CopTune copTune(win32::WinApplication* app, x86::reg32 car)
+{
+    static const float pace = [] {
+        const char* value = SDL_getenv("NFS_COP_PACE");
         if (!value || !*value || SDL_strcasecmp(value, "on") == 0)
-            return 0.5f;
-        if (SDL_strcmp(value, "0") == 0 || SDL_strcasecmp(value, "off") == 0)
             return 1.0f;
+        if (SDL_strcmp(value, "0") == 0 || SDL_strcasecmp(value, "off") == 0)
+            return 0.0f;
         const float parsed = float(SDL_atof(value));
-        return parsed >= 0.1f && parsed <= 2.0f ? parsed : 0.5f;
+        return parsed > 0.0f && parsed <= 3.0f ? parsed : 1.0f;
     }();
-    return weight;
+    CopTune tune;
+    if (pace <= 0.0f || !(app->getMemory<x86::reg8>(car + 0x200) & 0x20))
+        return tune;
+    char name[5] = {};
+    for (int q = 0; q < 4; ++q)
+        name[q] = char(app->getMemory<x86::reg8>(car + 0x1e4 + x86::reg32(q)));
+    if (SDL_strcmp(name, "0005") == 0)
+        tune = { 1.20f, 1.12f };
+    else if (SDL_strcmp(name, "0001") == 0)
+        tune = { 1.15f, 1.15f };
+    else
+        tune = { 1.10f, 1.08f };
+    // NFS_COP_PACE a number: how much of the tuning, 1 the above.
+    tune.pull = 1.0f + (tune.pull - 1.0f) * pace;
+    tune.top = 1.0f + (tune.top - 1.0f) * pace;
+    return tune;
 }
 
-static void lightenTraffic(win32::WinApplication* app, x86::reg32 car, int i)
+
+static float weightSetting(const char* name, float otherwise)
 {
+    const char* value = SDL_getenv(name);
+    if (!value || !*value || SDL_strcasecmp(value, "on") == 0)
+        return otherwise;
+    if (SDL_strcmp(value, "0") == 0 || SDL_strcasecmp(value, "off") == 0)
+        return 1.0f;
+    const float parsed = float(SDL_atof(value));
+    return parsed >= 0.1f && parsed <= 3.0f ? parsed : otherwise;
+}
+
+static void weigh(win32::WinApplication* app, x86::reg32 car, int i)
+{
+    static const float traffic = weightSetting("NFS_TRAFFIC_WEIGHT", 0.5f);
+    static const float cops = weightSetting("NFS_COP_WEIGHT", 1.25f);
     static float s_set[kMaxCars] = {};
-    const float weight = trafficWeight();
-    if (weight == 1.0f || networkRace(app) || !(app->getMemory<x86::reg8>(car + 0x200) & 0x10))
+    const x86::reg8 kind = app->getMemory<x86::reg8>(car + 0x200);
+    const float weight = (kind & 0x10) ? traffic : (kind & 0x20) ? cops : 1.0f;
+    if (weight == 1.0f || networkRace(app))
         return;
     const float mass = app->getMemory<float>(car + 0xb0);
     if (!(mass > 0.0f) || mass == s_set[i])
@@ -632,7 +690,8 @@ static void lightenTraffic(win32::WinApplication* app, x86::reg32 car, int i)
         app->getMemory<float>(car + o) = app->getMemory<float>(car + o) / weight;
     s_set[i] = app->getMemory<float>(car + 0xb0);
     if (aiTracing())
-        SDL_Log("[AI] car %d is traffic: %.0f kg, now %.0f", i, double(mass), double(s_set[i]));
+        SDL_Log("[AI] car %d is %s: %.0f kg, now %.0f", i, (kind & 0x10) ? "traffic" : "a cop", double(mass),
+                double(s_set[i]));
 }
 
 bool aiDrive(win32::WinApplication* app, x86::CPU& cpu)
@@ -645,7 +704,24 @@ bool aiDrive(win32::WinApplication* app, x86::CPU& cpu)
      * through here too, and backing off, looking for forks and flashing are
      * not for them -- a racer's flag in [+0x200] is 8 (sub_428700). */
     const bool racer = (app->getMemory<x86::reg8>(car + 0x200) & 8) != 0;
-    lightenTraffic(app, car, i);
+    weigh(app, car, i);
+    if (pursuitHolds(app, car))
+        return false;   // a cop standing by its spike strip (native_pursuit.cpp)
+    if (!networkRace(app))
+    {
+        // A tuned cop aims faster (copTune): once for each aim the game wrote.
+        const CopTune tune = copTune(app, car);
+        if (tune.top != 1.0f)
+        {
+            Opponent& o = s_opponents[i];
+            const float want = app->getMemory<float>(car + 0x7b0);
+            if (want != o.wantWritten && want != 0.0f)
+            {
+                o.wantWritten = want * tune.top;
+                app->getMemory<float>(car + 0x7b0) = o.wantWritten;
+            }
+        }
+    }
     if (aiTuned() && !networkRace(app) && racer)
     {
         unstick(app, car, i);
@@ -694,6 +770,29 @@ bool aiPull(win32::WinApplication* app, x86::CPU& cpu)
         return false;
     const x86::reg32 car = cpu.eax;
     ai::aiPull(app, cpu);
+    // Port: a cop's car tuned up (copTune): its curve stretched up the speeds.
+    if (!networkRace(app))
+    {
+        const CopTune tune = copTune(app, car);
+        float p;
+        std::memcpy(&p, &cpu.eax, 4);
+        if (tune.pull != 1.0f && p > 0.0f)
+        {
+            const float speed = app->getMemory<float>(car + 0x7c4);
+            const x86::reg32 table = app->getMemory<x86::reg32>(car + 0x528) + 0x2ec;
+            auto at = [&](float v) {
+                const int k = SDL_max(0, SDL_min(0x6f, int(std::floor(v - 0.5f + 0.5f))));
+                return app->getMemory<float>(table + x86::reg32(k) * 4);
+            };
+            const float stock = at(speed), stretched = at(speed / tune.top);
+            if (stock > 0.0f)
+            {
+                p *= stretched / stock * tune.pull;
+                std::memcpy(&cpu.eax, &p, 4);
+                cpu.fpu.st(0) = x86::Float(p);
+            }
+        }
+    }
     // Port: the difficulty a notch up, and each driver's own pull (above).
     // Racers only ([+0x200] & 8), not the traffic or the cops.
     if (aiTuned() && !networkRace(app) && opponentIndex(car) >= 0 && (app->getMemory<x86::reg8>(car + 0x200) & 8))

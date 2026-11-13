@@ -1109,11 +1109,11 @@ static const char g_particleVertexShader[] =
 "layout (location=1) in vec2 a_uv;"
 "layout (location=2) in vec4 a_color;"
 "layout (location=3) in vec2 a_from;"
-"layout (location=4) in vec3 a_params;"   /* depth, seed, type */
+"layout (location=4) in vec4 a_params;"   /* depth, seed, type, turn */
 "out vec2 v_uv;"
 "out vec4 v_color;"
 "out vec2 v_from;"
-"flat out vec3 v_params;"
+"flat out vec4 v_params;"
 "uniform vec2 u_size;"
 "void main()"
 "{"
@@ -1130,15 +1130,15 @@ static const char g_particleVertexShader[] =
  * shows a hard line against the ground.  Both are the colour of the ground they
  * were thrown from (round v_from, the picture there -- the world's pixels
  * only, a car's being 0 in the alpha, and the car that threw them standing
- * over the very spot), a grain darker and a puff paler, or the colour given
- * where that cannot be seen.  A spark (2): a streak from where it was to
+ * over the very spot; or every pixel there, where too few are the world's),
+ * a grain darker and a puff paler.  A spark (2): a streak from where it was to
  * where it is, white hot at its head.  Each is hidden behind what stands in
  * front of it, from the depth buffer (1 - 1/z). */
 static const char g_particleShader[] =
 "in vec2 v_uv;"
 "in vec4 v_color;"
 "in vec2 v_from;"
-"flat in vec3 v_params;"
+"flat in vec4 v_params;"
 "layout (location=0) out vec4 o_color;"
 "uniform sampler2D u_source;"
 "uniform sampler2D u_depth;"
@@ -1153,7 +1153,7 @@ static const char g_particleShader[] =
 "vec3 ground(vec3 otherwise)"
 "{"
 "    if (v_from.x < 0.0) return otherwise;"
-"    vec3 sum = vec3(0.0);"
+"    vec3 sum = vec3(0.0), all = vec3(0.0);"
 "    float n = 0.0;"
 "    for (int i = 0; i < 12; ++i) {"
 "        float a = float(i) * 2.39996;"
@@ -1161,10 +1161,12 @@ static const char g_particleShader[] =
 "        vec4 s = texture(u_source, (v_from + vec2(cos(a), sin(a)) * d) / u_size);"
 "        float w = step(0.5, s.a);"
 "        sum += s.rgb * w;"
+"        all += s.rgb;"
 "        n += w;"
 "    }"
-"    if (n < 0.5) return otherwise;"
-"    return mix(otherwise, sum / n, min(1.0, n / 3.0));"
+/* The world's pixels where there are enough of them; else every one (a
+ * ground of 32-bit textures is 0 in the alpha too, like a car). */
+"    return n >= 3.0 ? sum / n : all / 12.0;"
 "}"
 "void main()"
 "{"
@@ -1173,7 +1175,7 @@ static const char g_particleShader[] =
 "    float behind = texture(u_depth, gl_FragCoord.xy / u_size).r;"
 "    float zBehind = 1.0 / max(1.0 - behind, 1e-5);"
 "    float room = zBehind - z;"
-"    if (room < -0.05) discard;"
+"    if (room < (type == 4 ? -0.4 : -0.05)) discard;"
 "    float r = length(v_uv);"
 "    if (type == 2) {"
 "        float across = exp(-v_uv.y * v_uv.y * 5.0);"
@@ -1183,14 +1185,48 @@ static const char g_particleShader[] =
 "        o_color = vec4(hot, a);"
 "        return;"
 "    }"
+"    if (type == 4) {"
+/* A spike of a spike strip: a steel point (up the screen is -y) on a dark
+ * rubber belt, lit from above. */
+"        float up = -v_uv.y;"
+"        float belt = 1.0 - smoothstep(0.0, 0.1, abs(up + 0.8) - 0.12);"
+"        float halfWidth = (0.7 - up) * 0.32;"
+"        float spike = step(up, 0.7) * step(-0.75, up) * (1.0 - smoothstep(halfWidth * 0.75, halfWidth, abs(v_uv.x)));"
+"        float a = max(belt, spike);"
+"        if (a <= 0.0) discard;"
+"        vec3 steel = vec3(0.62, 0.64, 0.68) * (0.75 + 0.45 * (1.0 - abs(v_uv.x) / max(halfWidth, 1e-3)) * (0.6 + 0.4 * up));"
+"        vec3 c = spike > belt ? steel : vec3(0.06, 0.06, 0.07);"
+"        o_color = vec4(c * v_color.rgb, a * v_color.a);"
+"        return;"
+"    }"
 "    float angle = atan(v_uv.y, v_uv.x) + seed * 6.2832;"
-"    if (type == 0) {"
+"    if (type == 0 || type == 3) {"
+"        vec3 g = ground(v_color.rgb);"
+/* What comes off grass (3) is blades: long and thin, tapering, a little bent,
+ * lying as they tumble (v_params.w), a greener and brighter shade of the
+ * ground -- where the ground is green; off snow or earth, grains. */
+"        if (type == 3 && g.g > g.r * 1.02 && g.g > g.b * 0.9) {"
+"            vec2 d = vec2(cos(v_params.w), sin(v_params.w));"
+"            vec2 q = vec2(dot(v_uv, d), dot(v_uv, vec2(-d.y, d.x)));"
+"            q.y -= (seed - 0.5) * 0.5 * q.x * q.x;"
+"            float w = 0.27 * (1.0 - 0.7 * q.x * q.x);"
+"            float a = (1.0 - smoothstep(0.8, 1.0, abs(q.x))) * (1.0 - smoothstep(w * 0.5, w, abs(q.y)));"
+"            if (a <= 0.0) discard;"
+"            vec3 hue = g / max(max(g.r, g.g), max(g.b, 1e-3));"
+"            vec3 c = mix(hue, hue * vec3(0.8, 1.0, 0.55), 0.5) * max(g.g, 0.3) * 1.35"
+"                   * (0.8 + 0.4 * fract(seed * 5.71)) * (0.9 + 0.2 * q.y / max(w, 1e-3));"
+"            o_color = vec4(c, a * v_color.a * clamp(room / 0.1 + 0.5, 0.0, 1.0));"
+"            return;"
+"        }"
+"        vec2 h = v_uv * 2.0;"
+"        r = length(h);"
+"        angle = atan(h.y, h.x) + seed * 6.2832;"
 "        float edge = 0.72 + 0.1 * sin(angle * 2.0 + seed * 11.0) + 0.06 * sin(angle * 3.0 + seed * 23.0)"
 "                   + 0.04 * noise(vec2(angle * 1.5, seed * 40.0));"
 "        float a = 1.0 - smoothstep(edge - 0.3, edge, r);"
 "        if (a <= 0.0) discard;"
-"        float lit = 0.92 + 0.16 * clamp(v_uv.y * 0.7 - r * 0.2, -1.0, 1.0);"
-"        vec3 c = ground(v_color.rgb) * (0.8 + 0.22 * fract(seed * 7.13)) * lit;"
+"        float lit = 0.92 + 0.16 * clamp(h.y * 0.7 - r * 0.2, -1.0, 1.0);"
+"        vec3 c = g * (0.8 + 0.22 * fract(seed * 7.13)) * lit;"
 "        o_color = vec4(c, a * v_color.a * clamp(room / 0.1 + 0.5, 0.0, 1.0));"
 "        return;"
 "    }"
@@ -1386,7 +1422,7 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
 {
     struct Corner
     {
-        float x, y, u, v, r, g, b, a, fx, fy, depth, seed, type;
+        float x, y, u, v, r, g, b, a, fx, fy, depth, seed, type, turn;
     };
     const std::vector<EffectParticle>& list = *draw.particles;
     std::vector<Corner> corners;
@@ -1424,7 +1460,7 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
         const float fromX = p.type == EffectParticle::Spark ? -1.0f : p.tx;
         auto corner = [&](float s, float t) {
             corners.push_back({ cx + ax * s + bx * t, cy + ay * s + by * t, s, t, p.r, p.g, p.b, p.a, fromX, p.ty,
-                                p.depth, p.seed, p.type });
+                                p.depth, p.seed, p.type, p.turn });
         };
         corner(-1, -1); corner(1, -1); corner(1, 1);
         corner(-1, -1); corner(1, 1); corner(-1, 1);
@@ -1437,7 +1473,7 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, (const void*)offsetof(Corner, u));
     glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, stride, (const void*)offsetof(Corner, r));
     glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, stride, (const void*)offsetof(Corner, fx));
-    glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, stride, (const void*)offsetof(Corner, depth));
+    glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, stride, (const void*)offsetof(Corner, depth));
     for (GLuint k = 0; k < 5; ++k)
         glEnableVertexAttribArray(k);
     glUseProgram(m_particleProgram);

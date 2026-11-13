@@ -6,7 +6,7 @@
  * before its whole-picture pass (ThrashRenderer::drawParticles). */
 struct EffectParticle
 {
-    enum Type { Grain = 0, Puff = 1, Spark = 2 };
+    enum Type { Grain = 0, Puff = 1, Spark = 2, Blade = 3, Spike = 4 };   // Blade: off grass; Spike: a strip's
     float x, y;         // the centre, in the picture's pixels
     float tx, ty;       // a spark: where it was a moment ago; else where it was thrown from
     float depth;        // its distance in the view, as the depth buffer has it (z)
@@ -14,6 +14,7 @@ struct EffectParticle
     float r, g, b, a;   // its colour where the ground's cannot be had; a is how much of it shows
     float seed;         // 0 to 1, its own shape
     float type;         // Type
+    float turn;         // radians: how a grass blade lies, turning as it tumbles
 };
 
 #endif

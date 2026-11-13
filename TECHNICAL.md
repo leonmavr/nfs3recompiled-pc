@@ -358,14 +358,50 @@ it, the picture's alpha left as it was. Not in split screen, nor without the
 native THRASH renderer: the game's own then. `NFS_PARTICLES` (1; a number up
 to 3 for more, `0`/`off` for the game's).
 
-### Traffic lighter
+### Grass, and spray off a wet road
+
+What comes off grass is the game's particle kind 5 and the spray off a wet
+road kind 10; both are taken over as dust and sparks are. Off grass the grains
+are blades (`EffectParticle::Blade`): long, thin, a little bent, tumbling as
+they flutter down (`turn`), a greener shade of the ground -- where the sampled
+ground is green; off snow or earth they stay grains. Where fewer than three of
+the samples round the spot are the world's pixels (a ground of 32-bit textures
+is 0 in the alpha, like a car), all of them are taken. The spray is a pale
+mist that billows out behind the wheel and hangs a moment, and fine drops
+thrown up and falling back, both more the faster the nearest car goes
+(`throwSpray`), in a colour of their own.
+
+### Spike strips (in the making)
+
+`src/nfs3hp/native_pursuit.cpp`, off unless `NFS_SPIKE_STRIPS=1`: a cop that
+has kept ahead of the player lays a 7 m strip across the road two car lengths
+behind it and waits beside one end; each wheel that crosses it counts, and a
+car slows (top speed 12% and the speed it gains 15% less a tyre) for 8 seconds
+and 4 more a tyre. It works in a test (`NFS_SPIKE_TEST=1`), but neither the
+strip nor the waiting cop shows on the screen yet, so it stays off.
+
+### Traffic lighter, cops heavier and faster
 
 A car's mass is at `[car+0xb0]` with 1 over it at `+0xb4`, its three moments of
 inertia at `+0xf0..+0xf8` with theirs at `+0xfc..+0x104` (read from a race:
-1472 kg the player's car, 1700 and 1800 two traffic vans). The first time a
-traffic car (`[car+0x200] & 0x10`, set by `sub_428700`) is driven, `aiDrive`
-scales all of them by `NFS_TRAFFIC_WEIGHT` (0.5), and again whenever its mass
-is not the one it set, so hitting traffic no longer stops a car dead.
+1472 kg the player's car, 1700 and 1800 two traffic vans, 1668-1672 the cops).
+The first time a traffic car (`[car+0x200] & 0x10`, set by `sub_428700`) or a
+cop (`& 0x20`) is driven, `aiDrive` scales all of them -- traffic by
+`NFS_TRAFFIC_WEIGHT` (0.5), cops by `NFS_COP_WEIGHT` (1.25) -- and again
+whenever its mass is not the one it set. The game's driving of these cars
+(`sub_4071a0`) never reads the mass: they are pushed by their pull, not driven
+through their wheels, so only how they hit and are hit changes.
+
+The cops are also faster (`copTune`, `NFS_COP_PACE`). An opponent's pull is
+read from its car's table by its speed (`sub_4064f0`: `[car+0x528]+0x2ec`, a
+float for each m/s to 111, at `[car+0x7c4]`), and it aims for a speed the game
+sets (`[car+0x7b0]`). A cop's pull is the table read at its speed over `top`
+-- the curve stretched up the speeds, so it keeps pulling where the stock car
+runs out -- times `pull`, and its aim is times `top`: the Pursuit Corvette
+(`traffic/pursuit/0005`) 1.20 and 1.12, the Pursuit Diablo (`0001`) 1.15 and
+1.15, the rest of the force 1.10 and 1.08. Which car by the folder the race
+gave it (`[car+0x1e4]`). On Redrock's Hot Pursuit the patrolling cops' top
+speeds went from 34.6-37.3 m/s to 37.4-41.5 m/s.
 
 ### Speed you can feel
 
@@ -1564,6 +1600,9 @@ from the phone; the rest matter for a desktop run.
 | `NFS_TAILLIGHT_TRAILS` | on (`1`) | `0`/`off`: no trails behind the cars' tail lights. A number up to 3: how long they grow with speed, from 80 km/h (The lamps' glow, and their trails). |
 | `NFS_PARTICLES` | on (`1`) | `0`/`off`: the game's own dust and sparks. A number up to 3: how much dirt is thrown (Dust, grit and sparks of the port's own). |
 | `NFS_TRAFFIC_WEIGHT` | `0.5` | How heavy the traffic is against the game's, 0.1 to 2; `0`/`off` for the game's (Traffic lighter). |
+| `NFS_COP_WEIGHT` | `1.25` | How heavy the cops are against the game's, 0.1 to 3; `0`/`off` for the game's (Traffic lighter, cops heavier and faster). |
+| `NFS_COP_PACE` | on (`1`) | `0`/`off`: the cops' cars as the game has them. A number up to 3: how much of the tuning (Traffic lighter, cops heavier and faster). |
+| `NFS_SPIKE_STRIPS` | off | `1`: cops lay spike strips (in the making; Spike strips). |
 | `NFS_CAMERA_PULL` | `1.2` | How far back, in metres, the chase camera eases under full throttle; `0`/`off` for none. |
 | `NFS_SPARKS` | `2` | How many times the sparks of a burst, and whether walls throw them on hits and scrapes; `0`/`off`: the game's own (Sparks off walls). |
 | `NFS_OBJECT_SHADOWS` | on (`0.45`) | `0`/`off`: no shadows from what stands by the road. A number: how dark (Shadows of what stands by the road); fainter in the rain and at night by `NFS_SHADOW_RAIN` and `NFS_SHADOW_NIGHT`. |

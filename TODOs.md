@@ -14,6 +14,16 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     small ragged grains thrown up and falling back under gravity, and soft
     uneven dust clouds -- more of them and higher the faster, coloured like
     the ground they came from (sand, snow, mud).
+- [ ] Rain on the windscreen/camera: drops and streaks that clear at speed.
+- [x] Wheel spray in the rain: mist behind every car on wet roads.
+- [ ] Tyre marks that last the lap, darker and softer than the game's.
+- [ ] Heat haze over the road on desert tracks by day.
+- [ ] Brake discs glowing faintly orange after hard braking at night.
+- [ ] Wider, sharper reflections on the cars from the sky already captured.
+- [ ] Camera shake on big impacts and hard landings, by the hit's speed.
+- [x] Grass particles: off the road on grass, slightly elongated flying blades,
+  more with speed, beside the dirt grains.
+- [ ] 3D background objects, such as trees. 
 - [x] If possible, make sparks organic and procedural too.
   - Partly done (sparks): every burst twice as many (`NFS_SPARKS`, 2), and
     walls throw them on a hit over 5 m/s and when scraped from 6 m/s (the
@@ -165,6 +175,16 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   not one.
 - [ ] In full grid hot pursuit, number of cop cars should increase 3x of what it
   nomally is.
+- [ ] Hot Pursuit: cops ahead of the player for a while drop a spike strip
+  (the game never deploys them). Not too fast to drop, never right onto a
+  car: far enough ahead to be seen and dodged. A cop car waits idle at one
+  side of the strip and rejoins the chase if the target misses it or after a
+  while. A hit cuts the target's acceleration and top speed for a time, by how
+  many tyres went over it (1-4).
+- [x] Hot Pursuit: cop cars 1.25x heavier, their performance and handling
+  otherwise unchanged.
+  - Done (`NFS_COP_WEIGHT`), and the cops faster: their cars tuned up 10-20%
+    in pull and 8-15% in top speed by model (`NFS_COP_PACE`).
 - [ ] Cops should deploy their high-end cars (depending on location) on high
   heat levels, e.g. pursuit McLaren, Corvette, or Diablo.
 - [ ] SERIOUS BUG: in the rain, opponents often lose control on turnining
@@ -191,6 +211,13 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   adjust opponent AI)
 
 ### Driving/Gameplay
+- [ ] Tire grip by surface: less on snow, sand and grass than on asphalt. Each
+  terrain must have its own grip properties (not just more slippery/less
+  slipepry) that have an effect on player - e.g. slow down, unstable driving,
+  slippery on turns etc and each terrain will have one main grip propery and 1-2
+  secondary properties. These properties should be so that they're easy to
+  implement. These properties do NOT affect opponent cars so opponent AI can
+  disregard the terrtain - they only affect player.
 - [ ] Nitro and nitro UI. However if you add nitro, opponents also need to know
   how to use it (e.g. to prevent them from staying inside the turn or blast it
   when they see enough straight road ahead, however they need to take crashes
@@ -224,6 +251,7 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   cyrretnly plating song when it starts and then slide the popup away.
 - [ ] Music control: what tracks play in game, skip current track button.
 - [ ] Radio: be able to add your own tracks.
+- [ ] Crash sounds by how hard the hit was; metal scraping rising with speed.
 - [ ] Doppler Effect: Passing rival cars, tunnel walls, and roadside barriers 
 creates rapid whooshing sounds that rise and fall in pitch as you fly past them. 
 Obviously this effect depends on speed.
