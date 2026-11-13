@@ -370,6 +370,14 @@ is 0 in the alpha, like a car), all of them are taken. The spray is a pale
 mist that billows out behind the wheel and hangs a moment, and fine drops
 thrown up and falling back, both more the faster the nearest car goes
 (`throwSpray`), in a colour of their own.
+
+The game's kind 5 comes off some grass only: on Atlantica's and Hometown's
+(surface 3) a car driving over it throws nothing, and sliding or braking on it
+only the game's dark smoke (kind 6). So each frame every wheel on grass
+(`groundUnder`, `native_surface.cpp`) of every car faster than 6 m/s throws
+up to three blades, more often the faster (`grassFromWheels`), and the game's
+smoke off a wheel on grass (the nearest wheel to where it starts,
+`groundAt`) is taken over as grass instead.
 `NFS_WHEEL_SPRAY` (off for now: with it the weather's flakes and drops still show as small turned squares -- a known bug, TODOs.md; `1`/`on` for the port's spray).
 
 The game's own particle is still made for each kind taken over (the hook
@@ -380,6 +388,64 @@ to 0 at its quad's edge (now faded out from 0.6 of its radius), and the game's
 flake and spray sprites write depth over their whole square, so the port's
 particles behind one were cut away in its shape. A batch that writes depth now
 writes it only where its alpha is at least 0.08 (`u_depthCut`).
+
+### Sun glare
+
+By day with no weather (`noteSun`, `native_render.cpp`), the sun is where the
+light the cars are lit by comes from (`[0x55e6a0]`, turned into the view, as
+the shadows of what stands by the road use it). The whole-picture pass
+(`glare` in the composite shader) puts it on the screen through the
+projection and works out how much of it shows: of sixteen points round it,
+those whose depth is the sky's or as far (over 250 m; the sky is drawn with
+a depth of its own), so it dims behind trees, hills and buildings and
+flickers through gaps. Then a small hot core, a warm haze round it, four faint
+ghosts of the lens along the line from it through the middle of the picture,
+and the blacks raised a little; faded out as the sun goes off the screen, none
+when it is behind. `NFS_SUN_GLARE` (1; up to 3 stronger, `0`/`off` for none).
+`NFS_GLARE_TEST=1` puts the sun straight ahead of the view, for testing.
+
+### Grip by terrain
+
+`src/nfs3hp/native_surface.cpp` (`surfaceFrame`, each frame from `noteSun`):
+what each of the player's wheels stands on is `sub_429b40`'s -- on the ground
+(`[car+0x164]` 0) and with its contact (wheels 0x78 bytes from `car+0x300`;
+`[wheel+0x14]`, `[wheel+0x18]`), `[[wheel+0x18]+1] & 0x3f`, else the car's
+own `[car+0x18c]`. The game's table of surfaces (16 of 0x24 bytes at
+`0x553090`) has the paved ones 1 in their first dword. Seen: 1 the road, 10
+and 12 paved verges, 3 Atlantica's grass, 13 Redrock's sand and dirt, 15
+Summit's snow (2 grass, 8 and 9 dirt, 5 mud from the table).
+
+Only the player's car, and gently -- never enough to lose it. Each tick of
+the race's clock (64 a second), by the share of the four wheels on each
+surface, none below 15 km/h and all of it from 32 km/h:
+
+| Surface | Drag (speed lost) | Steering softer | Slip kept | Shake |
+|---|---|---|---|---|
+| Grass | 0.030 | 0.9 | 0.10 | 0.10 |
+| Sand, dirt, gravel | 0.020 | 0.5 | 0.25 | 0.12 |
+| Snow | 0.017 | -0.45 (sharper) | 0.45 | 0.06 |
+| Mud | 0.045 | 1.0 | 0.15 | 0.08 |
+| Other, not paved | 0.015 | 0.4 | 0.10 | 0.08 |
+
+- **Drag**: the speed along the ground less, each second, drag times the
+  speed and 10 m/s more (to 40). Tested on Redrock: after 4.5 s of full
+  throttle 24.6 m/s on asphalt, 23.2 as if on grass, 22.3 as if on mud, and
+  slowing down faster off the throttle.
+- **Steering**: the yaw rate (`[car+0xe8]`) less by this fraction a second;
+  on snow (below 0) more instead -- a little oversteer, only while turning
+  and below 1 rad/s. Tested with every surface as snow on Redrock: the
+  same steering gave 0.26 rad/s of yaw against 0.21, twice the sideways
+  slide (1.4 m/s against 0.7), and the car straightened as before; about 4%
+  slower after 4 s of throttle.
+- **Slip**: of the sideways speed (along `[car+0xc0]`) the tyres took away
+  since the last tick, this fraction given back -- at most 0.3 m/s a tick,
+  and never past 2.5 m/s sideways.
+- **Shake**: up and down by up to this many m/s, and a hair of yaw, more
+  with speed.
+
+`NFS_SURFACE_GRIP` (1; up to 3 stronger, `0`/`off` for none).
+`NFS_SURFACE_TEST=grass|dirt|snow|mud` treats every surface as that one, and
+`NFS_SURFACE_TRACE=1` (or a number of ticks between lines) logs the wheels' surfaces (`[SURFACE]`), for testing.
 
 ### Spike strips (in the making)
 
@@ -1610,6 +1676,8 @@ from the phone; the rest matter for a desktop run.
 | `NFS_TAILLIGHT_TRAILS` | on (`1`) | `0`/`off`: no trails behind the cars' tail lights. A number up to 3: how long they grow with speed, from 80 km/h (The lamps' glow, and their trails). |
 | `NFS_PARTICLES` | on (`1`) | `0`/`off`: the game's own dust and sparks. A number up to 3: how much dirt is thrown (Dust, grit and sparks of the port's own). |
 | `NFS_WHEEL_SPRAY` | off (`0`) | `1`/`on`: the port's spray off a wet road instead of the game's; known bug: the weather's particles then show as small turned squares (Grass, and spray off a wet road). |
+| `NFS_SUN_GLARE` | on (`1`) | `0`/`off`: no glare from the sun. A number up to 3: how strong (Sun glare); by day with no weather only. |
+| `NFS_SURFACE_GRIP` | on (`1`) | `0`/`off`: every surface as the game has it. A number up to 3: how much the player's car feels grass, dirt, snow and mud (Grip by terrain). |
 | `NFS_TRAFFIC_WEIGHT` | `0.5` | How heavy the traffic is against the game's, 0.1 to 2; `0`/`off` for the game's (Traffic lighter). |
 | `NFS_COP_WEIGHT` | `1.25` | How heavy the cops are against the game's, 0.1 to 3; `0`/`off` for the game's (Traffic lighter, cops heavier and faster). |
 | `NFS_COP_PACE` | on (`1`) | `0`/`off`: the cops' cars as the game has them. A number up to 3: how much of the tuning (Traffic lighter, cops heavier and faster). |

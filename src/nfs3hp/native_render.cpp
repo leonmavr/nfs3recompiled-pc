@@ -15876,6 +15876,7 @@ static float settingOr(const char* name, float fallback, float most)
 }
 
 void particlesFrame(win32::WinApplication* app, x86::reg32 view);  // native_particles.cpp
+void surfaceFrame(win32::WinApplication* app);                    // native_surface.cpp
 
 static void noteSun(win32::WinApplication* app, x86::reg32 view)
 {
@@ -15884,7 +15885,10 @@ static void noteSun(win32::WinApplication* app, x86::reg32 view)
     s_sunNoted = true;
     // The port's particles move and are put in this view, the frame's main one.
     if (app->getMemory<x86::reg32>(0x6fd3b0) != 1)
+    {
+        surfaceFrame(app);
         particlesFrame(app, view);
+    }
     const Memory m{app};
     auto f = [&](x86::reg32 address) { return float(m.load(address)); };
     static const float strength = settingOr("NFS_OBJECT_SHADOWS", 0.45f, 1.0f);
@@ -15906,12 +15910,22 @@ static void noteSun(win32::WinApplication* app, x86::reg32 view)
             up[k] = f(car + 0xcc) * f(view + 0x44 + 4 * k) + f(car + 0xd0) * f(view + 0x50 + 4 * k)
                     + f(car + 0xd4) * f(view + 0x5c + 4 * k);
     const float length = std::sqrt(sun[0] * sun[0] + sun[1] * sun[1] + sun[2] * sun[2]);
+    /* The sun's glare (thrashrenderer.cpp, glare): NFS_SUN_GLARE (1; up to 3,
+     * 0 or off for none), by day with no weather only. */
+    static const float glareSetting = settingOr("NFS_SUN_GLARE", 1.0f, 3.0f);
+    float glare = m.word(0x6fd4cc) == 0 && m.word(0x6fd4c8) == 0 ? glareSetting : 0.0f;
     if (!(length > 1e-4f) || f(0x56009c) == 0.0f || f(0x5600a0) == 0.0f || f(0xa9235c) == 0.0f)
-        amount = 0.0f;
+        amount = glare = 0.0f;
     else
         for (float& v : sun)
             v /= length;
-    win32::glide2x::sunShadows(amount, sun, up, f(0x56009c), f(0x5600a0), f(0x5600a4), f(0x5600a8));
+    if (const char* test = SDL_getenv("NFS_GLARE_TEST"))
+    {
+        // Test only: the sun put straight ahead of the view, a little up.
+        (void)test;
+        sun[0] = 0.15f; sun[1] = 0.25f; sun[2] = 0.956f;
+    }
+    win32::glide2x::sunShadows(amount, sun, up, f(0x56009c), f(0x5600a0), f(0x5600a4), f(0x5600a8), glare);
 }
 
 bool sky(win32::WinApplication* app, x86::CPU& cpu)
@@ -16259,7 +16273,7 @@ void headlightsFrameDone()
     if (!s_sunNoted)
     {
         const float none[3] = { 0.0f, 0.0f, 0.0f };
-        win32::glide2x::sunShadows(0.0f, none, none, 1.0f, 1.0f, 0.0f, 0.0f);
+        win32::glide2x::sunShadows(0.0f, none, none, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f);
     }
     s_sunNoted = false;
     // Not asked for every frame: off only after a quarter of a second without.

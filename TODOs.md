@@ -15,6 +15,8 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     uneven dust clouds -- more of them and higher the faster, coloured like
     the ground they came from (sand, snow, mud).
 - [ ] Rain on the windscreen/camera: drops and streaks that clear at speed.
+- [x] Sun glare by day with no weather: a haze and lens ghosts round the sun,
+  dimmed behind what stands in front of it (`NFS_SUN_GLARE`).
 - [x] Wheel spray in the rain: mist behind every car on wet roads.
   - BUG (why `NFS_WHEEL_SPRAY` is off by default): with the port's spray on,
     the weather's particles (snowflakes, raindrops) still draw as small,
@@ -217,13 +219,16 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   adjust opponent AI)
 
 ### Driving/Gameplay
-- [ ] Tire grip by surface: less on snow, sand and grass than on asphalt. Each
+- [x] Tire grip by surface: less on snow, sand and grass than on asphalt. Each
   terrain must have its own grip properties (not just more slippery/less
   slipepry) that have an effect on player - e.g. slow down, unstable driving,
   slippery on turns etc and each terrain will have one main grip propery and 1-2
   secondary properties. These properties should be so that they're easy to
   implement. These properties do NOT affect opponent cars so opponent AI can
   disregard the terrtain - they only affect player.
+  - Done (`NFS_SURFACE_GRIP`): gently, for the player only -- drag, softer
+    steering, a little slip kept on loose ground, a light shake -- by the
+    share of wheels on grass, sand/dirt/gravel, snow or mud.
 - [ ] Nitro and nitro UI. However if you add nitro, opponents also need to know
   how to use it (e.g. to prevent them from staying inside the turn or blast it
   when they see enough straight road ahead, however they need to take crashes

@@ -373,7 +373,7 @@ struct ThrashDraw
     float                               wetness;
     float                               grade[5];
     float                               head[14];
-    float                               sun[11];
+    float                               sun[12];
     bool                                race;
     float                               speed;
     std::shared_ptr<const std::vector<EffectParticle>> particles;  // the port's own (drawParticles)
@@ -848,7 +848,7 @@ void ThrashRenderer::renderPending()
     draw->wetness = m_detailTexture ? m_wetness : 0.0f;
     std::copy(m_grade, m_grade + 5, draw->grade);
     std::copy(m_head, m_head + 14, draw->head);
-    std::copy(m_sun, m_sun + 11, draw->sun);
+    std::copy(m_sun, m_sun + 12, draw->sun);
     draw->race = m_raceView;
     draw->speed = m_speed;
     draw->particles = m_particles;
@@ -957,6 +957,8 @@ static const char g_compositeShader[] =
 "uniform sampler2D u_light;"
 "uniform float u_halo;"
 "uniform float u_trailOn;"
+"uniform float u_glare;"
+"uniform vec2 u_glareAt;"
 "float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }"
 /* The shadows of what stands by the road (initPost, NFS_OBJECT_SHADOWS): from
  * each pixel's place in the view -- the depth buffer holds 1 - 1/z (as the
@@ -1066,6 +1068,51 @@ static const char g_compositeShader[] =
 "    float lb = luma(b);"
 "    return (lb < lo || lb > hi) ? a : b;"
 "}"
+/* The sun's glare (initPost, NFS_SUN_GLARE): by day and with no weather, the
+ * sun where the light the cars are lit by comes from (u_glareAt, in the
+ * picture's pixels; u_glare already less the further it is off the screen).
+ * How much of it is seen: of sixteen points round it, those where the depth
+ * buffer is the sky's or as far (over 250 m: the sky is drawn with a depth of
+ * its own) -- behind trees, hills and buildings it dims, and
+ * flickers through gaps.  Then a small hot core, a warm haze round it, a few
+ * faint ghosts of the lens along the line from it through the middle of the
+ * picture, and the blacks raised a little. */
+"float glareSeen()"
+"{"
+"    float seen = 0.0, n = 0.0;"
+"    for (int i = 0; i < 16; ++i) {"
+"        float a = float(i) * 2.39996;"
+"        float r = (0.2 + 0.8 * fract(float(i) * 0.618)) * 0.025 * u_size.y;"
+"        vec2 p = clamp(u_glareAt + vec2(cos(a), sin(a)) * r, vec2(1.0), u_size - 1.0);"
+"        seen += step(0.996, texture(u_depth, p / u_size).r);"
+"        n += 1.0;"
+"    }"
+"    return seen / n;"
+"}"
+"vec3 glare(vec3 c)"
+"{"
+"    float g = u_glare * glareSeen();"
+"    if (g <= 0.0) return c;"
+"    vec2 px = v_uv * u_size;"
+"    vec2 d = (px - u_glareAt) / u_size.y;"
+"    float r = length(d);"
+"    vec3 warm = vec3(1.0, 0.86, 0.64);"
+"    float haze = 1.0 * exp(-r * r / 0.0012) + 0.35 * exp(-r / 0.09) + 0.12 * exp(-r / 0.4);"
+"    vec3 add = warm * haze;"
+"    vec2 mid = u_size * 0.5;"
+"    const float along[4] = float[4](-0.35, -0.7, -1.1, 0.5);"
+"    const float size[4] = float[4](0.022, 0.06, 0.035, 0.014);"
+"    const vec3 hue[4] = vec3[4](vec3(0.55, 0.75, 1.0), vec3(0.6, 1.0, 0.75), vec3(1.0, 0.7, 0.45), vec3(0.85, 0.8, 1.0));"
+"    for (int k = 0; k < 4; ++k) {"
+"        vec2 at = mid + (u_glareAt - mid) * along[k];"
+"        float rad = size[k] * u_size.y;"
+"        float e = length(px - at) / rad;"
+"        float disc = (1.0 - smoothstep(0.75, 1.0, e)) * (0.6 + 0.4 * smoothstep(0.3, 0.95, e));"
+"        add += hue[k] * disc * 0.08;"
+"    }"
+"    c += add * g;"
+"    return c + (1.0 - c) * 0.05 * g;"
+"}"
 "void main()"
 "{"
 "    vec3 c = u_aa ? fxaa(v_uv) : texture(u_source, v_uv).rgb;"
@@ -1073,6 +1120,8 @@ static const char g_compositeShader[] =
 "        c = motionBlur(v_uv, c);"
 "    if (u_shadow > 0.0)"
 "        c *= 1.0 - u_shadow * sunShadow(v_uv);"
+"    if (u_glare > 0.0)"
+"        c = glare(c);"
 /* The lamps (initPost): a soft halo round each, from the light layer's
  * smaller levels -- wide and faint over narrow -- and, at speed, their
  * trails: what the lamps nearer the middle of the view than this pixel, on the
@@ -1349,6 +1398,8 @@ void ThrashRenderer::initPost()
         m_compositeLight = glGetUniformLocation(m_compositeProgram, "u_light");
         m_compositeHalo = glGetUniformLocation(m_compositeProgram, "u_halo");
         m_compositeTrailOn = glGetUniformLocation(m_compositeProgram, "u_trailOn");
+        m_compositeGlare = glGetUniformLocation(m_compositeProgram, "u_glare");
+        m_compositeGlareAt = glGetUniformLocation(m_compositeProgram, "u_glareAt");
         glGenFramebuffers(1, &m_lightFramebuffer);
         glGenFramebuffers(1, &m_depthFramebuffer);
         glGenVertexArrays(1, &m_postArray);
@@ -1567,7 +1618,17 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
     const float ramp = SDL_max(0.0f, SDL_min(1.0f, (draw.speed - 10.0f) / 25.0f));
     const float blur = m_motionBlur * draw.speed * ramp * ramp * (3.0f - 2.0f * ramp) / 90.0f;
     const bool particles = m_particlesOn && draw.particles && !draw.particles->empty();
-    const bool needDepth = shadows || blur > 0.0f || particles;
+    /* The sun's glare: where the sun is on the screen, and how strong it is
+     * there -- faded out as it goes off the screen, none behind. */
+    float glareAmount = 0.0f, glareX = 0.0f, glareY = 0.0f;
+    if (draw.sun[11] > 0.0f && draw.sun[3] > 0.05f && draw.sun[4] != 0.0f && draw.sun[5] != 0.0f)
+    {
+        glareX = draw.sun[1] * draw.sun[4] / draw.sun[3] + draw.sun[6];
+        glareY = draw.sun[2] * draw.sun[5] / draw.sun[3] + draw.sun[7];
+        const float out = SDL_max(SDL_max(-glareX, glareX - float(width)), SDL_max(-glareY, glareY - float(height)));
+        glareAmount = draw.sun[11] * (1.0f - smoothStep(0.0f, 0.3f, SDL_max(out, 0.0f) / float(height)));
+    }
+    const bool needDepth = shadows || blur > 0.0f || particles || glareAmount > 0.0f;
     if (needDepth)
     {
         // The world's depth, for its shadows and its blur: a copy, as the buffer stays bound.
@@ -1646,6 +1707,10 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
     }
     glUniform1f(m_compositeHalo, lights ? m_lightGlow * 0.8f : 0.0f);
     glUniform1f(m_compositeTrailOn, trails);
+    glUniform1f(m_compositeGlare, glareAmount);
+    glUniform2f(m_compositeGlareAt, glareX, glareY);
+    if (glareAmount > 0.0f)
+        glUniform2f(m_compositeSize, float(width), float(height));
     if (lights)
     {
         glUniform1i(m_compositeLight, 4);
@@ -1760,7 +1825,7 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
     /* A race only: a menu's turning car is 3D too, and the pass after it ran
      * the glow and FXAA over the menu's lettering, ghosting it. */
     const bool post = draw.race && m_compositeProgram
-                      && (m_bloom > 0.0f || m_gradeOn || m_antialias || draw.sun[0] > 0.0f || m_motionBlur > 0.0f
+                      && (m_bloom > 0.0f || m_gradeOn || m_antialias || draw.sun[0] > 0.0f || draw.sun[11] > 0.0f || m_motionBlur > 0.0f
                           || m_lightGlow > 0.0f || m_lightTrails > 0.0f);
     const float haze = draw.race ? m_haze : 0.0f;
     const bool wet = draw.wetness > 0.0f && m_reflectionValid && m_reflectionW == int(draw.width)

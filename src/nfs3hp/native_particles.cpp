@@ -127,12 +127,12 @@ void add(const Particle& particle)
     s_particles.push_back(particle);
 }
 
-void throwDirt(const float at[3], const float velocity[3], bool grass)
+void throwDirt(const float at[3], const float velocity[3], bool grass, int most = 24, bool dust = true)
 {
     const float speed = std::sqrt(velocity[0] * velocity[0] + velocity[1] * velocity[1] + velocity[2] * velocity[2]);
     const float pace = SDL_min(speed / 30.0f, 1.5f);
     const int grains = int((2.0f + speed / 3.0f) * (grass ? 1.5f : 1.0f) * setting() + random01());
-    for (int k = 0; k < SDL_min(grains, 24); ++k)
+    for (int k = 0; k < SDL_min(grains, most); ++k)
     {
         Particle g{};
         for (int i = 0; i < 3; ++i)
@@ -156,7 +156,7 @@ void throwDirt(const float at[3], const float velocity[3], bool grass)
         add(g);
     }
     // Fine dust: more of it the faster.
-    if (random01() < (grass ? 0.1f + speed / 120.0f : 0.45f + speed / 30.0f) * setting())
+    if (dust && random01() < (grass ? 0.1f + speed / 120.0f : 0.45f + speed / 30.0f) * setting())
     {
         Particle d{};
         for (int i = 0; i < 3; ++i)
@@ -314,10 +314,73 @@ void move(float dt)
 
 /* sub_4ca850's kinds 2 and 3, taken over (above): true when this made them
  * instead, the game's call then returned from with none made (eax 0). */
+int groundUnder(win32::WinApplication* app, x86::reg32 car, int wheel);   // native_surface.cpp
+
+/* The kind of ground under the wheel nearest a point (within 1.2 m): as
+ * groundUnder, or -1 for none near. */
+int groundAt(win32::WinApplication* app, const float at[3])
+{
+    float nearest = 1.2f * 1.2f;
+    int ground = -1;
+    for (x86::reg32 k = 0; k < 16; ++k)
+    {
+        const x86::reg32 car = 0x5e1120 + k * 0x9ac;
+        for (int w = 0; w < 4; ++w)
+        {
+            const x86::reg32 wheel = car + 0x304 + x86::reg32(w) * 0x78;
+            const float d[3] = { app->getMemory<float>(wheel) - at[0], app->getMemory<float>(wheel + 4) - at[1],
+                                 app->getMemory<float>(wheel + 8) - at[2] };
+            const float distance = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+            if (distance < nearest)
+            {
+                nearest = distance;
+                ground = groundUnder(app, car, w);
+            }
+        }
+    }
+    return ground;
+}
+
+/* Grass under a moving car's wheels throws blades -- the game throws nothing
+ * there while a car only drives over it (its kind 5 comes off some grass, not
+ * all: Atlantica's and Hometown's give none).  Each frame, from each wheel on
+ * grass of each car going faster than 6 m/s: at most three, more often the
+ * faster, from where the wheel touches. */
+void grassFromWheels(win32::WinApplication* app, float dt)
+{
+    for (x86::reg32 k = 0; k < 16; ++k)
+    {
+        const x86::reg32 car = 0x5e1120 + k * 0x9ac;
+        const float speed = std::fabs(float(app->getMemory<float>(car + 0xb8)));
+        if (!(speed > 6.0f) || app->getMemory<uint16_t>(car + 0x164) != 0)
+            continue;
+        const float velocity[3] = { app->getMemory<float>(car + 0xa4), app->getMemory<float>(car + 0xa8),
+                                    app->getMemory<float>(car + 0xac) };
+        for (int w = 0; w < 4; ++w)
+        {
+            if (random01() >= SDL_min(speed / 25.0f, 1.2f) * 60.0f * dt * setting() || groundUnder(app, car, w) != 1)
+                continue;
+            const x86::reg32 wheel = car + 0x304 + x86::reg32(w) * 0x78;
+            const float at[3] = { app->getMemory<float>(wheel), app->getMemory<float>(wheel + 4),
+                                  app->getMemory<float>(wheel + 8) };
+            throwDirt(at, velocity, true, 1 + int(random01() * 2.5f), random01() < 0.05f);
+        }
+    }
+}
+
 bool particleTakeOver(win32::WinApplication* app, x86::CPU& cpu)
 {
     static bool s_inner = false;   // the game's own call, made from here (below)
-    const x86::reg32 kind = cpu.eax;
+    x86::reg32 kind = cpu.eax;
+    /* The game's smoke (6) off a wheel on grass -- sliding or braking on it --
+     * is grass thrown up instead of a dark cloud. */
+    if (kind == 6 && !s_inner && setting() > 0.0f && win32::glide2x::effectParticlesDrawn()
+        && app->getMemory<x86::reg32>(0x6fd3b0) != 1)
+    {
+        const float here[3] = { argument(app, cpu, 0), argument(app, cpu, 1), argument(app, cpu, 2) };
+        if (groundAt(app, here) == 1)
+            kind = 5;
+    }
     if (s_inner || (kind != 2 && kind != 3 && kind != 5 && kind != 10) || setting() <= 0.0f
         || !win32::glide2x::effectParticlesDrawn() || (kind == 10 && !spraySetting()))
         return false;
@@ -377,7 +440,11 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
     const float dt = float(clock - s_clock) / 64.0f;
     s_clock = clock;
     if (dt > 0.0f)
+    {
         move(dt);
+        if (setting() > 0.0f && app->getMemory<x86::reg32>(0x6fd3b0) != 1)
+            grassFromWheels(app, dt);
+    }
 
     const float* m = &app->getMemory<float>(view + 0x44);
     const float t[3] = { f(view + 0x38), f(view + 0x3c), f(view + 0x40) };

@@ -84,9 +84,10 @@ public:
     }
     /* The sun in the view for the shadows of what stands by the road (glide2x::sunShadows). */
     void setSunShadows(float strength, const float sun[3], const float up[3], float scaleX, float scaleY,
-                       float centreX, float centreY)
+                       float centreX, float centreY, float glare)
     {
         m_sun[0] = strength;
+        m_sun[11] = glare;
         for (int k = 0; k < 3; ++k)
         {
             m_sun[1 + k] = sun[k];
@@ -243,7 +244,7 @@ private:
     float                   m_grade[5] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };  // the game thread's
     float                   m_head[14] = {};        // the game thread's: on, origin, direction, projection, up
     float                   m_headStrength = 0.0f;  // NFS_HEADLIGHT_OBJECTS
-    float                   m_sun[11] = {};         // the game thread's: strength, sun, projection, up
+    float                   m_sun[12] = {};         // the game thread's: strength, sun, projection, up, glare
     unsigned int            m_postDepth = 0, m_depthFramebuffer = 0;  // the GL thread's: the depth, copied
     float                   m_haze = 0.0f;          // NFS_HAZE
     float                   m_bloom = 0.0f;         // NFS_BLOOM
@@ -274,7 +275,7 @@ private:
                             m_compositeTint = -1, m_compositeAa = -1, m_compositeDepth = -1, m_compositeShadow = -1,
                             m_compositeSun = -1, m_compositeScale = -1, m_compositeCentre = -1, m_compositeUp = -1,
                             m_compositeSize = -1, m_compositeBlur = -1, m_compositeLight = -1, m_compositeHalo = -1,
-                            m_compositeTrailOn = -1;
+                            m_compositeTrailOn = -1, m_compositeGlare = -1, m_compositeGlareAt = -1;
     float                   m_detailStrength = 0.0f;  // NFS_ROAD_DETAIL; 0 for none
     float                   m_surfaceStrength = 0.0f; // NFS_OBJECT_DETAIL; 0 for none
     bool                    m_sharpen = false;        // NFS_TEXTURE_SHARP

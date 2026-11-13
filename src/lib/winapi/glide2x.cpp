@@ -146,10 +146,10 @@ void headlights(bool on, const float origin[3], const float direction[3], const 
 }
 
 void sunShadows(float strength, const float sun[3], const float up[3], float scaleX, float scaleY, float centreX,
-                float centreY)
+                float centreY, float glare)
 {
     if (s_directRenderer)
-        s_directRenderer->setSunShadows(strength, sun, up, scaleX, scaleY, centreX, centreY);
+        s_directRenderer->setSunShadows(strength, sun, up, scaleX, scaleY, centreX, centreY, glare);
 }
 
 void raceView(bool race)
