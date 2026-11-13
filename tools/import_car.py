@@ -39,6 +39,7 @@ every car that is, so the cars already chosen -- yours, the opponents' -- stay
 the cars they were.
 """
 import argparse
+import hashlib
 import re
 import shutil
 import struct
@@ -103,19 +104,45 @@ def installed(carmodel):
     return cars
 
 
-def folder_name(archive, root, text):
-    """The name the car came with, four letters at most."""
+def download_name(label):
+    """The car's name from the download's: `nfsaddons.com__1745522156_FordGT.zip`
+    is FordGT, `1243872229-Stratos.zip` Stratos."""
+    stem = Path(str(label)).name
+    stem = re.sub(r"\.(zip|viv)$", "", stem, flags=re.I)
+    stem = re.sub(r"^nfsaddons\.com_+", "", stem, flags=re.I)
+    stem = re.sub(r"^\d+[-_ ]*", "", stem)
+    stem = re.sub(r"\(\d+\)$", "", stem)
+    return stem
+
+
+def folder_name(archive, root, text, label="", taken=()):
+    """The name the car came with, four letters at most: the archive's own name
+    when that is not just "car", else its four-letter code, else the
+    download's name (its folders -- "Race", "realistic performance" -- say
+    which version, not which car), else the folder it sat in.  A name another
+    car has is passed over while there is one that is free."""
     candidates = []
     if archive.stem.lower() != "car":
         candidates.append(archive.stem)
+    candidates.append(text[:4].decode("latin-1"))
+    if label:
+        candidates.append(download_name(label))
     if archive.parent != root:
         candidates.append(archive.parent.name)
-    candidates.append(text[:4].decode("latin-1"))
+    names = []
     for candidate in candidates:
         name = re.sub(r"[^a-z0-9]", "", candidate.lower())[:4]
         if name and name not in ("car", "game", "data", "carm"):
+            names.append(name)
+    for name in names:
+        if name not in taken:
             return name
-    return "addn"
+    # All taken: the download's name, numbered (clkg, clk2), else the first.
+    if label:
+        name = re.sub(r"[^a-z0-9]", "", download_name(label).lower())[:4]
+        if name:
+            return name
+    return names[0] if names else "addn"
 
 
 def unique_name(name, taken):
@@ -185,13 +212,14 @@ def import_car(game, archive, root, label, wanted, cars, dry):
     old_code = text[:4].decode("latin-1")
     carmodel = find(game, "gamedata") / "carmodel"
 
-    came_as = folder_name(archive, root, text)
     taken = set(cars) | {f.name.lower() for f in carmodel.iterdir()}
+    came_as = folder_name(archive, root, text, label, taken)
     name = unique_name(re.sub(r"[^a-z0-9]", "", wanted.lower())[:4] if wanted else came_as, taken)
 
     used = {car_id for car_id, _ in cars.values()}
     new_id = old_id
-    if old_id in used:
+    # 50 to 66 are traffic's: an add-on that came with one is moved too.
+    if old_id in used or 50 <= old_id <= 66:
         new_id = next(i for i in FREE_IDS if i not in used)
     headers = {header for _, header in cars.values()}
     code = text[:4]
@@ -208,7 +236,7 @@ def import_car(game, archive, root, label, wanted, cars, dry):
     elif name != came_as:
         notes.append("folder %s taken, so %s" % (came_as, name))
     if new_id != old_id:
-        notes.append("ID %d taken, so %d" % (old_id, new_id))
+        notes.append("ID %d taken%s, so %d" % (old_id, " (traffic's)" if 50 <= old_id <= 66 else "", new_id))
     if code != text[:4]:
         notes.append("code %s taken, so %s" % (old_code, code.decode("latin-1")))
     print("%s: %s -> gamedata/carmodel/%s (ID %d)%s" % (label, archive.relative_to(root), name, new_id,
@@ -272,6 +300,7 @@ def main():
         sys.exit("%s: no fedata/ and gamedata/carmodel/ there" % game)
     cars = installed(gamedata / "carmodel")
     done = 0
+    seen = set()   # an archive packed twice in one download (a copy in a second folder) goes in once
     with tempfile.TemporaryDirectory() as scratch:
         for root, label in sources(args.source, Path(scratch)):
             found = 0
@@ -283,6 +312,11 @@ def main():
                     print("%s: %s is not an archive (%r...) -- a broken or fake download" %
                           (label, archive.relative_to(root), archive.open("rb").read(24)))
                     continue
+                digest = hashlib.sha1(archive.read_bytes()).hexdigest()
+                if digest in seen:
+                    print("%s: %s is the same as one already taken, skipped" % (label, archive.relative_to(root)))
+                    continue
+                seen.add(digest)
                 if import_car(game, archive, root, label, args.name, cars, args.dry_run):
                     found += 1
             if not found:

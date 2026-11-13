@@ -6,6 +6,7 @@ namespace nfs3hp
 // Port (tools/apply_race_grid.py): defined in native_ai.cpp.
 void gridTraffic(win32::WinApplication* app);
 void pursuitGrid(win32::WinApplication* app);
+void copModel(win32::WinApplication* app, x86::reg32 record);
 // Port (tools/apply_native_render.py): defined in native_render.cpp.
 bool detailSettings(win32::WinApplication* app, x86::CPU& cpu);
 // Port (tools/apply_first_settings.py): defined in nfs3hp_main.cpp.
@@ -16017,6 +16018,7 @@ L_0x00473900:
     // 00473900  8b5dfc                 -mov ebx, dword ptr [ebp - 4]
     cpu.ebx = app->getMemory<x86::reg32>(cpu.ebp + x86::reg32(-4) /* -0x4 */);
     // 00473903  c7431c01000000         -mov dword ptr [ebx + 0x1c], 1
+    copModel(app, cpu.ebx); /* port: a cop's car by its place in the force (tools/apply_race_grid.py) */
     app->getMemory<x86::reg32>(cpu.ebx + x86::reg32(28) /* 0x1c */) = 1 /*0x1*/;
     // 0047390a  c7431808000000         -mov dword ptr [ebx + 0x18], 8
     app->getMemory<x86::reg32>(cpu.ebx + x86::reg32(24) /* 0x18 */) = 8 /*0x8*/;

@@ -219,7 +219,7 @@ private:
     struct
     {
         int position, color, texCoord, combine;
-        int transform, fogW, fogTable, fogColor, alphaRef, chromaKey, chromaKeyColor, gamma, wrap, levels, texture,
+        int transform, fogW, fogTable, fogColor, alphaRef, depthCut, chromaKey, chromaKeyColor, gamma, wrap, levels, texture,
             format, detail, detailTexture, detailScale, wet, reflection, screen, surface, sharpen, carShine, haze, sky, headlight, headOrigin, headDir, headUp, projection, projCentre;
     } m_locations;
     unsigned int            m_detailTexture = 0;

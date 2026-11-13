@@ -2731,6 +2731,19 @@ static void carFolderOrder(const std::string& directory, std::vector<win32::WIN3
         dir.pop_back();
     const size_t slash = dir.find_last_of("/\\");
     const std::string leaf = lowerCase(slash == std::string::npos ? dir : dir.substr(slash + 1));
+    /* The traffic's bodies and the cops' cars (carmodel/traffic and
+     * traffic/pursuit) are found by listing their folders too (the cars are
+     * named "%straffic\pursuit\%s\%s.viv" from that list), and were left in
+     * the directory's own order, which is the filesystem's and so can differ
+     * from one machine to the next.  Windows lists them by name, 0000 first,
+     * so they are put in that order here, the same everywhere. */
+    if (leaf == "traffic" || leaf == "pursuit")
+    {
+        std::stable_sort(files.begin(), files.end(), [](const win32::WIN32_FIND_DATAA& a, const win32::WIN32_FIND_DATAA& b) {
+            return SDL_strcasecmp(a.cFileName, b.cFileName) < 0;
+        });
+        return;
+    }
     if (leaf != "carmodel")
         return;
     const std::string orderPath = (slash == std::string::npos ? std::string(".") : dir.substr(0, slash)) + "/carorder.txt";

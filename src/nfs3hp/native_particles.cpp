@@ -1,4 +1,5 @@
 #include <nfs3hp.h>
+#include "native_guest.h"
 #include <winapi/glide2x.h>
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -77,6 +78,12 @@ float random01()
     return float(s_random >> 8) / 16777216.0f;
 }
 
+float smoothStep(float edge0, float edge1, float x)
+{
+    const float t = SDL_max(0.0f, SDL_min(1.0f, (x - edge0) / (edge1 - edge0)));
+    return t * t * (3.0f - 2.0f * t);
+}
+
 float randomRange(float lo, float hi)
 {
     return lo + (hi - lo) * random01();
@@ -92,6 +99,18 @@ float setting()
             return 0.0f;
         const float parsed = float(SDL_atof(text));
         return parsed > 0.0f ? SDL_min(parsed, 3.0f) : 1.0f;
+    }();
+    return value;
+}
+
+/* The wheels' spray off a wet road (kind 10, throwSpray): NFS_WHEEL_SPRAY,
+ * off by default (the weather's flakes and drops still show as small turned
+ * squares with it, TODOs.md); 1 or on for the port's. */
+bool spraySetting()
+{
+    static const bool value = [] {
+        const char* text = SDL_getenv("NFS_WHEEL_SPRAY");
+        return text && (SDL_strcmp(text, "1") == 0 || SDL_strcasecmp(text, "on") == 0);
     }();
     return value;
 }
@@ -297,13 +316,36 @@ void move(float dt)
  * instead, the game's call then returned from with none made (eax 0). */
 bool particleTakeOver(win32::WinApplication* app, x86::CPU& cpu)
 {
+    static bool s_inner = false;   // the game's own call, made from here (below)
     const x86::reg32 kind = cpu.eax;
-    if ((kind != 2 && kind != 3 && kind != 5 && kind != 10) || setting() <= 0.0f || !win32::glide2x::effectParticlesDrawn())
+    if (s_inner || (kind != 2 && kind != 3 && kind != 5 && kind != 10) || setting() <= 0.0f
+        || !win32::glide2x::effectParticlesDrawn() || (kind == 10 && !spraySetting()))
         return false;
     if (app->getMemory<x86::reg32>(0x6fd3b0) == 1)
         return false;   // split screen: the game's own
     const float at[3] = { argument(app, cpu, 0), argument(app, cpu, 1), argument(app, cpu, 2) };
     const float velocity[3] = { argument(app, cpu, 10), argument(app, cpu, 11), argument(app, cpu, 12) };
+    /* The game's particle is still made, then let go at once (+0 0, not
+     * live): what sub_4ca850 sets up as it makes the first of a kind -- the
+     * pictures the weather's flakes and drops share with them -- is then set
+     * up as before.  Skipping it left the snow and rain drawn as bare squares. */
+    {
+        x86::reg32 arguments[13];
+        for (int k = 0; k < 13; ++k)
+            arguments[k] = app->getMemory<x86::reg32>(cpu.esp + 4 + 4 * x86::reg32(k));
+        const x86::reg32 esp = cpu.esp;
+        s_inner = true;
+        const bool ran = guest::call(app, cpu, 0x4ca850,
+                                     { arguments[0], arguments[1], arguments[2], arguments[3], arguments[4], arguments[5],
+                                       arguments[6], arguments[7], arguments[8], arguments[9], arguments[10], arguments[11],
+                                       arguments[12] });
+        s_inner = false;
+        if (!ran)
+            return true;   // the game stopped
+        cpu.esp = esp;
+        if (cpu.eax)
+            app->getMemory<x86::reg32>(cpu.eax) = 0;
+    }
     if (kind == 10)
         throwSpray(app, at, velocity);
     else if (kind == 2 || kind == 5)
@@ -357,11 +399,16 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
     {
         EffectParticle e{};
         float z = 0.0f;
-        if (!project(q.p, e.x, e.y, z))
+        /* Not on the lens: one within 1.5 m of the camera is left out, and
+         * fades in from 3.5 m -- drawn there, a quad hundreds of pixels across
+         * showed its edges (the game splashes its own on the view instead,
+         * sub_4ca500, and kills them). */
+        if (!project(q.p, e.x, e.y, z) || z < 1.5f)
         {
             q.hasLast = false;
             continue;
         }
+        const float near = smoothStep(1.5f, 3.5f, z);
         e.depth = z;
         e.seed = q.seed;
         e.type = float(q.type);
@@ -373,7 +420,7 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
             e.r = 1.0f;
             e.g = SDL_min(1.0f, 0.25f + 0.85f * heat);
             e.b = SDL_max(0.0f, heat * heat * 0.8f - 0.1f);
-            e.a = SDL_min(1.0f, left * 1.6f);
+            e.a = SDL_min(1.0f, left * 1.6f) * near;
             e.size = SDL_max(0.8f, scale * q.size / z);
             if (q.hasLast)
             {
@@ -397,14 +444,15 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
             continue;
         }
         // A grain's quad is twice it: on grass the renderer draws a blade in it.
-        e.size = SDL_min(scale * q.size / z * (q.type == EffectParticle::Grain || q.type == EffectParticle::Blade ? 2.0f : 1.0f), 400.0f);
+        const bool small = q.type == EffectParticle::Grain || q.type == EffectParticle::Blade;
+        e.size = SDL_min(scale * q.size / z * (small ? 2.0f : 1.0f), small ? 120.0f : 300.0f);
         e.turn = q.seed * 6.2832f + q.age * (q.seed - 0.5f) * 14.0f;
         if (e.size < 0.6f)
             continue;
         e.r = q.colour[0];
         e.g = q.colour[1];
         e.b = q.colour[2];
-        const float in = SDL_min(1.0f, q.age / 0.08f);
+        const float in = SDL_min(1.0f, q.age / 0.08f) * near;
         e.a = q.alpha * in * (q.type == EffectParticle::Puff ? left * left : SDL_min(1.0f, left * 3.0f));
         float oz;
         if (q.noGround || !project(q.origin, e.tx, e.ty, oz))

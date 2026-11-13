@@ -370,6 +370,16 @@ is 0 in the alpha, like a car), all of them are taken. The spray is a pale
 mist that billows out behind the wheel and hangs a moment, and fine drops
 thrown up and falling back, both more the faster the nearest car goes
 (`throwSpray`), in a colour of their own.
+`NFS_WHEEL_SPRAY` (off for now: with it the weather's flakes and drops still show as small turned squares -- a known bug, TODOs.md; `1`/`on` for the port's spray).
+
+The game's own particle is still made for each kind taken over (the hook
+calls `sub_4ca850` itself, then marks the particle free at once): skipping it
+left the snow's flakes drawn as dark squares. Two more causes of squares round
+particles were in the renderer: a puff's noise alone did not bring its alpha
+to 0 at its quad's edge (now faded out from 0.6 of its radius), and the game's
+flake and spray sprites write depth over their whole square, so the port's
+particles behind one were cut away in its shape. A batch that writes depth now
+writes it only where its alpha is at least 0.08 (`u_depthCut`).
 
 ### Spike strips (in the making)
 
@@ -1599,6 +1609,7 @@ from the phone; the rest matter for a desktop run.
 | `NFS_LIGHT_TRAILS` | on (`1`) | `0`/`off`: no streak. A number up to 3: how long the short streak under each lamp at speed, on the screen. |
 | `NFS_TAILLIGHT_TRAILS` | on (`1`) | `0`/`off`: no trails behind the cars' tail lights. A number up to 3: how long they grow with speed, from 80 km/h (The lamps' glow, and their trails). |
 | `NFS_PARTICLES` | on (`1`) | `0`/`off`: the game's own dust and sparks. A number up to 3: how much dirt is thrown (Dust, grit and sparks of the port's own). |
+| `NFS_WHEEL_SPRAY` | off (`0`) | `1`/`on`: the port's spray off a wet road instead of the game's; known bug: the weather's particles then show as small turned squares (Grass, and spray off a wet road). |
 | `NFS_TRAFFIC_WEIGHT` | `0.5` | How heavy the traffic is against the game's, 0.1 to 2; `0`/`off` for the game's (Traffic lighter). |
 | `NFS_COP_WEIGHT` | `1.25` | How heavy the cops are against the game's, 0.1 to 3; `0`/`off` for the game's (Traffic lighter, cops heavier and faster). |
 | `NFS_COP_PACE` | on (`1`) | `0`/`off`: the cops' cars as the game has them. A number up to 3: how much of the tuning (Traffic lighter, cops heavier and faster). |

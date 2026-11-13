@@ -10,12 +10,15 @@ are made:
   full grid), reached only with traffic on; the traffic made just after.
 - sub_474640, 0x474b15: where every branch that picks the opponents, cops and
   traffic comes together, before the opponents are made.
+- sub_473890, 0x473903: a cop's record, its car ([rec+0x14]) just chosen and
+  before its folder's name is made from it (sub_4047f0).
 """
 from pathlib import Path
 
 HEADER = "// Port (tools/apply_race_grid.py): defined in native_ai.cpp.\n"
 
-DECLARATION = "void gridTraffic(win32::WinApplication* app);\nvoid pursuitGrid(win32::WinApplication* app);\n"
+DECLARATION = ("void gridTraffic(win32::WinApplication* app);\nvoid pursuitGrid(win32::WinApplication* app);\n"
+               "void copModel(win32::WinApplication* app, x86::reg32 record);\n")
 
 XOR_ECX = "    cpu.ecx ^= x86::reg32(x86::sreg32(cpu.ecx));"
 
@@ -23,6 +26,10 @@ XOR_ECX = "    cpu.ecx ^= x86::reg32(x86::sreg32(cpu.ecx));"
 SITES = [
     ("nfs3hp.18.cpp", "00473e3e  31c9", XOR_ECX,
      "    gridTraffic(app); /* port: a full grid's traffic (tools/apply_race_grid.py) */\n" + XOR_ECX),
+    ("nfs3hp.18.cpp", "00473903  c7431c01000000",
+     "    app->getMemory<x86::reg32>(cpu.ebx + x86::reg32(28) /* 0x1c */) = 1 /*0x1*/;",
+     "    copModel(app, cpu.ebx); /* port: a cop's car by its place in the force (tools/apply_race_grid.py) */\n"
+     "    app->getMemory<x86::reg32>(cpu.ebx + x86::reg32(28) /* 0x1c */) = 1 /*0x1*/;"),
     ("nfs3hp.18.cpp", "00474b15  31c9", XOR_ECX,
      "    pursuitGrid(app); /* port: Hot Pursuit's grid (tools/apply_race_grid.py) */\n" + XOR_ECX),
 ]

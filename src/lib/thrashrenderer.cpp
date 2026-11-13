@@ -79,6 +79,7 @@ static const char g_fragmentShader[] =
 "uniform sampler2D u_texture;"
 "uniform vec3 u_fogColor;"
 "uniform float u_alphaRef;"
+"uniform float u_depthCut;"
 "uniform bool u_chromaKey;"
 "uniform ivec3 u_chromaKeyBytes;"
 "uniform int u_format;"
@@ -211,6 +212,11 @@ static const char g_fragmentShader[] =
 "    vec4 color = vec4(mix(v_color.rgb, v_color.rgb * textureColor.rgb, v_combine.s),"
 "                      mix(v_color.a, v_color.a * textureColor.a, v_combine.t));"
 "    if (color.a <= u_alphaRef) discard;"
+/* What is blended in and writes its depth too -- the game's flakes and spray
+ * sprites -- writes it only where it shows: the all but clear rest of its
+ * square left the square's depth over what lies behind, and the port's
+ * particles (drawParticles), hidden behind it, left a hole of its shape. */
+"    if (color.a < u_depthCut) discard;"
 /* The player's headlights on what stands beside and across the road (initGl,
  * NFS_HEADLIGHT_OBJECTS): the walls, fences, trees, signs and buildings, which
  * the game's own patch of light on the road never reached.  The pixel's
@@ -698,6 +704,7 @@ void ThrashRenderer::compileShaders(int depthBits, const char* renderer)
     m_locations.fogTable = glGetUniformLocation(m_program, "u_fogTable");
     m_locations.fogColor = glGetUniformLocation(m_program, "u_fogColor");
     m_locations.alphaRef = glGetUniformLocation(m_program, "u_alphaRef");
+    m_locations.depthCut = glGetUniformLocation(m_program, "u_depthCut");
     m_locations.chromaKey = glGetUniformLocation(m_program, "u_chromaKey");
     m_locations.chromaKeyColor = glGetUniformLocation(m_program, "u_chromaKeyBytes");
     m_locations.format = glGetUniformLocation(m_program, "u_format");
@@ -1232,7 +1239,9 @@ static const char g_particleShader[] =
 "    }"
 "    vec2 q = v_uv * 1.6 + vec2(seed * 17.0, seed * 31.0);"
 "    float n = noise(q) * 0.55 + noise(q * 2.1) * 0.3 + noise(q * 4.3) * 0.15;"
-"    float a = (1.0 - smoothstep(0.15, 1.0, r + (n - 0.5) * 0.7)) * (0.55 + 0.45 * n);"
+/* Ragged by its noise inside the circle, nothing at its edge: the noise alone
+ * left some of the quad's edge showing, a square round a near puff. */
+"    float a = (1.0 - smoothstep(0.15, 1.0, r + (n - 0.5) * 0.7)) * (0.55 + 0.45 * n) * (1.0 - smoothstep(0.6, 1.0, r));"
 "    if (a <= 0.0) discard;"
 "    vec3 g = ground(v_color.rgb);"
 "    float l = dot(g, vec3(0.299, 0.587, 0.114));"
@@ -1872,6 +1881,9 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
             else
                 glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE, alphaSource, alphaKept);
         }
+        if (!previous || batch.alphaBlend != previous->alphaBlend || batch.zBuffer != previous->zBuffer
+            || batch.decal != previous->decal)
+            glUniform1f(m_locations.depthCut, batch.zBuffer && !batch.decal ? 0.08f : 0.0f);
         if (!previous || batch.chromaKey != previous->chromaKey)
             glUniform1i(m_locations.chromaKey, batch.chromaKey ? 1 : 0);
         if (!previous || batch.gamma != previous->gamma)

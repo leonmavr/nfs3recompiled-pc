@@ -16,6 +16,12 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     the ground they came from (sand, snow, mud).
 - [ ] Rain on the windscreen/camera: drops and streaks that clear at speed.
 - [x] Wheel spray in the rain: mist behind every car on wet roads.
+  - BUG (why `NFS_WHEEL_SPRAY` is off by default): with the port's spray on,
+    the weather's particles (snowflakes, raindrops) still draw as small,
+    turned dark squares -- smaller since the depth and puff-edge fixes, but
+    there. Next time: replace the weather's own on-screen particles with the
+    port's -- small droplets that refract the picture behind them (rain) or
+    small organic frost specks (snow) -- rather than chase the game's sprites.
 - [ ] Tyre marks that last the lap, darker and softer than the game's.
 - [ ] Heat haze over the road on desert tracks by day.
 - [ ] Brake discs glowing faintly orange after hard braking at night.

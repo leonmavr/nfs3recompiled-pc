@@ -840,9 +840,9 @@ bool aiHeading(win32::WinApplication* app, x86::CPU& cpu)
  * number out (fitRaceSettings, onOpponentFrame).  The cops chase every racer
  * there is -- with the player as the cop there are six of them -- so
  * NFS_PURSUIT_GRID (on; 0 or off for the game's) lets the number be chosen,
- * and a full grid makes the player one of seven racers (kPursuitRacers, as
- * many as the cops' radio has banks for): six opponents, the cops as many as
- * the game picked, the traffic what is left of the sixteen.
+ * and a full grid makes the player one of five racers and the cops eight
+ * (kPursuitRacers, kPursuitCops), the traffic what is left of the sixteen
+ * (three).
  * pursuitGrid runs as the counts are made, before any car is.  Neither in a
  * network race, whose machines must all set up alike. */
 namespace
@@ -859,10 +859,17 @@ constexpr x86::reg32 kOpponentNumber = 0x6fd4d0;  // 0 none, 1 one, 2 a full gri
 constexpr x86::reg32 kPlayersRacing = 0x6fd518, kPlayersCops = 0x6fd51c;
 constexpr x86::reg32 kOpponentCount = 0x6fd520, kCopCount = 0x6fd524, kTrafficCount = 0x6fd528;
 constexpr x86::sreg32 kSlots = 16;
-/* Hot Pursuit's racers, the players among them: each car that is not a cop
- * gets a bank of the cops' radio calls about it (sub_40a010, banks 0xf to
- * 0x16), and the eighth stops the game ("TOO MANY RACER BANKS"). */
-constexpr x86::sreg32 kPursuitRacers = 7;
+/* Hot Pursuit's full grid: five racers, the players among them, and eight cops
+ * (each car that is not a cop gets a bank of the cops' radio calls about it,
+ * sub_40a010, banks 0xf to 0x16, so seven racers would be the most; a ninth
+ * cop stops the game in the cops' driving, sub_403df0 under sub_4032e0, so
+ * eight is the most of those).  Of the eight, the last four are the force's
+ * best -- two Pursuit Corvettes and two Pursuit Diablos (copModel) -- for the
+ * heat to call in. */
+constexpr x86::sreg32 kPursuitRacers = 5;
+constexpr x86::sreg32 kPursuitCops = 8;
+bool s_pursuitGrid = false;    // this race's cops are a full grid's (copModel)
+int s_copsMade = 0;
 
 }  // namespace
 
@@ -901,7 +908,7 @@ void pursuitGrid(win32::WinApplication* app)
     if (players < 1 || word(kPlayersCops) != 0 || x86::sreg32(word(kOpponentCount)) < 1)
         return;   // the player a cop, or no racer to race
     const x86::sreg32 opponents = kPursuitRacers - players;
-    const x86::sreg32 cops = SDL_min(x86::sreg32(word(kCopCount)), 6);
+    const x86::sreg32 cops = kPursuitCops;
     const x86::sreg32 traffic =
         SDL_max(0, SDL_min(x86::sreg32(word(kTrafficCount)), kSlots - players - opponents - cops));
     SDL_Log("[GRID] Hot Pursuit: %d opponents (the game's %d), %d cops, %d of traffic (the game's %d)",
@@ -909,6 +916,35 @@ void pursuitGrid(win32::WinApplication* app)
     word(kOpponentCount) = x86::reg32(opponents);
     word(kCopCount) = x86::reg32(cops);
     word(kTrafficCount) = x86::reg32(traffic);
+    s_pursuitGrid = true;
+    s_copsMade = 0;
+}
+
+/* sub_473890, a cop's record made: its car, [rec+0x14], just chosen: 0x1f4
+ * and on are the cars of traffic/pursuit (their folders listed by name,
+ * nfs3hp_main.cpp's carFolderOrder, as Windows lists them).  Read from races:
+ * 0x1f5 is 0002, Redrock's own; 0x1f8 0005, the Pursuit Corvette; 0x1f9 0001,
+ * the Pursuit Diablo.  The game gives the region's car (by the track, 0x1f4 to
+ * 0x1f7) and every fourth one 0x1f8, or 0x1f9 at [0x55eb2e] & 0x20.
+ * In a full grid's Hot Pursuit (pursuitGrid) the last four cops are the
+ * force's best: two Pursuit Corvettes, then two Pursuit Diablos. */
+void copModel(win32::WinApplication* app, x86::reg32 record)
+{
+    if (!s_pursuitGrid)
+        return;
+    const int k = s_copsMade++;
+    if (k >= kPursuitCops - 1)
+        s_pursuitGrid = false;   // the last of this race's
+    const x86::reg32 was = app->getMemory<x86::reg32>(record + 0x14);
+    if (k == kPursuitCops - 4 || k == kPursuitCops - 3)
+        app->getMemory<x86::reg32>(record + 0x14) = 0x1f8;   // 0005, the Pursuit Corvette
+    else if (k >= kPursuitCops - 2)
+        app->getMemory<x86::reg32>(record + 0x14) = 0x1f9;   // 0001, the Pursuit Diablo
+    if (aiTracing())
+    {
+        const x86::reg32 now = app->getMemory<x86::reg32>(record + 0x14);
+        SDL_Log("[GRID] cop %d: car %x, now %x", k, unsigned(was), unsigned(now));
+    }
 }
 
 }  // namespace nfs3hp
