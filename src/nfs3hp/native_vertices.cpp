@@ -1,5 +1,6 @@
 #include <nfs3hp.h>
 #include "native_thrash.h"
+#include "native_guest.h"
 #include <lib/gliderenderer.h>
 #include <lib/memmap.h>
 #include <winapi/glide2x.h>
@@ -6552,6 +6553,99 @@ bool moveParticles(win32::WinApplication* app, x86::CPU& cpu)
     return true;
 }
 
+
+/* NFS_TAILLIGHT_TRAILS: how long the trails a car's tail lights leave behind
+ * it at speed (1 by default; 0 or off for none, at most 3). */
+static float taillightTrails()
+{
+    static const float setting = [] {
+        const char* value = SDL_getenv("NFS_TAILLIGHT_TRAILS");
+        if (!value || !*value || SDL_strcasecmp(value, "on") == 0)
+            return 1.0f;
+        if (SDL_strcmp(value, "0") == 0 || SDL_strcasecmp(value, "off") == 0)
+            return 0.0f;
+        const float parsed = float(SDL_atof(value));
+        return parsed > 0.0f ? SDL_min(parsed, 3.0f) : 1.0f;
+    }();
+    return setting;
+}
+
+/* Port: a tail light's trail.  After a car's red light is drawn (sub_492370,
+ * from a car's lights, sub_4b8740: the car is the one within 3.5 m), the same glow again at points behind it along the way
+ * the car goes ([car+0xa4]), each fainter and a little smaller: where the light
+ * was a moment ago, as a long exposure keeps it.  None below 80 km/h; from
+ * there 0.35 m longer for every m/s more, times NFS_TAILLIGHT_TRAILS, at most
+ * 12 m; the glows half a glow apart, 16 at most, fading out within 5 m of
+ * the camera.  White and amber lights -- the headlights, the indicators --
+ * leave none. */
+static void taillightTrail(win32::WinApplication* app, x86::CPU& cpu, x86::reg32 view, const x86::reg32 arguments[7])
+{
+    const float setting = taillightTrails();
+    if (setting <= 0.0f)
+        return;
+    const x86::reg32 colour = arguments[3];
+    const int red = int(colour >> 16 & 0xff), green = int(colour >> 8 & 0xff), blue = int(colour & 0xff);
+    if (red < 48 || green * 2 > red || blue * 2 > red)
+        return;
+    const float at[3] = { asFloat(arguments[0]), asFloat(arguments[1]), asFloat(arguments[2]) };
+    // Whose light: the car within 3.5 m of it (16 of 0x9ac bytes at 0x5e1120).
+    x86::reg32 car = 0;
+    float nearest = 3.5f * 3.5f;
+    for (x86::reg32 k = 0; k < 16; ++k)
+    {
+        const x86::reg32 other = 0x5e1120 + k * 0x9ac;
+        const float dx = app->getMemory<float>(other + 0x98) - at[0];
+        const float dy = app->getMemory<float>(other + 0x9c) - at[1];
+        const float dz = app->getMemory<float>(other + 0xa0) - at[2];
+        const float distance = dx * dx + dy * dy + dz * dz;
+        if (distance < nearest)
+        {
+            nearest = distance;
+            car = other;
+        }
+    }
+    if (!car)
+        return;
+    const float speed = std::fabs(app->getMemory<float>(car + 0xb8));
+    const float slowest = 80.0f / 3.6f;
+    if (!(speed > slowest))
+        return;
+    float way[3] = { app->getMemory<float>(car + 0xa4), app->getMemory<float>(car + 0xa8),
+                     app->getMemory<float>(car + 0xac) };
+    const float moving = std::sqrt(way[0] * way[0] + way[1] * way[1] + way[2] * way[2]);
+    if (!(moving > 1.0f))
+        return;
+    for (float& v : way)
+        v /= moving;
+    const float size = asFloat(arguments[4]);
+    if (!(size > 0.0f))
+        return;
+    const float length = std::min(12.0f, 0.35f * (speed - slowest) * setting);
+    const int count = std::min(16, int(length / std::max(0.5f * size, 0.1f)));
+    const x86::reg32 kept = cpu.eax;
+    for (int k = 1; k <= count; ++k)
+    {
+        const float t = float(k) / float(count + 1);
+        const float back = length * float(k) / float(count);
+        // How far ahead of the camera: the trail of the player's own car runs
+        // back towards it, and a glow drawn close is a blot over the screen.
+        const float* m = &app->getMemory<float>(view + 0x44);
+        const float p[3] = { at[0] - way[0] * back, at[1] - way[1] * back, at[2] - way[2] * back };
+        const float z = p[0] * m[2] + p[1] * m[5] + p[2] * m[8] + app->getMemory<float>(view + 0x40);
+        if (!(z > 3.0f))
+            break;
+        const float fade = 0.8f * (1.0f - t) * std::sqrt(1.0f - t) * std::min(1.0f, (z - 3.0f) / 2.0f);
+        auto channel = [&](int c) { return x86::reg32(std::lround(float(c) * fade)) & 0xff; };
+        const x86::reg32 faded = (colour & 0xff000000u) | channel(red) << 16 | channel(green) << 8 | channel(blue);
+        cpu.eax = view;
+        if (!guest::call(app, cpu, lightGlowNative,
+                         { asBits(p[0]), asBits(p[1]), asBits(p[2]), faded, asBits(size * (1.0f - 0.35f * t)), arguments[5],
+                           arguments[6] }))
+            return;
+    }
+    cpu.eax = kept;
+}
+
 bool lightGlow(win32::WinApplication* app, x86::CPU& cpu)
 {
     if (originalRunning() || !drawingPrecision(cpu) || !polygonNativesOn())
@@ -6565,7 +6659,13 @@ bool lightGlow(win32::WinApplication* app, x86::CPU& cpu)
         checkClip(app, cpu, counts, "sub_492370", 0x492370, lightGlowNative, ranges);
         return true;
     }
+    const x86::reg32 view = cpu.eax;
+    x86::reg32 arguments[7];
+    for (int k = 0; k < 7; ++k)
+        arguments[k] = app->getMemory<x86::reg32>(cpu.esp + 4 + 4 * k);
     lightGlowNative(app, cpu);
+    if (!cpu.terminate)
+        taillightTrail(app, cpu, view, arguments);
     return true;
 }
 

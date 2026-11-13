@@ -6,11 +6,11 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 ### Graphics/immersion
 
 - [ ] More realistic snow/mud/ground and finer particles that react to speed
-  (density/height/profile reaction) and fall with gravity. More realistic and
-  desk spark particles. Currently sparks are triggerd on crash with metal/rock
-  objects and they'rej just a few straight lines. Make them denser depending on
-  speed of impact, die off gradually and desker at the impact point, then
-  spread.
+  (density/height/profile reaction) and fall with gravity. I tihnk currently the
+  game uses static images for it. If you find a cheap procudural approach that
+  makes them look organic (e.g. not just round blobs), use this. More realistic and
+  dust particles. 
+- [ ] If possible, make sparks organic and procedural too.
   - Partly done (sparks): every burst twice as many (`NFS_SPARKS`, 2), and
     walls throw them on a hit over 5 m/s and when scraped from 6 m/s (the
     game only above 22 m/s), stone and concrete too, bounced off the wall
@@ -60,8 +60,11 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 - [ ] Texture rework. Inspect the texture assets and rework them so that they
   are of high quality, then bake them in game again. This can include grass,
   buildings, desert, snow, dirt, fences, trees, etc.
-- [ ] softer emissive light glow from where lights glow (headlights, tail
+- [x] softer emissive light glow from where lights glow (headlights, tail
   lights)
+  - Done: the game's star-shaped lamp glow (`glw0`/`glw3`, both its 32- and
+    16-bit copies) redrawn as a soft core and falloff, with a halo round each
+    lamp from a layer of the lamps alone (`NFS_LIGHT_GLOW`, 1).
 - [x] Motion blur (that gets stronger with higher speeds) on the environemtn
   mostly (not as much on cars) or other cheap but effective speed-feel
   enhancement techniques.
@@ -146,6 +149,11 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   to catch up, ram from side, trap from sides like a block, brake/drift in front
   of player to block him, smarter road blocks, spike strip -> not sure if we
   have a spike strip graphic, etc)
+- [ ] SERIOUS BUG: in the rain, opponents often lose control on turnining
+  (possibly when braking, not sure?) causing them to turn 90 or even 180
+  degrees, slow down dramatically, and then they have to re-align with their trajectory.
+  Then they essentially lose the race as they have to spend entire seconds
+  restarting from near-zero speed. Opponents should know better how to drive in rain and avoid such blunders.
 
 ### UI
 - [ ] Figure out how to add/create menu elements without breaking the visual
@@ -179,8 +187,11 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   it.
   - Done: the chase camera eases back up to 1.2 m by the throttle, and in
     again when let go (`NFS_CAMERA_PULL`).
-- [ ] If you tackle tail light and headlight emission, upon speeding if it's
-  light, leave a few trailing headlights (that shrink) with speeding.
+- [x] If you tackle tail light and headlight emission, upon speeding if it's
+  light, leave a few trailing headlight tracks with speeding.
+  - Done: from 80 km/h every car's tail lights leave a trail of fading glow
+    behind it, longer the faster (`NFS_TAILLIGHT_TRAILS`, 1); and a short
+    streak under each lamp on the screen from 10 m/s (`NFS_LIGHT_TRAILS`, 1).
 
 ### Music/Sound
 - [x] Sound quality is great and sound works well but volume is still too

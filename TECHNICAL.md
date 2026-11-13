@@ -345,6 +345,53 @@ of a ninetieth of a second times `NFS_MOTION_BLUR` (2, picked by eye), from 10 m
 from 35, at most 48 pixels. The cars (0 in the picture's alpha) are neither
 blurred nor taken into the blur around them.
 
+### The lamps' glow, and their trails
+
+**A soft glow.** The game draws a lamp's glow -- head and tail lights, the
+street's lamps -- as a sprite added onto the picture: `glw0` (64) and `glw3`
+(32) from `gamedata/render/pc/sfx.fsh`, grey with its alpha the same as its
+grey, tinted red for the tail lights by the vertex colour. Both are a star of
+hard spikes round a white dot. They arrive twice: in 32 bits (8888), and as
+the race's own copy in 16 (4444), which is the one the cars' lamps use.
+`setTextureData` knows them by their texels (FNV hash: 8888 `0xfe572da0` and
+`0xe0a827c2`, 4444 `0x0ddae155` and `0xedcd8669`); a 4444 one is widened to
+8888 first, so that the new falloff has the steps it needs. `softenGlow`
+redraws each as a hot core in a wide, slow falloff, gone before the circle's
+edge, with 12% of the star left in, and builds every smaller level the game
+supplied again from the first (the GPU uses those for a lamp drawn small, and
+the game's kept the star). As what such a sprite adds is its texel squared,
+the texel is the square root of the light wanted.
+
+**The halo.** The glow textures are marked (`Texture::light`), and every batch
+drawn with one (`Batch::light`) is drawn a second time onto a layer of the
+lamps alone (`m_lightLayer`, full size, with levels; it shares the picture's
+depth buffer, so a lamp behind a car stays hidden). In the whole-picture pass
+the layer's smaller levels (2, 3.5 and 5) are added back round each lamp, times
+`NFS_LIGHT_GLOW` (1) by 0.8, and the layer is emptied for the next frame.
+
+**Tail lights' trails.** `lightGlow` (native_vertices.cpp, sub_492370's
+stand-in, which `sub_4b8740` calls for a car's lamps) draws, after a red
+glow, the same glow again at up to 16 points behind it along the car's way
+(`[car+0xa4]`), half a glow apart, each fainter (to nothing) and a little
+smaller: where the light was a moment ago, as a long exposure keeps it. The
+car is the one of the 16 at `0x5e1120` within 3.5 m of the light (the cars'
+lamps are drawn by generated code in a race at extended precision, so there is
+no caller to tell). None below 80 km/h; from there the trail grows 0.35 m for
+every m/s more, times `NFS_TAILLIGHT_TRAILS` (1), at most 12 m. A point within
+3 m of the camera ends it, and it fades over the 2 m before, so the player's
+own trail does not blot out the screen. White and amber lamps leave none.
+
+**The streak at speed.** A light going as fast as the camera -- the player's tail
+lights, a car alongside -- leaves its trail on the road behind it, which on the
+screen lies further from the view's centre than the lamp, on the same line
+from it. So each pixel takes the brightest of 16 samples of the lamps' layer
+(level 1.5) along that line towards the centre, at its distance from it over
+1 + k t, t from 0 to 1, fading as 1 - t, times 1.6, and adds what of that is
+not a lamp itself. k is 0.45 times `NFS_LIGHT_TRAILS` (1), coming in from
+10 m/s and whole from 35 (the speed the motion blur uses); the centre is the
+projection's (`[0x5600a4]`, `[0x5600a8]`). It costs a pass over the screen and
+a second draw of the few lamp sprites.
+
 ### The cars' paint
 
 A car is drawn twice: its body with its own texture, then the reflection the
@@ -1421,6 +1468,9 @@ from the phone; the rest matter for a desktop run.
 | `NFS_VOLUME` | `1.8` | How far the game's sound is lifted on its way to the device (`include/lib/loudness.h`, applied in `src/nfs3hp/native_sound.cpp`), 0.1 to 8. Above -2.5 dBFS the lifted sound's peaks are rounded off (a soft saturator), and a limiter that looks 3 ms ahead holds what is left under -1 dBFS; `1` leaves the mix as the game made it. Higher is louder but rounds off more of the sound. The Audio screen's own sliders start at 50%, and raising them is the other way up. |
 | `NFS_HEADLIGHT_OBJECTS` | on (`1.6`) | `0`/`off`: the player's headlights light only the road, as the game has them. A number: how bright they are on the walls, fences, trees and buildings (Headlights on what stands by the road). |
 | `NFS_MOTION_BLUR` | on (`2`) | `0`/`off`: no motion blur. A number: how long the shutter, times a ninetieth of a second (Speed you can feel). |
+| `NFS_LIGHT_GLOW` | on (`1`) | `0`/`off`: the lamps' glow as the game has it, a star of spikes. A number up to 3: how strong the halo round the soft glow (The lamps' glow, and their trails). |
+| `NFS_LIGHT_TRAILS` | on (`1`) | `0`/`off`: no streak. A number up to 3: how long the short streak under each lamp at speed, on the screen. |
+| `NFS_TAILLIGHT_TRAILS` | on (`1`) | `0`/`off`: no trails behind the cars' tail lights. A number up to 3: how long they grow with speed, from 80 km/h (The lamps' glow, and their trails). |
 | `NFS_CAMERA_PULL` | `1.2` | How far back, in metres, the chase camera eases under full throttle; `0`/`off` for none. |
 | `NFS_SPARKS` | `2` | How many times the sparks of a burst, and whether walls throw them on hits and scrapes; `0`/`off`: the game's own (Sparks off walls). |
 | `NFS_OBJECT_SHADOWS` | on (`0.45`) | `0`/`off`: no shadows from what stands by the road. A number: how dark (Shadows of what stands by the road); fainter in the rain and at night by `NFS_SHADOW_RAIN` and `NFS_SHADOW_NIGHT`. |

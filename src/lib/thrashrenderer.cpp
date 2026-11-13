@@ -821,6 +821,7 @@ void ThrashRenderer::flush()
      * 1555 and 565 -- are not things that stand in the sun's way. */
     batch.car = m_carSurface || (!m_textureShadow && (m_textureFormat == TF_ARGB_8888 || m_textureFormat == TF_ARGB_4444));
     batch.decal = m_textureShadow;
+    batch.light = m_textureLight;
     m_batches.push_back(batch);
 }
 
@@ -944,6 +945,9 @@ static const char g_compositeShader[] =
 "uniform vec3 u_up;"
 "uniform vec2 u_size;"
 "uniform float u_blur;"
+"uniform sampler2D u_light;"
+"uniform float u_halo;"
+"uniform float u_trailOn;"
 "float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }"
 /* The shadows of what stands by the road (initPost, NFS_OBJECT_SHADOWS): from
  * each pixel's place in the view -- the depth buffer holds 1 - 1/z (as the
@@ -1060,6 +1064,27 @@ static const char g_compositeShader[] =
 "        c = motionBlur(v_uv, c);"
 "    if (u_shadow > 0.0)"
 "        c *= 1.0 - u_shadow * sunShadow(v_uv);"
+/* The lamps (initPost): a soft halo round each, from the light layer's
+ * smaller levels -- wide and faint over narrow -- and, at speed, their
+ * trails: what the lamps nearer the middle of the view than this pixel, on the
+ * same line from it, lay down behind them -- the world's light left on the
+ * road behind a car going as fast as the camera, fading with the distance --
+ * of it what is not a lamp itself. */
+"    if (u_halo > 0.0) {"
+"        vec3 halo = textureLod(u_light, v_uv, 2.0).rgb * 0.45 + textureLod(u_light, v_uv, 3.5).rgb * 0.35"
+"                  + textureLod(u_light, v_uv, 5.0).rgb * 0.30;"
+"        c += halo * u_halo;"
+"    }"
+"    if (u_trailOn > 0.0) {"
+"        vec2 away = v_uv * u_size - u_centre;"
+"        vec3 trail = vec3(0.0);"
+"        for (int i = 1; i <= 16; ++i) {"
+"            float t = float(i) / 16.0;"
+"            vec2 at = (u_centre + away / (1.0 + u_trailOn * t)) / u_size;"
+"            trail = max(trail, textureLod(u_light, at, 1.5).rgb * (1.0 - t));"
+"        }"
+"        c += max(trail * 1.6 - textureLod(u_light, v_uv, 0.0).rgb, 0.0);"
+"    }"
 "    if (u_bloom > 0.0) {"
 "        vec3 glow = textureLod(u_bright, v_uv, 1.0).rgb * 0.30 + textureLod(u_bright, v_uv, 2.0).rgb * 0.25"
 "                  + textureLod(u_bright, v_uv, 3.0).rgb * 0.20 + textureLod(u_bright, v_uv, 4.0).rgb * 0.15"
@@ -1095,6 +1120,10 @@ static GLuint postProgram(GLuint (*compile)(GLenum, const std::string&, const ch
     return program;
 }
 
+static float lightGlowSetting();
+static float lightTrailSetting();
+static float smoothStep(float edge0, float edge1, float x);
+
 static float onOff(const char* name, float otherwise)
 {
     const char* value = SDL_getenv(name);
@@ -1114,6 +1143,8 @@ void ThrashRenderer::initPost()
     m_haze = SDL_min(onOff("NFS_HAZE", 0.8f), 1.0f);
     m_headStrength = onOff("NFS_HEADLIGHT_OBJECTS", 1.6f);
     m_motionBlur = onOff("NFS_MOTION_BLUR", 2.0f);
+    m_lightGlow = lightGlowSetting();
+    m_lightTrails = lightTrailSetting();
     m_bloom = onOff("NFS_BLOOM", 0.6f);
     m_gradeOn = onOff("NFS_GRADE", 1.0f) > 0.0f;
     m_antialias = onOff("NFS_AA", 1.0f) > 0.0f;
@@ -1121,6 +1152,8 @@ void ThrashRenderer::initPost()
                 "[GFX] haze %.2f; glow %.2f; colour grade %s; anti-aliasing %s; headlights on objects %.2f; motion blur %.2f",
                 double(m_haze), double(m_bloom), m_gradeOn ? "on" : "off", m_antialias ? "FXAA" : "off", double(m_headStrength),
                 double(m_motionBlur));
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[GFX] the lamps' glow %.2f, their trails %.2f", double(m_lightGlow),
+                double(m_lightTrails));
     {
         m_brightProgram = postProgram(compileShader, g_brightShader);
         m_compositeProgram = postProgram(compileShader, g_compositeShader);
@@ -1140,6 +1173,10 @@ void ThrashRenderer::initPost()
         m_compositeUp = glGetUniformLocation(m_compositeProgram, "u_up");
         m_compositeSize = glGetUniformLocation(m_compositeProgram, "u_size");
         m_compositeBlur = glGetUniformLocation(m_compositeProgram, "u_blur");
+        m_compositeLight = glGetUniformLocation(m_compositeProgram, "u_light");
+        m_compositeHalo = glGetUniformLocation(m_compositeProgram, "u_halo");
+        m_compositeTrailOn = glGetUniformLocation(m_compositeProgram, "u_trailOn");
+        glGenFramebuffers(1, &m_lightFramebuffer);
         glGenFramebuffers(1, &m_depthFramebuffer);
         glGenVertexArrays(1, &m_postArray);
         glGenFramebuffers(1, &m_postFramebuffer);
@@ -1187,6 +1224,32 @@ void ThrashRenderer::takeSky(int width, int height)
 
 /* The world's picture through FXAA, the glow and the grade, back into the
  * framebuffer, before the HUD.  drawPending sets its own state again after. */
+/* The lamps' layer (full size, with levels for the halo and the trails,
+ * initPost), made with the post's textures, empty. */
+void ThrashRenderer::allocateLightLayer(int width, int height)
+{
+    if (!m_lightFramebuffer || (m_lightGlow <= 0.0f && m_lightTrails <= 0.0f))
+        return;
+    if (m_lightLayer)
+        glDeleteTextures(1, &m_lightLayer);
+    auto make = [&](unsigned int& texture, int levels) {
+        glGenTextures(1, &texture);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexStorage2D(GL_TEXTURE_2D, levels, GL_RGBA8, width, height);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, levels > 1 ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    };
+    make(m_lightLayer, levelsFor(width, height));
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_lightFramebuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_lightLayer, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, m_depthBuffer);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
+}
+
 void ThrashRenderer::postProcess(const ThrashDraw& draw)
 {
     m_postDone = true;
@@ -1228,6 +1291,7 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         m_postW = width;
         m_postH = height;
+        allocateLightLayer(width, height);
     }
     glDisable(GL_SCISSOR_TEST);
     glDisable(GL_DEPTH_TEST);
@@ -1254,6 +1318,19 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
         glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
     }
     glBindVertexArray(m_postArray);
+    /* The lamps (NFS_LIGHT_GLOW, NFS_LIGHT_TRAILS): the layer they were drawn
+     * to again this frame (drawPending) given its smaller levels, for the
+     * halo and the trails -- these as long as NFS_LIGHT_TRAILS, coming in from
+     * 10 m/s and whole from 35. */
+    const bool lights = m_lightLayer && (m_lightGlow > 0.0f || m_lightTrails > 0.0f);
+    const float trails = lights ? 0.45f * m_lightTrails * smoothStep(10.0f, 35.0f, draw.speed) : 0.0f;
+    if (lights)
+    {
+        glActiveTexture(GL_TEXTURE4);
+        glBindTexture(GL_TEXTURE_2D, m_lightLayer);
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glActiveTexture(GL_TEXTURE0);
+    }
     if (m_bloom > 0.0f)
     {
         glBindFramebuffer(GL_FRAMEBUFFER, m_postFramebuffer);
@@ -1300,7 +1377,29 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
         glBindTexture(GL_TEXTURE_2D, m_bright);
         glActiveTexture(GL_TEXTURE0);
     }
+    glUniform1f(m_compositeHalo, lights ? m_lightGlow * 0.8f : 0.0f);
+    glUniform1f(m_compositeTrailOn, trails);
+    if (lights)
+    {
+        glUniform1i(m_compositeLight, 4);
+        glActiveTexture(GL_TEXTURE4);
+        glBindTexture(GL_TEXTURE_2D, m_lightLayer);
+        glActiveTexture(GL_TEXTURE0);
+        // The middle of the view the trails run from: the projection's, or the picture's.
+        const bool centred = draw.sun[6] != 0.0f || draw.sun[7] != 0.0f;
+        glUniform2f(m_compositeCentre, centred ? draw.sun[6] : 0.5f * float(width),
+                    centred ? draw.sun[7] : 0.5f * float(height));
+        glUniform2f(m_compositeSize, float(width), float(height));
+    }
     glDrawArrays(GL_TRIANGLES, 0, 3);
+    if (lights)
+    {
+        // The layer emptied for the next frame's lamps.
+        glBindFramebuffer(GL_FRAMEBUFFER, m_lightFramebuffer);
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
+    }
 
     // Back to the world's state; the batch loop sets the rest as it goes.
     glUseProgram(m_program);
@@ -1394,7 +1493,8 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
     /* A race only: a menu's turning car is 3D too, and the pass after it ran
      * the glow and FXAA over the menu's lettering, ghosting it. */
     const bool post = draw.race && m_compositeProgram
-                      && (m_bloom > 0.0f || m_gradeOn || m_antialias || draw.sun[0] > 0.0f || m_motionBlur > 0.0f);
+                      && (m_bloom > 0.0f || m_gradeOn || m_antialias || draw.sun[0] > 0.0f || m_motionBlur > 0.0f
+                          || m_lightGlow > 0.0f || m_lightTrails > 0.0f);
     const float haze = draw.race ? m_haze : 0.0f;
     const bool wet = draw.wetness > 0.0f && m_reflectionValid && m_reflectionW == int(draw.width)
                      && m_reflectionH == int(draw.height);
@@ -1549,6 +1649,16 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
         scissor = clipped;
         previous = &batch;
         glDrawArrays(GL_TRIANGLES, GLint(first), GLsizei(batch.end - first));
+        /* A lamp's glow, drawn again onto the lamps' layer (allocateLightLayer)
+         * -- behind what stands before it, by the same depth -- for the halo
+         * and the trails postProcess makes of it. */
+        if (batch.light && post && !m_postDone && m_lightLayer && m_postW == int(draw.width)
+            && m_postH == int(draw.height))
+        {
+            glBindFramebuffer(GL_FRAMEBUFFER, m_lightFramebuffer);
+            glDrawArrays(GL_TRIANGLES, GLint(first), GLsizei(batch.end - first));
+            glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
+        }
         first = batch.end;
     }
     glBindSampler(0, 0);
@@ -1804,6 +1914,7 @@ void ThrashRenderer::setTexture(x86::reg32, x86::reg32 address)
         m_textureLevels = found->second.levels;
         m_textureFormat = found->second.format;
         m_textureShadow = found->second.shadow;
+        m_textureLight = found->second.light;
     }
     found->second.useStamp = m_renderStamp;
 }
@@ -1825,9 +1936,14 @@ void ThrashRenderer::setTexture(x86::reg32, x86::reg32 address)
  * - "glw4", the lights' streak on a wet road: the same, at its sides.
  * - "shad", a car's shadow: opaque to three texels of its edge.  Its alpha now
  *   falls off over the outer third of each side, round at the corners.
+ * - "glw0" and "glw3", the glow of a lamp -- head and tail lights, the
+ *   street's lamps: a star of hard spikes round a white dot.  Now (NFS_LIGHT_GLOW)
+ *   a soft round glow, a bright core in a wide falloff with a trace of the
+ *   spikes left in it, its light in a hot core and a slow falloff.  And the
+ *   textures are marked, for the light layer (initPost).
  *
  * Texels as setTextureData holds an 8888 one: B, G, R, A. */
-enum class SoftenedPicture { None, Pool, Streak, Shadow };
+enum class SoftenedPicture { None, Pool, Streak, Shadow, Glow };
 
 static std::uint32_t texelHash(const x86::reg8* data, std::size_t bytes)
 {
@@ -1835,6 +1951,32 @@ static std::uint32_t texelHash(const x86::reg8* data, std::size_t bytes)
     for (std::size_t i = 0; i < bytes; ++i)
         hash = (hash ^ data[i]) * 0x01000193u;
     return hash;
+}
+
+/* NFS_LIGHT_GLOW: the lamps' glow made soft and given a halo, how much of it
+ * (1 by default; 0 or off for the game's star); NFS_LIGHT_TRAILS: how long the
+ * lamps' trails at speed (1 by default; 0 or off for none). */
+static float lightSetting(const char* name, float otherwise)
+{
+    const char* value = SDL_getenv(name);
+    if (!value || !*value || SDL_strcasecmp(value, "on") == 0)
+        return otherwise;
+    if (SDL_strcmp(value, "0") == 0 || SDL_strcasecmp(value, "off") == 0)
+        return 0.0f;
+    const float parsed = float(SDL_atof(value));
+    return parsed > 0.0f ? SDL_min(parsed, 3.0f) : otherwise;
+}
+
+static float lightGlowSetting()
+{
+    static const float setting = lightSetting("NFS_LIGHT_GLOW", 1.0f);
+    return setting;
+}
+
+static float lightTrailSetting()
+{
+    static const float setting = lightSetting("NFS_LIGHT_TRAILS", 1.0f);
+    return setting;
 }
 
 // NFS_SOFT_EFFECTS=0 leaves the three as the game has them.
@@ -1855,6 +1997,9 @@ static SoftenedPicture recognise(const std::vector<x86::reg8>& texels, x86::reg3
         return SoftenedPicture::Streak;
     if (size == 32 && texelHash(texels.data(), 32 * 32 * 4) == 0x3da5cb05u)
         return SoftenedPicture::Shadow;
+    if ((size == 64 && texelHash(texels.data(), 64 * 64 * 4) == 0xfe572da0u)
+        || (size == 32 && texelHash(texels.data(), 32 * 32 * 4) == 0xe0a827c2u))
+        return SoftenedPicture::Glow;
     return SoftenedPicture::None;
 }
 
@@ -1864,8 +2009,54 @@ static float smoothStep(float edge0, float edge1, float x)
     return t * t * (3.0f - 2.0f * t);
 }
 
-static void soften(std::vector<x86::reg8>& texels, x86::reg32 size, SoftenedPicture picture)
+/* A lamp's glow made round: grey, its alpha the same as its grey (as the
+ * game's is), so that what it adds is the square of a texel.  That, the light
+ * it adds, is a hot core in a wide, slow falloff, gone before the circle's
+ * edge -- the texel its square root -- with `spikes` of the original's star
+ * left in.  Every level the game supplied is made again from the first. */
+static void softenGlow(std::vector<x86::reg8>& texels, x86::reg32 size, x86::reg32 levels, float spikes)
 {
+    for (x86::reg32 y = 0; y < size; ++y)
+        for (x86::reg32 x = 0; x < size; ++x)
+        {
+            x86::reg8* t = &texels[(std::size_t(y) * size + x) * 4];
+            const float px = (float(x) + 0.5f) / float(size) * 2.0f - 1.0f;
+            const float py = (float(y) + 0.5f) / float(size) * 2.0f - 1.0f;
+            const float r = std::sqrt(px * px + py * py);
+            const float light = (0.5f * std::exp(-(r / 0.10f) * (r / 0.10f)) + 0.5f * std::exp(-std::pow(r / 0.38f, 1.2f)))
+                                * (1.0f - smoothStep(0.55f, 1.0f, r));
+            const float soft = std::sqrt(std::min(1.0f, 1.25f * light)) * 255.0f;
+            for (int c = 0; c < 4; ++c)
+                t[c] = x86::reg8(std::lround(std::min(255.0f, soft * (1.0f - spikes) + float(t[c]) * spikes)));
+        }
+    // The smaller levels, each the average of four of the one above.
+    std::size_t from = 0;
+    for (x86::reg32 at = size, level = 1; level < levels && at > 1; at >>= 1, ++level)
+    {
+        const std::size_t to = from + std::size_t(at) * at * 4;
+        const x86::reg32 half = at / 2;
+        for (x86::reg32 y = 0; y < half; ++y)
+            for (x86::reg32 x = 0; x < half; ++x)
+                for (int c = 0; c < 4; ++c)
+                {
+                    auto texel = [&](x86::reg32 tx, x86::reg32 ty) {
+                        return int(texels[from + (std::size_t(ty) * at + tx) * 4 + c]);
+                    };
+                    const int sum = texel(2 * x, 2 * y) + texel(2 * x + 1, 2 * y) + texel(2 * x, 2 * y + 1)
+                                    + texel(2 * x + 1, 2 * y + 1);
+                    texels[to + (std::size_t(y) * half + x) * 4 + c] = x86::reg8((sum + 2) / 4);
+                }
+        from = to;
+    }
+}
+
+static void soften(std::vector<x86::reg8>& texels, x86::reg32 size, x86::reg32 levels, SoftenedPicture picture)
+{
+    if (picture == SoftenedPicture::Glow)
+    {
+        softenGlow(texels, size, levels, 0.12f);
+        return;
+    }
     for (x86::reg32 y = 0; y < size; ++y)
         for (x86::reg32 x = 0; x < size; ++x)
         {
@@ -1900,6 +2091,29 @@ void ThrashRenderer::setTextureData(x86::reg32, x86::reg32 address, const void* 
 {
     const x86::reg32 size = 256 >> largeMipmap;
     const x86::reg32 smallest = 256 >> smallMipmap;
+    /* The lamps' glow comes in 16 bits too (4444, the race's own copy of
+     * gamedata/render/pc's pictures): widened to 32 here, so that its softened
+     * falloff (softenGlow) has the steps it needs. */
+    std::vector<x86::reg8> widened;
+    const bool glow16 = format == TF_ARGB_4444 && largeMipmap == smallMipmap && (size == 32 || size == 64)
+                        && softenEffects() && lightGlowSetting() > 0.0f
+                        && texelHash(static_cast<const x86::reg8*>(data), std::size_t(size) * size * 2)
+                               == (size == 32 ? 0xedcd8669u : 0x0ddae155u);
+    if (glow16)
+    {
+        const x86::reg8* from = static_cast<const x86::reg8*>(data);
+        widened.resize(std::size_t(size) * size * 4);
+        for (std::size_t i = 0; i < std::size_t(size) * size; ++i)
+        {
+            const unsigned texel = unsigned(from[i * 2]) | unsigned(from[i * 2 + 1]) << 8;
+            widened[i * 4 + 0] = x86::reg8((texel & 15) * 17);         // B
+            widened[i * 4 + 1] = x86::reg8((texel >> 4 & 15) * 17);    // G
+            widened[i * 4 + 2] = x86::reg8((texel >> 8 & 15) * 17);    // R
+            widened[i * 4 + 3] = x86::reg8((texel >> 12 & 15) * 17);   // A
+        }
+        data = widened.data();
+        format = TF_ARGB_8888;
+    }
     const x86::reg32 texelBytes = format == TF_ARGB_8888 ? 4 : 2;
     x86::reg32 levels = 0;
     std::size_t texels = 0;
@@ -1911,7 +2125,7 @@ void ThrashRenderer::setTextureData(x86::reg32, x86::reg32 address, const void* 
     auto found = m_textures.find(address);
     if (found == m_textures.end())
     {
-        Texture texture = { m_nextTexture++, 0, 0, 0, 0, false };
+        Texture texture = { m_nextTexture++, 0, 0, 0, 0, false, false };
         found = m_textures.emplace(address, texture).first;
     }
     Texture& texture = found->second;
@@ -1934,25 +2148,31 @@ void ThrashRenderer::setTextureData(x86::reg32, x86::reg32 address, const void* 
     std::vector<x86::reg8> copied(static_cast<const x86::reg8*>(data),
                                   static_cast<const x86::reg8*>(data) + texels * texelBytes);
     texture.shadow = false;
+    texture.light = false;
     if (format == TF_ARGB_8888 && softenEffects())
     {
-        const SoftenedPicture picture = recognise(copied, size);
-        if (picture != SoftenedPicture::None)
+        const SoftenedPicture picture = glow16 ? SoftenedPicture::Glow : recognise(copied, size);
+        texture.light = picture == SoftenedPicture::Glow;
+        if (picture != SoftenedPicture::None && (picture != SoftenedPicture::Glow || lightGlowSetting() > 0.0f))
         {
-            soften(copied, size, picture);
-            static bool said[4] = {};
+            soften(copied, size, levels, picture);
+            static bool said[5] = {};
             if (!said[int(picture)])
             {
                 said[int(picture)] = true;
                 SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[GFX] softened the game's %s",
                             picture == SoftenedPicture::Pool ? "headlights' pool"
-                            : picture == SoftenedPicture::Streak ? "lights' streak on a wet road" : "car shadow");
+                            : picture == SoftenedPicture::Streak ? "lights' streak on a wet road"
+                            : picture == SoftenedPicture::Glow ? "lamps' glow" : "car shadow");
             }
             texture.shadow = picture == SoftenedPicture::Shadow;
         }
     }
     if (texture.index == m_texture)
+    {
         m_textureShadow = texture.shadow;
+        m_textureLight = texture.light;
+    }
     if (format == TF_ARGB_1555)
     {
         // A1 R5 G5 B5 to R5 G5 B5 A1: the alpha bit from the top to the bottom.

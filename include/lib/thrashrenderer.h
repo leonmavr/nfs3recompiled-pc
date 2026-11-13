@@ -164,6 +164,7 @@ private:
         bool headlit;           // lit by the player's headlights in the shader (initGl)
         bool car;               // a car's or an effect's: 0 into the picture's alpha (postProcess's shadows)
         bool decal;             // a car's shadow on the road: no depth, the road's alpha kept
+        bool light;             // a lamp's glow: drawn into the light layer too (initPost)
     };
     friend struct ThrashDraw;
 
@@ -178,6 +179,7 @@ private:
         x86::reg32 useStamp;
         int format;
         bool shadow;            // a car's shadow (the port's softening, thrashrenderer.cpp)
+        bool light;             // a lamp's glow, glw0 or glw3 (the light layer, thrashrenderer.cpp)
     };
 
     void initGl();
@@ -209,6 +211,7 @@ private:
     unsigned int            m_detailTexture = 0;
     bool                    m_carSurface = false;   // the game thread's
     bool                    m_textureShadow = false;
+    bool                    m_textureLight = false;
     float                   m_wetness = 0.0f;
     // The GL thread's: the last frame, for the wet road's reflection.
     unsigned int            m_reflection = 0;
@@ -220,6 +223,7 @@ private:
     // The haze's sky and the whole-picture effects (thrashrenderer.cpp, initPost).
     void initPost();
     void takeSky(int width, int height);
+    void allocateLightLayer(int width, int height);
     void postProcess(const ThrashDraw& draw);
     float                   m_grade[5] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };  // the game thread's
     float                   m_head[14] = {};        // the game thread's: on, origin, direction, projection, up
@@ -242,11 +246,16 @@ private:
     bool                    m_raceView = false;     // the game thread's
     float                   m_speed = 0.0f;         // the game thread's
     float                   m_motionBlur = 0.0f;    // NFS_MOTION_BLUR
+    float                   m_lightGlow = 0.0f;     // NFS_LIGHT_GLOW
+    float                   m_lightTrails = 0.0f;   // NFS_LIGHT_TRAILS
+    // The GL thread's: the frame's lamps alone (the halo's and the trails').
+    unsigned int            m_lightLayer = 0, m_lightFramebuffer = 0;
     int                     m_brightSource = -1, m_compositeSource = -1, m_compositeBright = -1,
                             m_compositePixel = -1, m_compositeBloom = -1, m_compositeGrade = -1,
                             m_compositeTint = -1, m_compositeAa = -1, m_compositeDepth = -1, m_compositeShadow = -1,
                             m_compositeSun = -1, m_compositeScale = -1, m_compositeCentre = -1, m_compositeUp = -1,
-                            m_compositeSize = -1, m_compositeBlur = -1;
+                            m_compositeSize = -1, m_compositeBlur = -1, m_compositeLight = -1, m_compositeHalo = -1,
+                            m_compositeTrailOn = -1;
     float                   m_detailStrength = 0.0f;  // NFS_ROAD_DETAIL; 0 for none
     float                   m_surfaceStrength = 0.0f; // NFS_OBJECT_DETAIL; 0 for none
     bool                    m_sharpen = false;        // NFS_TEXTURE_SHARP
