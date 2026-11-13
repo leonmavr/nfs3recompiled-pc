@@ -793,6 +793,50 @@ without it opponents sat stuck for six seconds and more at nodes 527, 561 and
 the pile-ups behind them; with it none was held more than about two seconds,
 and the field ran on average about 4% further (the leaders some 6%).
 
+The game drives its traffic and its cops through `sub_408600` too. The tuning
+-- backing off, looking for forks, flashing, the pace -- is for the racers
+alone, whose flag in `[car+0x200]` is 8 (`sub_428700` sets it from the
+car's kind); before, a traffic car stuck behind something was made to reverse
+like an opponent. The cars looked at around one (another car ahead, in
+between) are all the race's (`[0x6fd510]`), traffic and cops too, not only the
+first eight.
+
+### The grid: traffic with a full grid, Hot Pursuit's opponents
+
+A race's cars are counted, then made one after the other into 0x6c-byte
+records from `0x6fd52c`, sixteen at most (the end of the array is
+`0x6fdbec`; the cars' own array, 16 of 0x9ac bytes at `0x5e1120`): the
+players (`[0x6fd518]`), the opponents (`[0x6fd520]`), the cops
+(`[0x6fd524]`) and the traffic (`[0x6fd528]`), the total in `[0x6fd510]`.
+The opponent screen's Number is `[0x6fd4d0]` (0 none, 1 one, 2 a full grid)
+and its Traffic `[0x6fd4e8]` (0 on, 1 off).
+
+**Traffic with a full grid.** In a single race `sub_473bf0` makes the
+opponents eight less the players for a full grid, else one or none, and with
+traffic on as much traffic as makes eight cars in all -- none for a full grid,
+which is why the menu greys Traffic out for it (`onOpponentFrame`).
+`NFS_GRID_TRAFFIC` (on) lets it be chosen, and `gridTraffic`
+(`src/nfs3hp/native_ai.cpp`, called where the count is settled, 0x473e3e,
+`tools/apply_race_grid.py`) gives a full grid a third of what one opponent
+would have had: two cars for one player, ten in the race. The traffic is the
+game's as it always is -- parked at the start, sent out along the road after
+the first thirty seconds -- and the opponents drive round it as they do with
+one opponent.
+
+**Hot Pursuit's opponents.** `sub_474640` gives a racer one opponent, up to
+six cops and some traffic, and the menu forces Number to a full grid and greys
+it out (`fitRaceSettings`, `onOpponentFrame`). The cops chase every car that
+is not one of theirs -- with the player as the cop there are six racers -- so
+`NFS_PURSUIT_GRID` (on) lets Number be chosen, and `pursuitGrid` (called where
+every branch's counts come together, 0x474b15) makes a full grid seven racers:
+the player and six opponents, the cops as the game picked them, the traffic
+what is left of the sixteen (three). Not eight: every car that is not a cop
+gets a bank of the cops' radio calls about it (`sub_40a010`, banks 0xf to
+0x16), and the eighth stops the game ("VERYBIGERROR: TOO MANY RACER BANKS").
+One or none keeps the game's own Hot Pursuit, and the player as a cop is left
+as the game has it. Neither change is made in a network race, whose machines
+must set up alike.
+
 ### Decompiled menus
 
 The menus are being decompiled too, a screen at a time — not for speed, but to
@@ -1458,7 +1502,9 @@ from the phone; the rest matter for a desktop run.
 | `NFS_NATIVE_AI` | on | `0` runs the generated sub_4064f0 and sub_4070c0 instead of their decompiled C++ (`src/nfs3hp/native_ai.h`). A debug build takes it from a launch: `--ez native_ai_off true`. |
 | `NFS_AI_TUNE` | on | `0`: the opponents drive as the game has them -- no getting unstuck, no looking ahead for splits, no flashing, no characters, no extra pace (The opponents' driving, tuned). |
 | `NFS_AI_PACE` | `1.06` | How much harder the opponents pull (their aim for speed times half the difference), 0.5 to 2; `1` the game's difficulty. |
-| `NFS_AI_TRACE` | off | `1` logs which car each opponent is at the start of a race, then each opponent once a second, every step it takes to get unstuck, every split it steers round and every time it flashes the player (`[AI]`). |
+| `NFS_GRID_TRAFFIC` | on | `0`/`off`: a full grid has no traffic, as the game has it. On, Traffic can be chosen with a full grid, and it is a third of the usual: two cars for one player (The grid). |
+| `NFS_PURSUIT_GRID` | on | `0`/`off`: Hot Pursuit always one opponent, as the game has it. On, its Number can be chosen; a full grid is six opponents, as many as the cops' radio has banks for (The grid). |
+| `NFS_AI_TRACE` | off | `1` logs which car each opponent is at the start of a race, then each opponent once a second (and where the cops and the traffic are), every step it takes to get unstuck, every split it steers round and every time it flashes the player (`[AI]`). |
 | `NFS_NET_PORT` | `9803` | TCP port of network races, as the Modern Patch has it; the launcher's Network screen offers the original's `1030`. |
 | `NFS_NET_TRACE` | off | `1` (extra `net_trace`) writes a network race into the log: EA's comm library events and packet sends (`[COMM]`), up to 400 datagrams per socket instead of 16 (`[NET]`), and each new indirect call target once per thread after the IPX transport opens (`[CALL]`). For finding where two machines stop on the way into a race. |
 | `NFS_FE_NATIVE` | on | `0` leaves every hooked decompiled menu function, the screens' and the engine's, to the generated code (see Decompiled menus); the main menu, what it calls of the menu loop and the dialogs, and the controls' screens are native whole and stay native. |

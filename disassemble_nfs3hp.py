@@ -879,6 +879,11 @@ if __name__ == '__main__':
     from tools.apply_first_settings import apply as apply_first_settings
     apply_first_settings(Path(__file__).resolve().parent)
 
+    # The grid: traffic with a full grid, and Hot Pursuit's opponents chosen
+    # (src/nfs3hp/native_ai.cpp's gridTraffic and pursuitGrid).
+    from tools.apply_race_grid import apply as apply_race_grid
+    apply_race_grid(Path(__file__).resolve().parent)
+
     # Native vertex loops: the hottest render functions as float arithmetic in
     # the x87's order, the generated code kept behind them.
     from tools.apply_native_vertices import apply as apply_native_vertices
@@ -893,6 +898,11 @@ if __name__ == '__main__':
     # kind of hook.
     from tools.apply_native_render import apply as apply_native_render
     apply_native_render(Path(__file__).resolve().parent)
+
+    # The race's effects: sparks off walls, the camera drawn back under the
+    # throttle (src/nfs3hp/native_effects.cpp).
+    from tools.apply_native_effects import apply as apply_native_effects
+    apply_native_effects(Path(__file__).resolve().parent)
 
     # The game's sound mixer native: decoding, resampling, volume and pan.
     from tools.apply_native_mixer import apply as apply_native_mixer

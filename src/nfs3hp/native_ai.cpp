@@ -153,6 +153,14 @@ bool networkRace(win32::WinApplication* app)
     return app->getMemory<x86::reg32>(0x6fd3b0) == 2;
 }
 
+/* The cars in the race ([0x6fd510]): racers, cops and traffic, which with a
+ * full grid and traffic (raceGrid below) go past the first eight. */
+int carsInRace(win32::WinApplication* app)
+{
+    const x86::sreg32 count = x86::sreg32(app->getMemory<x86::reg32>(0x6fd510));
+    return count < 8 ? 8 : count > kMaxCars ? kMaxCars : int(count);
+}
+
 const Driver& driverOf(win32::WinApplication* app, x86::reg32 car)
 {
     const x86::reg32 slot = app->getMemory<x86::reg32>(car + 0x1f0);
@@ -179,7 +187,7 @@ Surroundings around(win32::WinApplication* app, x86::reg32 car, int self)
                 fz = app->getMemory<float>(car + 0xe0);
     const float rx = app->getMemory<float>(car + 0xc0), ry = app->getMemory<float>(car + 0xc4),
                 rz = app->getMemory<float>(car + 0xc8);
-    for (int k = 0; k < 8; ++k)
+    for (int k = 0; k < carsInRace(app); ++k)
     {
         if (k == self)
             continue;
@@ -421,7 +429,7 @@ void signal(win32::WinApplication* app, x86::reg32 car, int i)
     bool behind = along > 3.0f && along < 16.0f && across > -2.5f && across < 2.5f && facing > 0.9f
                   && speed > 10.0f && want > speed + 1.0f && app->getMemory<x86::reg32>(car + 0x7d4) != 1;
     // Held up by the player, not by another opponent in between.
-    for (int k = 0; behind && k < 8; ++k)
+    for (int k = 0; behind && k < carsInRace(app); ++k)
     {
         const x86::reg32 other = kCars + kCarSize * x86::reg32(k);
         if (k == i || other == target)
@@ -593,7 +601,11 @@ bool aiDrive(win32::WinApplication* app, x86::CPU& cpu)
     const int i = opponentIndex(car);
     if (i < 0)
         return false;
-    if (aiTuned() && !networkRace(app))
+    /* The tuning is for the racers: the game drives its traffic (and cops)
+     * through here too, and backing off, looking for forks and flashing are
+     * not for them -- a racer's flag in [+0x200] is 8 (sub_428700). */
+    const bool racer = (app->getMemory<x86::reg8>(car + 0x200) & 8) != 0;
+    if (aiTuned() && !networkRace(app) && racer)
     {
         unstick(app, car, i);
         signal(app, car, i);
@@ -622,6 +634,14 @@ bool aiDrive(win32::WinApplication* app, x86::CPU& cpu)
                     double(app->getMemory<float>(car + 0x7b0)), double(o.heading),
                     unsigned(app->getMemory<x86::reg32>(car + 0x7d4)), o.tries,
                     double(tick - o.progressAt) / kTicksPerSecond);
+            // With the first opponent, the cars past the racers ([0x6fd514]): cops, traffic.
+            const int racers = int(app->getMemory<x86::reg32>(0x6fd514));
+            for (int k = racers; i == 1 && k < carsInRace(app); ++k)
+            {
+                const x86::reg32 other = kCars + kCarSize * x86::reg32(k);
+                SDL_Log("[AI] %ums car %d (not racing) node %d speed %.1f", unsigned(SDL_GetTicks()), k,
+                        int(app->getMemory<x86::reg32>(other + 0x1c)), double(app->getMemory<float>(other + 0xb8)));
+            }
         }
     }
     return false;
@@ -634,7 +654,8 @@ bool aiPull(win32::WinApplication* app, x86::CPU& cpu)
     const x86::reg32 car = cpu.eax;
     ai::aiPull(app, cpu);
     // Port: the difficulty a notch up, and each driver's own pull (above).
-    if (aiTuned() && !networkRace(app) && opponentIndex(car) >= 0)
+    // Racers only ([+0x200] & 8), not the traffic or the cops.
+    if (aiTuned() && !networkRace(app) && opponentIndex(car) >= 0 && (app->getMemory<x86::reg8>(car + 0x200) & 8))
     {
         const float scale = aiPace() * driverOf(app, car).pull;
         float p;
@@ -659,6 +680,95 @@ bool aiHeading(win32::WinApplication* app, x86::CPU& cpu)
     if (i >= 0)
         s_opponents[i].heading = app->getMemory<float>(0x56ec60);
     return true;
+}
+
+/* Port: the grid, as a race is set up.
+ *
+ * sub_473bf0 sets up a single race's cars, 0x6c-byte records from 0x6fd52c,
+ * sixteen at most: the players ([0x6fd518]), the opponents ([0x6fd520]: with
+ * a full grid, [0x6fd4d0] 2, eight less the players, else one or none), then,
+ * with traffic on ([0x6fd4e8] 0), traffic ([0x6fd528]) to make eight cars in
+ * all -- none, with a full grid, and the menu greys traffic out for it
+ * (onOpponentFrame).  NFS_GRID_TRAFFIC (on; 0 or off for the game's) lets a
+ * full grid have traffic, a third of what one opponent would have had (eight
+ * less the players less one): two cars for one player.  gridTraffic runs as the
+ * count is made (tools/apply_race_grid.py), the cars made after it as the game
+ * makes them.
+ *
+ * sub_474640 sets up Hot Pursuit's: a racer has one opponent, up to six cops
+ * and some traffic; the menu forces the opponents to "full grid" and greys the
+ * number out (fitRaceSettings, onOpponentFrame).  The cops chase every racer
+ * there is -- with the player as the cop there are six of them -- so
+ * NFS_PURSUIT_GRID (on; 0 or off for the game's) lets the number be chosen,
+ * and a full grid makes the player one of seven racers (kPursuitRacers, as
+ * many as the cops' radio has banks for): six opponents, the cops as many as
+ * the game picked, the traffic what is left of the sixteen.
+ * pursuitGrid runs as the counts are made, before any car is.  Neither in a
+ * network race, whose machines must all set up alike. */
+namespace
+{
+
+bool gridSetting(const char* name)
+{
+    const char* value = SDL_getenv(name);
+    return !(value && (SDL_strcmp(value, "0") == 0 || SDL_strcasecmp(value, "off") == 0));
+}
+
+constexpr x86::reg32 kRaceType = 0x6fd3b8;     // 0 a single race, 3 Hot Pursuit
+constexpr x86::reg32 kOpponentNumber = 0x6fd4d0;  // 0 none, 1 one, 2 a full grid
+constexpr x86::reg32 kPlayersRacing = 0x6fd518, kPlayersCops = 0x6fd51c;
+constexpr x86::reg32 kOpponentCount = 0x6fd520, kCopCount = 0x6fd524, kTrafficCount = 0x6fd528;
+constexpr x86::sreg32 kSlots = 16;
+/* Hot Pursuit's racers, the players among them: each car that is not a cop
+ * gets a bank of the cops' radio calls about it (sub_40a010, banks 0xf to
+ * 0x16), and the eighth stops the game ("TOO MANY RACER BANKS"). */
+constexpr x86::sreg32 kPursuitRacers = 7;
+
+}  // namespace
+
+bool gridTrafficOn()
+{
+    static const bool on = gridSetting("NFS_GRID_TRAFFIC");
+    return on;
+}
+
+bool pursuitGridOn()
+{
+    static const bool on = gridSetting("NFS_PURSUIT_GRID");
+    return on;
+}
+
+void gridTraffic(win32::WinApplication* app)
+{
+    auto word = [app](x86::reg32 address) -> decltype(auto) { return app->getMemory<x86::reg32>(address); };
+    if (!gridTrafficOn() || networkRace(app) || word(kRaceType) != 0 || word(kOpponentNumber) != 2)
+        return;
+    const x86::sreg32 players = x86::sreg32(word(kPlayersRacing));
+    const x86::sreg32 racers = players + x86::sreg32(word(kOpponentCount));
+    const x86::sreg32 alone = 8 - players - 1;   // the traffic with one opponent
+    x86::sreg32 traffic = (alone + 1) / 3;
+    traffic = SDL_max(0, SDL_min(traffic, kSlots - racers));
+    word(kTrafficCount) = x86::reg32(traffic);
+    SDL_Log("[GRID] a full grid of %d with %d of traffic", int(racers), int(traffic));
+}
+
+void pursuitGrid(win32::WinApplication* app)
+{
+    auto word = [app](x86::reg32 address) -> decltype(auto) { return app->getMemory<x86::reg32>(address); };
+    if (!pursuitGridOn() || networkRace(app) || word(kRaceType) != 3 || word(kOpponentNumber) != 2)
+        return;
+    const x86::sreg32 players = x86::sreg32(word(kPlayersRacing));
+    if (players < 1 || word(kPlayersCops) != 0 || x86::sreg32(word(kOpponentCount)) < 1)
+        return;   // the player a cop, or no racer to race
+    const x86::sreg32 opponents = kPursuitRacers - players;
+    const x86::sreg32 cops = SDL_min(x86::sreg32(word(kCopCount)), 6);
+    const x86::sreg32 traffic =
+        SDL_max(0, SDL_min(x86::sreg32(word(kTrafficCount)), kSlots - players - opponents - cops));
+    SDL_Log("[GRID] Hot Pursuit: %d opponents (the game's %d), %d cops, %d of traffic (the game's %d)",
+            int(opponents), int(word(kOpponentCount)), int(cops), int(traffic), int(word(kTrafficCount)));
+    word(kOpponentCount) = x86::reg32(opponents);
+    word(kCopCount) = x86::reg32(cops);
+    word(kTrafficCount) = x86::reg32(traffic);
 }
 
 }  // namespace nfs3hp

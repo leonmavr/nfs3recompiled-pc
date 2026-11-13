@@ -144,16 +144,30 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   - Done: 2 s held up right behind the player (3-16 m, same lane, wanting to
     go faster, no other car in between) -> four quick flashes to full beam
     (+0x660) and back; 3 s later, still there, again. Not in network races.
+- [x] Traffic with a full grid of opponents (a third of the usual), and the
+  number of opponents unlocked in Hot Pursuit.
+  - Done: `NFS_GRID_TRAFFIC` (two traffic cars with a full grid for one
+    player) and `NFS_PURSUIT_GRID` (Hot Pursuit's full grid: six opponents,
+    the most the cops' radio banks allow). The opponents' tuning no longer
+    pushes traffic and cops about.
 - [ ] Better police AI; based on chased player's style, how far he is, whether
   he is in their vision or not, adjust number of vehicles, strategy (e.g. rush
   to catch up, ram from side, trap from sides like a block, brake/drift in front
   of player to block him, smarter road blocks, spike strip -> not sure if we
-  have a spike strip graphic, etc)
+  have a spike strip graphic, etc). Also in general, cops should be twice as
+  likely to throw spike strips. Road blocks by cops should consist of 2-3 cars,
+  not one.
+- [ ] In full grid hot pursuit, number of cop cars should increase 3x of what it
+  nomally is.
+- [ ] Cops should deploy their high-end cars (depending on location) on high
+  heat levels, e.g. pursuit McLaren, Corvette, or Diablo.
 - [ ] SERIOUS BUG: in the rain, opponents often lose control on turnining
   (possibly when braking, not sure?) causing them to turn 90 or even 180
   degrees, slow down dramatically, and then they have to re-align with their trajectory.
   Then they essentially lose the race as they have to spend entire seconds
   restarting from near-zero speed. Opponents should know better how to drive in rain and avoid such blunders.
+- [ ] Traffic: for each traffic car, halve its weight. This way they don't
+  complely slow you down when crashing.
 
 ### UI
 - [ ] Figure out how to add/create menu elements without breaking the visual

@@ -25,6 +25,9 @@ namespace nfs3hp
 /* Port: the phone's keyboard, up while the game takes typing (nfs3hp_main.cpp,
  * tools/apply_text_entry.py). */
 void textEntry(bool taking);
+// Port: a full grid's traffic, and Hot Pursuit's grid chosen (native_ai.cpp).
+bool gridTrafficOn();
+bool pursuitGridOn();
 
 namespace
 {
@@ -489,7 +492,7 @@ x86::reg32 onColourClicked(Guest& guest, const CarScreen& screen)
 /* The opponents: 1 to 3 the number of them, 0 none; past 3 every one is the
  * same car, the setting less 4. */
 constexpr x86::reg32 kOpponents = 0x6fd4d4;
-constexpr x86::reg32 kTraffic = 0x6fd4d0;          // 2: none
+constexpr x86::reg32 kOpponentNumber = 0x6fd4d0;   // 0 none, 1 one, 2 a full grid
 constexpr std::int32_t kOpponentCarBase = 4;
 // The number of opponents the screen's art was laid out for.
 constexpr x86::reg32 kOpponentsShown = 0x553040;
@@ -582,13 +585,15 @@ x86::reg32 onOpponentEnter(Guest& guest, x86::reg32 menu)
 }
 
 /* sub_427190, opponent on every pass: traffic only in a single race that has
- * it, the number of opponents not in Hot Pursuit; a change of the number
- * opens the screen again, for its art. */
+ * it -- not with a full grid, unless NFS_GRID_TRAFFIC (the port, native_ai.cpp:
+ * a third of the traffic) -- the number of opponents not in Hot Pursuit,
+ * unless NFS_PURSUIT_GRID; a change of the number opens the screen again, for
+ * its art. */
 x86::reg32 onOpponentFrame(Guest& guest, x86::reg32 menu)
 {
     guest.call(0x4104b0);
     auto trafficOff = [&]() {
-        return guest.dword(kRaceType) != 0 || guest.dword(kTraffic) == 2;
+        return guest.dword(kRaceType) != 0 || (guest.dword(kOpponentNumber) == 2 && !gridTrafficOn());
     };
     if (Item button = fe::findItem(guest, menu, kTrafficButton))
     {
@@ -600,10 +605,11 @@ x86::reg32 onOpponentFrame(Guest& guest, x86::reg32 menu)
         if (guest.dword(kRaceType) != kHotPursuit)
             greyAndHide(guest, list, trafficOff());
     }
+    const bool fixedCount = guest.dword(kRaceType) == kHotPursuit && !pursuitGridOn();
     if (Item count = fe::findItem(guest, menu, kOpponentCount))
-        grey(count, guest.dword(kRaceType) == kHotPursuit);
+        grey(count, fixedCount);
     if (Item list = fe::findItem(guest, menu, kOpponentCountList))
-        greyAndHide(guest, list, guest.dword(kRaceType) == kHotPursuit);
+        greyAndHide(guest, list, fixedCount);
     guest.call(0x427050, fe::args({ menu }));
     return x86::reg32(opponentCount(guest)) != guest.dword(kOpponentsShown) ? kReopen : 0;
 }

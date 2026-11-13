@@ -21,6 +21,9 @@
 namespace nfs3hp
 {
 
+// Port: Hot Pursuit's number of opponents chosen (native_ai.cpp).
+bool pursuitGridOn();
+
 namespace
 {
 
@@ -1194,7 +1197,8 @@ x86::reg32 fitRaceSettings(Guest& guest)
         guest.setDword(kSetting292c, 0);
     else if (guest.dword(kSettingBc00) == 0)
         guest.setDword(kSetting292c, 1);
-    if (guest.dword(kRaceType) == kHotPursuit)
+    // Port: unless NFS_PURSUIT_GRID lets Hot Pursuit's number be chosen.
+    if (guest.dword(kRaceType) == kHotPursuit && !pursuitGridOn())
         guest.setDword(kSetting4d0, 2);
 
     const std::uint32_t first = guest.dword(kSetting4d0);

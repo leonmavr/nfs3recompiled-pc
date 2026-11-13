@@ -3,6 +3,9 @@
 
 namespace nfs3hp
 {
+// Port (tools/apply_race_grid.py): defined in native_ai.cpp.
+void gridTraffic(win32::WinApplication* app);
+void pursuitGrid(win32::WinApplication* app);
 // Port (tools/apply_native_render.py): defined in native_render.cpp.
 bool detailSettings(win32::WinApplication* app, x86::CPU& cpu);
 // Port (tools/apply_first_settings.py): defined in nfs3hp_main.cpp.
@@ -17538,6 +17541,7 @@ L_0x00473e14:
     app->getMemory<x86::reg32>(x86::reg32(7329064) /* 0x6fd528 */) = cpu.edi;
 L_0x00473e3e:
     // 00473e3e  31c9                   -xor ecx, ecx
+    gridTraffic(app); /* port: a full grid's traffic (tools/apply_race_grid.py) */
     cpu.ecx ^= x86::reg32(x86::sreg32(cpu.ecx));
 L_0x00473e40:
     if (app->contextWanted()) app->yieldContext(cpu); /* safepoint */
@@ -20409,6 +20413,7 @@ L_0x00474b05:
     app->getMemory<x86::reg32>(x86::reg32(7328956) /* 0x6fd4bc */) = cpu.eax;
 L_0x00474b15:
     // 00474b15  31c9                   -xor ecx, ecx
+    pursuitGrid(app); /* port: Hot Pursuit's grid (tools/apply_race_grid.py) */
     cpu.ecx ^= x86::reg32(x86::sreg32(cpu.ecx));
 L_0x00474b17:
     if (app->contextWanted()) app->yieldContext(cpu); /* safepoint */
