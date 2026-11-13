@@ -195,11 +195,12 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     in pull and 8-15% in top speed by model (`NFS_COP_PACE`).
 - [ ] Cops should deploy their high-end cars (depending on location) on high
   heat levels, e.g. pursuit McLaren, Corvette, or Diablo.
-- [ ] SERIOUS BUG: in the rain, opponents often lose control on turnining
+- [x] SERIOUS BUG: in the rain, opponents often lose control on turnining
   (possibly when braking, not sure?) causing them to turn 90 or even 180
   degrees, slow down dramatically, and then they have to re-align with their trajectory.
   Then they essentially lose the race as they have to spend entire seconds
   restarting from near-zero speed. Opponents should know better how to drive in rain and avoid such blunders.
+  - No longer seen (Leo, 2026-11-14), after the AI and cop pace changes.
 - [x] Traffic: for each traffic car, halve its weight. This way they don't
   complely slow you down when crashing.
   - Done: mass and inertia halved (`NFS_TRAFFIC_WEIGHT`, 0.5).
