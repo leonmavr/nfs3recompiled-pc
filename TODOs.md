@@ -5,16 +5,22 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 
 ### Graphics/immersion
 
-- [ ] More realistic snow/mud/ground and finer particles that react to speed
+- [x] More realistic snow/mud/ground and finer particles that react to speed
   (density/height/profile reaction) and fall with gravity. I tihnk currently the
   game uses static images for it. If you find a cheap procudural approach that
   makes them look organic (e.g. not just round blobs), use this. More realistic and
   dust particles. 
-- [ ] If possible, make sparks organic and procedural too.
+  - Done (`NFS_PARTICLES`): the dirt thrown off the road is the port's own --
+    small ragged grains thrown up and falling back under gravity, and soft
+    uneven dust clouds -- more of them and higher the faster, coloured like
+    the ground they came from (sand, snow, mud).
+- [x] If possible, make sparks organic and procedural too.
   - Partly done (sparks): every burst twice as many (`NFS_SPARKS`, 2), and
     walls throw them on a hit over 5 m/s and when scraped from 6 m/s (the
     game only above 22 m/s), stone and concrete too, bounced off the wall
-    instead of into it. Next: gravity, fade, a hot core at the impact point.
+    instead of into it.
+  - Done (`NFS_PARTICLES`): each spark a white-hot streak cooling to red as
+    it falls, skipping off the ground.
 - [x] Road texture looks too blocky and fake, it shoul be more realistic and a
   bit smoother but still detailed some.
   - Done: mipmaps made for every texture, trilinear + 8x anisotropic
@@ -166,8 +172,9 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   degrees, slow down dramatically, and then they have to re-align with their trajectory.
   Then they essentially lose the race as they have to spend entire seconds
   restarting from near-zero speed. Opponents should know better how to drive in rain and avoid such blunders.
-- [ ] Traffic: for each traffic car, halve its weight. This way they don't
+- [x] Traffic: for each traffic car, halve its weight. This way they don't
   complely slow you down when crashing.
+  - Done: mass and inertia halved (`NFS_TRAFFIC_WEIGHT`, 0.5).
 
 ### UI
 - [ ] Figure out how to add/create menu elements without breaking the visual

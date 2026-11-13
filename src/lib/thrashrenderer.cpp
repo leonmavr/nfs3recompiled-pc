@@ -370,6 +370,7 @@ struct ThrashDraw
     float                               sun[11];
     bool                                race;
     float                               speed;
+    std::shared_ptr<const std::vector<EffectParticle>> particles;  // the port's own (drawParticles)
     float                               alphaTestRef;
     x86::reg32                          chromaKeyColor;
     x86::reg32                          width;
@@ -843,6 +844,7 @@ void ThrashRenderer::renderPending()
     std::copy(m_sun, m_sun + 11, draw->sun);
     draw->race = m_raceView;
     draw->speed = m_speed;
+    draw->particles = m_particles;
     draw->chromaKeyColor = m_chromaKeyColor;
     draw->width = m_renderer->m_width;
     draw->height = m_renderer->m_height;
@@ -1098,6 +1100,110 @@ static const char g_compositeShader[] =
 "    o_color = vec4(clamp(c, 0.0, 1.0), 1.0);"
 "}";
 
+/* The port's own particles (drawParticles; native_particles.cpp makes them):
+ * dust and grit thrown up from the wheels and sparks, each a quad, its shape
+ * worked out here from its seed rather than a picture.  The quad's corners come
+ * from the game thread in the picture's pixels; v_uv is -1 to 1 across it. */
+static const char g_particleVertexShader[] =
+"layout (location=0) in vec2 a_position;"
+"layout (location=1) in vec2 a_uv;"
+"layout (location=2) in vec4 a_color;"
+"layout (location=3) in vec2 a_from;"
+"layout (location=4) in vec3 a_params;"   /* depth, seed, type */
+"out vec2 v_uv;"
+"out vec4 v_color;"
+"out vec2 v_from;"
+"flat out vec3 v_params;"
+"uniform vec2 u_size;"
+"void main()"
+"{"
+"    v_uv = a_uv;"
+"    v_color = a_color;"
+"    v_from = a_from;"
+"    v_params = a_params;"
+"    gl_Position = vec4(a_position / u_size * 2.0 - 1.0, 0.0, 1.0);"
+"}";
+
+/* A grain (0): a clump with a ragged edge -- its outline a few waves round it,
+ * turned by its seed -- lit a little from above.  A puff (1): a cloud of fine
+ * dust, soft and uneven, faded where it meets what is behind it so it never
+ * shows a hard line against the ground.  Both are the colour of the ground they
+ * were thrown from (round v_from, the picture there -- the world's pixels
+ * only, a car's being 0 in the alpha, and the car that threw them standing
+ * over the very spot), a grain darker and a puff paler, or the colour given
+ * where that cannot be seen.  A spark (2): a streak from where it was to
+ * where it is, white hot at its head.  Each is hidden behind what stands in
+ * front of it, from the depth buffer (1 - 1/z). */
+static const char g_particleShader[] =
+"in vec2 v_uv;"
+"in vec4 v_color;"
+"in vec2 v_from;"
+"flat in vec3 v_params;"
+"layout (location=0) out vec4 o_color;"
+"uniform sampler2D u_source;"
+"uniform sampler2D u_depth;"
+"uniform vec2 u_size;"
+"float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }"
+"float noise(vec2 p)"
+"{"
+"    vec2 i = floor(p), f = fract(p);"
+"    vec2 u = f * f * (3.0 - 2.0 * f);"
+"    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);"
+"}"
+"vec3 ground(vec3 otherwise)"
+"{"
+"    if (v_from.x < 0.0) return otherwise;"
+"    vec3 sum = vec3(0.0);"
+"    float n = 0.0;"
+"    for (int i = 0; i < 12; ++i) {"
+"        float a = float(i) * 2.39996;"
+"        float d = (i < 6 ? 0.05 : 0.1) * u_size.y;"
+"        vec4 s = texture(u_source, (v_from + vec2(cos(a), sin(a)) * d) / u_size);"
+"        float w = step(0.5, s.a);"
+"        sum += s.rgb * w;"
+"        n += w;"
+"    }"
+"    if (n < 0.5) return otherwise;"
+"    return mix(otherwise, sum / n, min(1.0, n / 3.0));"
+"}"
+"void main()"
+"{"
+"    float z = v_params.x, seed = v_params.y;"
+"    int type = int(v_params.z + 0.5);"
+"    float behind = texture(u_depth, gl_FragCoord.xy / u_size).r;"
+"    float zBehind = 1.0 / max(1.0 - behind, 1e-5);"
+"    float room = zBehind - z;"
+"    if (room < -0.05) discard;"
+"    float r = length(v_uv);"
+"    if (type == 2) {"
+"        float across = exp(-v_uv.y * v_uv.y * 5.0);"
+"        float along = clamp(v_uv.x * 0.5 + 0.5, 0.0, 1.0);"
+"        float a = across * mix(0.15, 1.0, along * along) * v_color.a;"
+"        vec3 hot = mix(v_color.rgb, vec3(1.0, 0.97, 0.85), across * along * along * 0.6);"
+"        o_color = vec4(hot, a);"
+"        return;"
+"    }"
+"    float angle = atan(v_uv.y, v_uv.x) + seed * 6.2832;"
+"    if (type == 0) {"
+"        float edge = 0.72 + 0.1 * sin(angle * 2.0 + seed * 11.0) + 0.06 * sin(angle * 3.0 + seed * 23.0)"
+"                   + 0.04 * noise(vec2(angle * 1.5, seed * 40.0));"
+"        float a = 1.0 - smoothstep(edge - 0.3, edge, r);"
+"        if (a <= 0.0) discard;"
+"        float lit = 0.92 + 0.16 * clamp(v_uv.y * 0.7 - r * 0.2, -1.0, 1.0);"
+"        vec3 c = ground(v_color.rgb) * (0.8 + 0.22 * fract(seed * 7.13)) * lit;"
+"        o_color = vec4(c, a * v_color.a * clamp(room / 0.1 + 0.5, 0.0, 1.0));"
+"        return;"
+"    }"
+"    vec2 q = v_uv * 1.6 + vec2(seed * 17.0, seed * 31.0);"
+"    float n = noise(q) * 0.55 + noise(q * 2.1) * 0.3 + noise(q * 4.3) * 0.15;"
+"    float a = (1.0 - smoothstep(0.15, 1.0, r + (n - 0.5) * 0.7)) * (0.55 + 0.45 * n);"
+"    if (a <= 0.0) discard;"
+"    vec3 g = ground(v_color.rgb);"
+"    float l = dot(g, vec3(0.299, 0.587, 0.114));"
+"    vec3 c = mix(g, vec3(l), 0.35) * 1.12 + 0.04;"
+"    o_color = vec4(c, a * v_color.a * clamp(room / 0.3 + 0.2, 0.0, 1.0));"
+"}";
+
 static GLuint postProgram(GLuint (*compile)(GLenum, const std::string&, const char*), const char* fragmentBody)
 {
     const GLuint vertex = compile(GL_VERTEX_SHADER, "", g_postVertexShader);
@@ -1156,6 +1262,28 @@ void ThrashRenderer::initPost()
                 double(m_lightTrails));
     {
         m_brightProgram = postProgram(compileShader, g_brightShader);
+        {
+            // The port's particles (drawParticles): NFS_PARTICLES=0 leaves the game's.
+            const char* particles = SDL_getenv("NFS_PARTICLES");
+            m_particlesOn = !(particles && (SDL_strcmp(particles, "0") == 0 || SDL_strcasecmp(particles, "off") == 0));
+            const GLuint vertex = compileShader(GL_VERTEX_SHADER, "", g_particleVertexShader);
+            const GLuint fragment = compileShader(GL_FRAGMENT_SHADER, "", g_particleShader);
+            m_particleProgram = glCreateProgram();
+            glAttachShader(m_particleProgram, vertex);
+            glAttachShader(m_particleProgram, fragment);
+            glLinkProgram(m_particleProgram);
+            GLint linked = 0;
+            glGetProgramiv(m_particleProgram, GL_LINK_STATUS, &linked);
+            if (!linked)
+            {
+                SDL_LogError(SDL_LOG_CATEGORY_RENDER, "[GFX] particles: their shader did not link");
+                m_particlesOn = false;
+            }
+            glDeleteShader(vertex);
+            glDeleteShader(fragment);
+            glGenVertexArrays(1, &m_particleArray);
+            glGenBuffers(1, &m_particleBuffer);
+        }
         m_compositeProgram = postProgram(compileShader, g_compositeShader);
         m_brightSource = glGetUniformLocation(m_brightProgram, "u_source");
         m_compositeSource = glGetUniformLocation(m_compositeProgram, "u_source");
@@ -1250,6 +1378,91 @@ void ThrashRenderer::allocateLightLayer(int width, int height)
     glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
 }
 
+/* The port's particles over the world (g_particleShader): a quad each, two
+ * triangles, the grains and puffs blended over the picture back to front and
+ * the sparks added on last, none writing the picture's alpha (what is a car
+ * and what is not, for the passes after). */
+void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height)
+{
+    struct Corner
+    {
+        float x, y, u, v, r, g, b, a, fx, fy, depth, seed, type;
+    };
+    const std::vector<EffectParticle>& list = *draw.particles;
+    std::vector<Corner> corners;
+    corners.reserve(list.size() * 6);
+    std::size_t blended = 0;
+    for (const EffectParticle& p : list)
+    {
+        float ax, ay, bx, by;   // the quad's two axes, half its length and width
+        if (p.type == EffectParticle::Spark)
+        {
+            float dx = p.x - p.tx, dy = p.y - p.ty;
+            float length = std::sqrt(dx * dx + dy * dy);
+            if (length < 1e-3f)
+            {
+                dx = 1.0f;
+                dy = 0.0f;
+                length = 1.0f;
+            }
+            const float half = 0.5f * length + p.size;
+            ax = dx / length * half;
+            ay = dy / length * half;
+            bx = -dy / length * p.size;
+            by = dx / length * p.size;
+        }
+        else
+        {
+            ax = p.size;
+            ay = 0.0f;
+            bx = 0.0f;
+            by = p.size;
+            ++blended;
+        }
+        const float cx = p.type == EffectParticle::Spark ? 0.5f * (p.x + p.tx) : p.x;
+        const float cy = p.type == EffectParticle::Spark ? 0.5f * (p.y + p.ty) : p.y;
+        const float fromX = p.type == EffectParticle::Spark ? -1.0f : p.tx;
+        auto corner = [&](float s, float t) {
+            corners.push_back({ cx + ax * s + bx * t, cy + ay * s + by * t, s, t, p.r, p.g, p.b, p.a, fromX, p.ty,
+                                p.depth, p.seed, p.type });
+        };
+        corner(-1, -1); corner(1, -1); corner(1, 1);
+        corner(-1, -1); corner(1, 1); corner(-1, 1);
+    }
+    glBindVertexArray(m_particleArray);
+    glBindBuffer(GL_ARRAY_BUFFER, m_particleBuffer);
+    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(corners.size() * sizeof(Corner)), corners.data(), GL_STREAM_DRAW);
+    const GLsizei stride = sizeof(Corner);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, (const void*)offsetof(Corner, x));
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, (const void*)offsetof(Corner, u));
+    glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, stride, (const void*)offsetof(Corner, r));
+    glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, stride, (const void*)offsetof(Corner, fx));
+    glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, stride, (const void*)offsetof(Corner, depth));
+    for (GLuint k = 0; k < 5; ++k)
+        glEnableVertexAttribArray(k);
+    glUseProgram(m_particleProgram);
+    glUniform1i(glGetUniformLocation(m_particleProgram, "u_source"), 0);
+    glUniform1i(glGetUniformLocation(m_particleProgram, "u_depth"), 2);
+    glUniform2f(glGetUniformLocation(m_particleProgram, "u_size"), float(width), float(height));
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, m_postDepth);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, m_postCopy);
+    glViewport(0, 0, width, height);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    if (blended)
+        glDrawArrays(GL_TRIANGLES, 0, GLsizei(blended * 6));
+    if (corners.size() > blended * 6)
+    {
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+        glDrawArrays(GL_TRIANGLES, GLsizei(blended * 6), GLsizei(corners.size() - blended * 6));
+    }
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDisable(GL_BLEND);
+}
+
 void ThrashRenderer::postProcess(const ThrashDraw& draw)
 {
     m_postDone = true;
@@ -1308,7 +1521,8 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
      * by NFS_MOTION_BLUR, coming in from 10 m/s and whole from 35. */
     const float ramp = SDL_max(0.0f, SDL_min(1.0f, (draw.speed - 10.0f) / 25.0f));
     const float blur = m_motionBlur * draw.speed * ramp * ramp * (3.0f - 2.0f * ramp) / 90.0f;
-    const bool needDepth = shadows || blur > 0.0f;
+    const bool particles = m_particlesOn && draw.particles && !draw.particles->empty();
+    const bool needDepth = shadows || blur > 0.0f || particles;
     if (needDepth)
     {
         // The world's depth, for its shadows and its blur: a copy, as the buffer stays bound.
@@ -1316,6 +1530,14 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_depthFramebuffer);
         glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
         glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
+    }
+    if (particles)
+    {
+        // Over the world, then the picture taken again with them in it.
+        drawParticles(draw, width, height);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, m_postCopy);
+        glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, width, height);
     }
     glBindVertexArray(m_postArray);
     /* The lamps (NFS_LIGHT_GLOW, NFS_LIGHT_TRAILS): the layer they were drawn

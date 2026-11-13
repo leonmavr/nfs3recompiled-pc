@@ -14,6 +14,9 @@ SITES = [
     ("nfs3hp", "sub_42ac40", "collisionEffects"),
     # The camera put into a view, before its matrix is made from it.
     ("nfs3hp", "sub_422850", "cameraToView"),
+    # A particle made (its kind in eax): the dust, dirt, snow and sparks taken
+    # over by the port's own (native_particles.cpp).
+    ("nfs3hp", "sub_4ca850", "particleSpawn"),
 ]
 
 

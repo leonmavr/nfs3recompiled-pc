@@ -595,6 +595,46 @@ void unstick(win32::WinApplication* app, x86::reg32 car, int i)
 
 }  // namespace
 
+/* Port: traffic lighter (NFS_TRAFFIC_WEIGHT, 0.5 by default; 0 or off for the
+ * game's), so a car that hits it is not stopped dead.  A car's mass is at
+ * [+0xb0] with its inverse at [+0xb4], its three moments of inertia at +0xf0
+ * .. +0xf8 with theirs at +0xfc .. +0x104 (the masses read from a race: 1472
+ * the player's car, 1700 a traffic van, each beside 1 over it); all are
+ * scaled together, so a lighter car turns as a lighter car would.  Done the
+ * first time a traffic car ([+0x200] & 0x10, sub_428700) is driven, and again
+ * whenever its mass is not the one set (a new race, a car made again). */
+static float trafficWeight()
+{
+    static const float weight = [] {
+        const char* value = SDL_getenv("NFS_TRAFFIC_WEIGHT");
+        if (!value || !*value || SDL_strcasecmp(value, "on") == 0)
+            return 0.5f;
+        if (SDL_strcmp(value, "0") == 0 || SDL_strcasecmp(value, "off") == 0)
+            return 1.0f;
+        const float parsed = float(SDL_atof(value));
+        return parsed >= 0.1f && parsed <= 2.0f ? parsed : 0.5f;
+    }();
+    return weight;
+}
+
+static void lightenTraffic(win32::WinApplication* app, x86::reg32 car, int i)
+{
+    static float s_set[kMaxCars] = {};
+    const float weight = trafficWeight();
+    if (weight == 1.0f || networkRace(app) || !(app->getMemory<x86::reg8>(car + 0x200) & 0x10))
+        return;
+    const float mass = app->getMemory<float>(car + 0xb0);
+    if (!(mass > 0.0f) || mass == s_set[i])
+        return;
+    for (x86::reg32 o : { 0xb0u, 0xf0u, 0xf4u, 0xf8u })
+        app->getMemory<float>(car + o) = app->getMemory<float>(car + o) * weight;
+    for (x86::reg32 o : { 0xb4u, 0xfcu, 0x100u, 0x104u })
+        app->getMemory<float>(car + o) = app->getMemory<float>(car + o) / weight;
+    s_set[i] = app->getMemory<float>(car + 0xb0);
+    if (aiTracing())
+        SDL_Log("[AI] car %d is traffic: %.0f kg, now %.0f", i, double(mass), double(s_set[i]));
+}
+
 bool aiDrive(win32::WinApplication* app, x86::CPU& cpu)
 {
     const x86::reg32 car = cpu.eax;
@@ -605,6 +645,7 @@ bool aiDrive(win32::WinApplication* app, x86::CPU& cpu)
      * through here too, and backing off, looking for forks and flashing are
      * not for them -- a racer's flag in [+0x200] is 8 (sub_428700). */
     const bool racer = (app->getMemory<x86::reg8>(car + 0x200) & 8) != 0;
+    lightenTraffic(app, car, i);
     if (aiTuned() && !networkRace(app) && racer)
     {
         unstick(app, car, i);

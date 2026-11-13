@@ -158,6 +158,19 @@ void raceView(bool race)
         s_directRenderer->setRaceView(race);
 }
 
+bool effectParticles(std::vector<EffectParticle>&& particles)
+{
+    if (!s_directRenderer)
+        return false;
+    s_directRenderer->setParticles(std::move(particles));
+    return true;
+}
+
+bool effectParticlesDrawn()
+{
+    return s_directRenderer && s_directRenderer->particlesDrawn();
+}
+
 void motion(float speed)
 {
     if (s_directRenderer)

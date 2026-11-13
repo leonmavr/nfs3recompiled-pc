@@ -322,6 +322,51 @@ first (its normal from the car's centre to the contact point) and handed back
 after. `NFS_SPARKS` (2) multiplies kind 3's burst size (`[0x560ce4]`) for
 every burst, the game's too; 0 leaves the game's sparks alone.
 
+### Dust, grit and sparks of the port's own
+
+The game makes a particle with `sub_4ca850` (its kind in eax; thirteen
+arguments, `ret 0x34`: where, three floats; a scale; two directions; how fast,
+three) into its pool of 600 at `0x7ddfd0` and draws each as a picture from
+`sfx.fsh`. Kind 2 is the dirt and dust thrown up off the road, kind 3 a spark
+of a collision; the kinds' table is 128 bytes each at `0x560b64`.
+`particleSpawn` (`native_effects.cpp`, hooked at the top of `sub_4ca850`)
+hands those two kinds to `native_particles.cpp` and returns with none made
+(eax 0), so the game decides when and where, and the port how:
+
+- **Dirt** becomes grains -- small clumps, each outline a few waves round it
+  set by its seed, thrown up and out, falling back under gravity, lying a
+  moment where they land -- and now and then a puff of fine dust that drifts,
+  spreads and fades. For each of the game's, 2 grains and one more for every
+  3 m/s it was thrown at (times `NFS_PARTICLES`), thrown higher and wider the
+  faster; a puff more often the faster.
+- **Their colour is the ground's**: the renderer takes it from the picture
+  in a ring round where they were thrown (world pixels only -- a car's are 0 in
+  the alpha, and the car that threw them stands over the very spot), a grain
+  darker, a puff paler: sand in the desert, snow on snow, mud on grass.
+- **A spark** is a streak from where it was a frame ago to where it is, white
+  hot at its head, cooling through yellow and orange to red as it falls, and
+  skipping off the ground.
+
+Each frame, as the main view's sky is drawn (`noteSun`, its view known), they
+are moved by the race's clock -- standing still with it -- turned into the
+view as `sub_492370` turns a lamp, sorted back to front, and handed to the
+renderer (`glide2x::effectParticles`). `ThrashRenderer::drawParticles` draws
+them over the world just before the whole-picture pass, a quad each, their
+shapes made in the shader (`g_particleShader`), hidden behind what stands in
+front of them by the depth buffer, a puff fading where it meets what is behind
+it, the picture's alpha left as it was. Not in split screen, nor without the
+native THRASH renderer: the game's own then. `NFS_PARTICLES` (1; a number up
+to 3 for more, `0`/`off` for the game's).
+
+### Traffic lighter
+
+A car's mass is at `[car+0xb0]` with 1 over it at `+0xb4`, its three moments of
+inertia at `+0xf0..+0xf8` with theirs at `+0xfc..+0x104` (read from a race:
+1472 kg the player's car, 1700 and 1800 two traffic vans). The first time a
+traffic car (`[car+0x200] & 0x10`, set by `sub_428700`) is driven, `aiDrive`
+scales all of them by `NFS_TRAFFIC_WEIGHT` (0.5), and again whenever its mass
+is not the one it set, so hitting traffic no longer stops a car dead.
+
 ### Speed you can feel
 
 **The camera pulled back.** `sub_422850` turns a camera -- its place, then its
@@ -1517,6 +1562,8 @@ from the phone; the rest matter for a desktop run.
 | `NFS_LIGHT_GLOW` | on (`1`) | `0`/`off`: the lamps' glow as the game has it, a star of spikes. A number up to 3: how strong the halo round the soft glow (The lamps' glow, and their trails). |
 | `NFS_LIGHT_TRAILS` | on (`1`) | `0`/`off`: no streak. A number up to 3: how long the short streak under each lamp at speed, on the screen. |
 | `NFS_TAILLIGHT_TRAILS` | on (`1`) | `0`/`off`: no trails behind the cars' tail lights. A number up to 3: how long they grow with speed, from 80 km/h (The lamps' glow, and their trails). |
+| `NFS_PARTICLES` | on (`1`) | `0`/`off`: the game's own dust and sparks. A number up to 3: how much dirt is thrown (Dust, grit and sparks of the port's own). |
+| `NFS_TRAFFIC_WEIGHT` | `0.5` | How heavy the traffic is against the game's, 0.1 to 2; `0`/`off` for the game's (Traffic lighter). |
 | `NFS_CAMERA_PULL` | `1.2` | How far back, in metres, the chase camera eases under full throttle; `0`/`off` for none. |
 | `NFS_SPARKS` | `2` | How many times the sparks of a burst, and whether walls throw them on hits and scrapes; `0`/`off`: the game's own (Sparks off walls). |
 | `NFS_OBJECT_SHADOWS` | on (`0.45`) | `0`/`off`: no shadows from what stands by the road. A number: how dark (Shadows of what stands by the road); fainter in the rain and at night by `NFS_SHADOW_RAIN` and `NFS_SHADOW_NIGHT`. |

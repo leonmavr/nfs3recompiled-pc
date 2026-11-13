@@ -211,4 +211,14 @@ bool cameraToView(win32::WinApplication* app, x86::CPU& cpu)
     return false;
 }
 
+// native_particles.cpp: dust and sparks of the port's own.
+bool particleTakeOver(win32::WinApplication* app, x86::CPU& cpu);
+
+/* sub_4ca850, a particle made: the kinds the port draws itself are handed to
+ * native_particles.cpp (particleTakeOver), the rest made as the game makes them. */
+bool particleSpawn(win32::WinApplication* app, x86::CPU& cpu)
+{
+    return particleTakeOver(app, cpu);
+}
+
 }  // namespace nfs3hp

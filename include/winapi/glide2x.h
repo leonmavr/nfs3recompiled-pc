@@ -4,6 +4,7 @@
 #include <x86.h>
 #include <winapi/types.h>
 #include <vector>
+#include <lib/effectparticle.h>
 
 namespace win32
 {
@@ -43,6 +44,11 @@ void wetRoad(float wetness);
 void raceView(bool race);
 /* How fast the first player goes, m/s (the motion blur; 0 for none). */
 void motion(float speed);
+/* Port: this frame's particles of the port's own (native_particles.cpp), back
+ * to front, the sparks last; false when the renderer cannot draw them (the
+ * game's own are kept then). */
+bool effectParticles(std::vector<EffectParticle>&& particles);
+bool effectParticlesDrawn();
 void colourGrade(float red, float green, float blue, float saturation, float contrast);
 /* The player's headlights in the view (origin, direction, the car's up) and the
  * projection's scale and centre, for lighting what stands beside the road. */

@@ -15875,11 +15875,16 @@ static float settingOr(const char* name, float fallback, float most)
     return parsed >= 0.0f && parsed <= most ? parsed : fallback;
 }
 
+void particlesFrame(win32::WinApplication* app, x86::reg32 view);  // native_particles.cpp
+
 static void noteSun(win32::WinApplication* app, x86::reg32 view)
 {
     if (s_sunNoted || !view)
         return;
     s_sunNoted = true;
+    // The port's particles move and are put in this view, the frame's main one.
+    if (app->getMemory<x86::reg32>(0x6fd3b0) != 1)
+        particlesFrame(app, view);
     const Memory m{app};
     auto f = [&](x86::reg32 address) { return float(m.load(address)); };
     static const float strength = settingOr("NFS_OBJECT_SHADOWS", 0.45f, 1.0f);

@@ -2,6 +2,8 @@
 #define LIB_THRASHRENDERER_H_
 
 #include <lib/gliderenderer.h>
+#include <lib/effectparticle.h>
+#include <memory>
 #include <array>
 #include <unordered_map>
 #include <vector>
@@ -94,9 +96,21 @@ public:
     }
     /* Whether a race is being drawn (glide2x::raceView): the haze and the
      * whole-picture pass are for it alone, never the menus. */
-    void setRaceView(bool race) { m_raceView = race; }
+    void setRaceView(bool race)
+    {
+        m_raceView = race;
+        if (!race)
+            m_particles.reset();   // none left over for the next race's first frame
+    }
     /* How fast the first player goes, m/s (glide2x::motion): the motion blur's. */
     void setMotion(float speed) { m_speed = speed; }
+    /* The port's own particles for this frame (glide2x::effectParticles). */
+    void setParticles(std::vector<EffectParticle>&& particles)
+    {
+        m_particles = std::make_shared<const std::vector<EffectParticle>>(std::move(particles));
+    }
+    // Whether the whole-picture pass is on to draw them (initPost).
+    bool particlesDrawn() const { return m_particlesOn; }
     void setColourGrade(float red, float green, float blue, float saturation, float contrast)
     {
         m_grade[0] = red; m_grade[1] = green; m_grade[2] = blue; m_grade[3] = saturation; m_grade[4] = contrast;
@@ -224,6 +238,7 @@ private:
     void initPost();
     void takeSky(int width, int height);
     void allocateLightLayer(int width, int height);
+    void drawParticles(const ThrashDraw& draw, int width, int height);
     void postProcess(const ThrashDraw& draw);
     float                   m_grade[5] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };  // the game thread's
     float                   m_head[14] = {};        // the game thread's: on, origin, direction, projection, up
@@ -250,6 +265,10 @@ private:
     float                   m_lightTrails = 0.0f;   // NFS_LIGHT_TRAILS
     // The GL thread's: the frame's lamps alone (the halo's and the trails').
     unsigned int            m_lightLayer = 0, m_lightFramebuffer = 0;
+    // The port's particles: the game thread's for the next frame, and how they are drawn.
+    std::shared_ptr<const std::vector<EffectParticle>> m_particles;
+    bool                    m_particlesOn = true;
+    unsigned int            m_particleProgram = 0, m_particleArray = 0, m_particleBuffer = 0;
     int                     m_brightSource = -1, m_compositeSource = -1, m_compositeBright = -1,
                             m_compositePixel = -1, m_compositeBloom = -1, m_compositeGrade = -1,
                             m_compositeTint = -1, m_compositeAa = -1, m_compositeDepth = -1, m_compositeShadow = -1,
