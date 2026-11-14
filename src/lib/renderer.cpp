@@ -875,7 +875,9 @@ void Renderer::paceFrame()
     }
 #endif
     m_presentNs = 0;
-    if (m_frameNs)
+    if (m_unpaced)
+        m_nextFrameNs = 0;   // loading: no waiting, and the frames after it counted afresh
+    else if (m_frameNs)
     {
         /* The first frame, or one that came a whole period late or more: count
          * from now, rather than rush the frames after it to catch up. */

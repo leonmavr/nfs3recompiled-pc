@@ -415,7 +415,10 @@ own `[car+0x18c]`. The game's table of surfaces (16 of 0x24 bytes at
 and 12 paved verges, 3 Atlantica's grass, 13 Redrock's sand and dirt, 15
 Summit's snow (2 grass, 8 and 9 dirt, 5 mud from the table).
 
-Only the player's car, and gently -- never enough to lose it. Each tick of
+The player's car, and with `NFS_GRIP_ON_OPPONENTS` (on) every other car in
+the race too -- racers, cops and traffic, the list at `[0x5efc48]`
+(`[0x5efda0]` of them), their driving left as it is -- and gently, never
+enough to lose it. Each tick of
 the race's clock (64 a second), by the share of the four wheels on each
 surface, none below 15 km/h and all of it from 32 km/h:
 
@@ -1129,6 +1132,24 @@ function that still has it behind it, `NFS_FE_NATIVE_OFF=sub_437e00,...` for
 the ones named; the log says which ran which way (`[FE]`). The screens that
 are native whole have none to go back to.
 
+### A race loads in a moment
+
+Most of a race's loading time was waiting: the game flips its loading picture
+again and again as it reads the track and the cars, and each flip waited for
+its turn at the frame rate (`Renderer::paceFrame`) and for the screen's
+refresh. Measured here on Atlantica: 13.5 s, of which the game's own work was
+about a second. Now, from the loading picture to the race
+(`loadingScreenFit`, `glide2x::unpacedFrames`), the flips are not paced and
+at most one frame in 50 ms is drawn and shown (`ThrashRenderer::swap`), the
+rest let go: the same race loads in about 0.3 s. One catch came with it: the
+race's clock (the timer `sub_42dcb0` sets going; `[0x5efdf8]` a tick every
+two of its calls) must have ticked once by the time the race begins, or
+`sub_4c4e40` takes the race for dead and quits the game -- and with no flips
+waiting, the timer's thread hardly ever got the guest. So the end of the load
+waits for that first tick, the guest let go meanwhile (at most a second).
+`NFS_FAST_LOAD` (on; `0`/`off` for the paced loading). The log says
+`[LOAD] the race loaded in ... s`.
+
 ## Building
 
 ### Android
@@ -1421,7 +1442,8 @@ it and the car still drives).  The tool therefore reads the archive and writes
 both, and a file that grows past its old size has the archive rebuilt around
 it.
 
-`tools/car_perf.py` reads them, draws them, and writes them back:
+`tools/car_perf.py` reads them, draws them, and writes them back
+(`report` is `tools/car_report.py`'s, below):
 
     python3 tools/car_perf.py list                     # every car, side by side
     python3 tools/car_perf.py list --fields            # the fields you can set
@@ -1430,6 +1452,7 @@ it.
     python3 tools/car_perf.py compare hgts diab ffal
     python3 tools/car_perf.py set hgts mass=1500 "final=4.10"
     python3 tools/car_perf.py clone hgts mycar --id 60 --name "ZZZ 001" mass=1500
+    python3 tools/car_perf.py report [diab f355 ...] [--out car_reports]
 
 `show` puts four panels on one page: the headline figures as bars against the
 rest of the field (power, power per tonne, top speed, 0-100, grip, braking,
@@ -1442,6 +1465,19 @@ redline and the drops at a shift), and the acceleration the game gives the car.
 in `fedata.eng` and inside `car.viv`, so it is a car the game will load (the id
 must be unused, and the name cannot be wider than the one it replaces — the
 archive's offsets are fixed).
+
+`report` (`tools/car_report.py`, which also runs on its own) writes a sheet
+per car -- `car_reports/<folder>.png` -- of six panels: torque and power
+against rpm with the redline; the gearbox, engine rpm against road speed in
+each gear with the drop at each shift; the push at the wheels in each gear
+against road speed (torque times the gear, the final drive and the gear's
+efficiency, over the wheel's radius, worked out of the game's own rpm per m/s)
+with the best gear drawn over all, so the speeds where each gear hands over to
+the next show; the game's acceleration table by speed with 0-100, 0-160 and
+0-200 km/h worked out of it; and the specs (mass, power to weight, ratios,
+final drive, top speed, drive, brakes, grip, tyres). With several cars it
+adds `compare.png` (top speed, 0-100, 0-200 and power to weight, every car
+ranked) and `summary.csv`.
 
 Three things are worth knowing before tuning:
 
@@ -1677,6 +1713,8 @@ from the phone; the rest matter for a desktop run.
 | `NFS_PARTICLES` | on (`1`) | `0`/`off`: the game's own dust and sparks. A number up to 3: how much dirt is thrown (Dust, grit and sparks of the port's own). |
 | `NFS_WHEEL_SPRAY` | off (`0`) | `1`/`on`: the port's spray off a wet road instead of the game's; known bug: the weather's particles then show as small turned squares (Grass, and spray off a wet road). |
 | `NFS_SUN_GLARE` | on (`1`) | `0`/`off`: no glare from the sun. A number up to 3: how strong (Sun glare); by day with no weather only. |
+| `NFS_GRIP_ON_OPPONENTS` | on (`1`) | `0`/`off`: grip by terrain for the player's car only, not every car (Grip by terrain). |
+| `NFS_FAST_LOAD` | on (`1`) | `0`/`off`: the loading picture's frames paced and all shown, as before (A race loads in a moment). |
 | `NFS_SURFACE_GRIP` | on (`1`) | `0`/`off`: every surface as the game has it. A number up to 3: how much the player's car feels grass, dirt, snow and mud (Grip by terrain). |
 | `NFS_TRAFFIC_WEIGHT` | `0.5` | How heavy the traffic is against the game's, 0.1 to 2; `0`/`off` for the game's (Traffic lighter). |
 | `NFS_COP_WEIGHT` | `1.25` | How heavy the cops are against the game's, 0.1 to 3; `0`/`off` for the game's (Traffic lighter, cops heavier and faster). |

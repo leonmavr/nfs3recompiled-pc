@@ -293,6 +293,7 @@ private:
     x86::reg32              m_textureLevels;
     int                     m_textureFormat;
     x86::reg32              m_renderStamp;
+    Uint64                  m_lastShownNs = 0;   // while loading: when a frame last went out (swap)
     std::vector<std::array<float, 64>> m_fogTables;
     int                     m_fogTableIndex;
     x86::reg8               m_fogTableRaw[64];

@@ -69,6 +69,8 @@ bool atlasFreeSpace(x86::reg32& freeTexels, x86::reg32& freeTiles, x86::reg32& t
  * have been drawn on a 4:3 screen.  For a screen the game only knows how to
  * stretch.  No effect on a picture no wider than 4:3. */
 void fitFourThree(bool on);
+/* The frames go out unpaced while on (a race loading; Renderer::setUnpaced). */
+void unpacedFrames(bool on);
 
 /* While on, every triangle is narrowed by the same factor towards its own left
  * corner: a picture of its own, like a dialog's emblem, keeps its shape on a

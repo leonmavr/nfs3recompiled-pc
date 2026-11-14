@@ -2002,6 +2002,31 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
 void ThrashRenderer::swap()
 {
     m_renderer->ensureFramePacing();
+    /* While a race loads (Renderer::setUnpaced), its loading picture is
+     * flipped again and again as the files come in: at most one of those
+     * frames in 50 ms is drawn and shown, the rest let go -- each one shown
+     * waited for the screen's refresh, and the loading with it. */
+    if (m_renderer->unpaced())
+    {
+        const Uint64 now = SDL_GetTicksNS();
+        if (m_lastShownNs && now - m_lastShownNs < 50 * SDL_NS_PER_MS)
+        {
+            if (m_vertexCount)
+            {
+                flush();
+                m_batches.clear();
+                m_vertexCount = 0;
+                m_fogTables.front() = m_fogTables[m_fogTableIndex];
+                m_fogTables.resize(1);
+                m_fogTableIndex = 0;
+                ++m_renderStamp;
+            }
+            return;
+        }
+        m_lastShownNs = now;
+    }
+    else
+        m_lastShownNs = 0;
     renderPending();
     GlideCounters& counters = GlideRenderer::counters();
     ++counters.frames;

@@ -73,6 +73,11 @@ public:
     void setCurrent();
     void clearCurrent();
 
+    /* While a race loads (glide2x::unpacedFrames): its frames -- the loading
+     * picture flipped again and again as the files come in -- go out at once,
+     * not held to the frame period, which held the loading back with them. */
+    void setUnpaced(bool on) { m_unpaced = on; }
+    bool unpaced() const { return m_unpaced; }
 private: // friend class GlideRenderer
     void present();
     /* present()'s GL work: the letterboxed blit of the frame and the swap. */
@@ -119,6 +124,7 @@ private:
      * when the next frame is due. */
     Uint64          m_frameNs;
     Uint64          m_nextFrameNs;
+    bool            m_unpaced = false;
     /* For the performance hint (paceFrame): when this frame's work began --
      * the end of the last wait for its time -- and how much of it since went
      * waiting on the GPU and the display in present(). */

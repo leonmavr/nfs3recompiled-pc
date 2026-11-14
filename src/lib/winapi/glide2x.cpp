@@ -74,6 +74,12 @@ void fitFourThree(bool on)
     s_fitOffset = (width - height * 4 / 3) / 2;
 }
 
+void unpacedFrames(bool on)
+{
+    if (s_renderer)
+        s_renderer->setUnpaced(on);
+}
+
 void clearPicture(WinApplication* app, x86::CPU& cpu)
 {
     if (!s_renderer || !s_glideRenderer)

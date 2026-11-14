@@ -12,7 +12,8 @@
  * 1 the road, 10 and 12 paved verges, 3 Atlantica's grass, 13 Redrock's sand
  * and dirt, 15 Summit's snow.
  *
- * Only the player's car, and only gently -- never enough to lose it: each
+ * The player's car, and every other car with it (NFS_GRIP_ON_OPPONENTS, on),
+ * and only gently -- never enough to lose it: each
  * tick of the race's clock (64 a second) a surface off the asphalt
  *   - drags the car back (speed and acceleration lost),
  *   - softens the steering (the yaw rate [+0xe8] a little less) -- or on
@@ -132,18 +133,22 @@ int groundUnder(win32::WinApplication* app, x86::reg32 car, int wheel)
     }
 }
 
-void surfaceFrame(win32::WinApplication* app)
+/* The other cars too (NFS_GRIP_ON_OPPONENTS, 1 by default; 0 or off for the
+ * player's alone): the same feel of the ground on every car in the race --
+ * racers, cops and traffic -- their driving left as it is. */
+static bool onOpponents()
 {
-    static x86::sreg32 last = -1;
-    static x86::reg32 lastCar = 0;
-    static float slip = 0.0f;   // the sideways speed after the last tick
-    const x86::reg32 car = word(app, 0x5efa48);
-    const x86::sreg32 clock = x86::sreg32(word(app, 0x7d3684));
-    const int ticks = last < 0 || clock < last || car != lastCar ? 0 : SDL_min(int(clock - last), 8);
-    last = clock;
-    lastCar = car;
-    if (!car || ticks <= 0 || setting() <= 0.0f || app->getMemory<x86::reg32>(0x6fd3b0) == 1)
-        return;
+    static const bool value = [] {
+        const char* text = SDL_getenv("NFS_GRIP_ON_OPPONENTS");
+        return !(text && (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0));
+    }();
+    return value;
+}
+
+/* One car's tick or ticks on what its wheels stand on; slip its sideways
+ * speed after the last time. */
+static void feelGround(win32::WinApplication* app, x86::reg32 car, int ticks, float& slip, bool trace, x86::sreg32 clock)
+{
     if (app->getMemory<uint16_t>(car + 0x164) != 0)
         return;   // in the air
     Feel feel{};
@@ -163,13 +168,9 @@ void surfaceFrame(win32::WinApplication* app)
     float yaw = value(app, car + 0xe8);
     const float right[3] = { value(app, car + 0xc0), value(app, car + 0xc4), value(app, car + 0xc8) };
     const float sideways = v[0] * right[0] + v[1] * right[1] + v[2] * right[2];
-    static const int every = [] {
-        const char* text = SDL_getenv("NFS_SURFACE_TRACE");
-        return text ? SDL_max(SDL_atoi(text) > 1 ? SDL_atoi(text) : 32, 1) : 0;
-    }();
-    if (every && (clock / every) != ((clock - ticks) / every))
-        SDL_Log("[SURFACE] t %d wheels %u %u %u %u speed %.1f drag %.3f steer %.2f loose %.2f yaw %.3f slip %.2f", clock,
-                surfaces[0], surfaces[1], surfaces[2], surfaces[3], speed, feel.drag, feel.steer, feel.loose,
+    if (trace)
+        SDL_Log("[SURFACE] t %d car %x wheels %u %u %u %u speed %.1f drag %.3f steer %.2f loose %.2f yaw %.3f slip %.2f",
+                clock, car, surfaces[0], surfaces[1], surfaces[2], surfaces[3], speed, feel.drag, feel.steer, feel.loose,
                 yaw, sideways);
     if (amount <= 0.0f || feel.drag + std::fabs(feel.steer) + feel.loose + feel.shake <= 0.0f)
     {
@@ -203,6 +204,43 @@ void surfaceFrame(win32::WinApplication* app)
     for (int k = 0; k < 3; ++k)
         put(app, car + 0xa4 + 4 * x86::reg32(k), v[k]);
     put(app, car + 0xe8, yaw);
+}
+
+void surfaceFrame(win32::WinApplication* app)
+{
+    static x86::sreg32 last = -1;
+    static x86::reg32 lastPlayer = 0;
+    static float slips[16] = {};   // each car slot's sideways speed after the last tick
+    const x86::reg32 player = word(app, 0x5efa48);
+    const x86::sreg32 clock = x86::sreg32(word(app, 0x7d3684));
+    const int ticks = last < 0 || clock < last || player != lastPlayer ? 0 : SDL_min(int(clock - last), 8);
+    last = clock;
+    lastPlayer = player;
+    if (!player || ticks <= 0 || setting() <= 0.0f || app->getMemory<x86::reg32>(0x6fd3b0) == 1)
+        return;
+    static const int every = [] {
+        const char* text = SDL_getenv("NFS_SURFACE_TRACE");
+        return text ? SDL_max(SDL_atoi(text) > 1 ? SDL_atoi(text) : 32, 1) : 0;
+    }();
+    const bool trace = every && (clock / every) != ((clock - ticks) / every);
+    // The race's cars, the player's among them: the list at [0x5efc48], [0x5efda0] of them.
+    const x86::reg32 count = SDL_min(word(app, 0x5efda0), x86::reg32(16));
+    bool playerDone = false;
+    for (x86::reg32 k = 0; k < count; ++k)
+    {
+        const x86::reg32 car = word(app, 0x5efc48 + 4 * k);
+        if (car < 0x5e1120 || car >= 0x5e1120 + 16 * 0x9ac || (car - 0x5e1120) % 0x9ac != 0)
+            continue;
+        const bool isPlayer = car == player;
+        if (!isPlayer && !onOpponents())
+            continue;
+        playerDone |= isPlayer;
+        feelGround(app, car, ticks, slips[(car - 0x5e1120) / 0x9ac], trace && isPlayer, clock);
+    }
+    if (trace)
+        SDL_Log("[SURFACE] cars %u, the others %s", count, onOpponents() ? "too" : "not");
+    if (!playerDone && player >= 0x5e1120 && player < 0x5e1120 + 16 * 0x9ac)
+        feelGround(app, player, ticks, slips[(player - 0x5e1120) / 0x9ac], trace, clock);
 }
 
 }  // namespace nfs3hp

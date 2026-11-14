@@ -127,6 +127,7 @@ void raceRunning(bool running)
     if (!running)
     {
         win32::glide2x::fitFourThree(false);
+        win32::glide2x::unpacedFrames(false);
         s_loadingScreen = false;
     }
 }
@@ -137,9 +138,45 @@ void raceRunning(bool running)
  * rectangle in its middle; once the race is loaded, the whole screen again. */
 void loadingScreenFit(win32::WinApplication* app, x86::CPU& cpu, bool on)
 {
+    {
+        // How long a race takes to load, from its loading picture to the race.
+        static Uint64 started = 0;
+        if (on)
+            started = SDL_GetTicks();
+        else if (started)
+        {
+            /* The race's clock (the timer sub_42dcb0 sets going, [0x5efdf8]
+             * a tick every two of its calls) must have ticked once by the time
+             * the race begins, or sub_4c4e40 takes the race for dead and
+             * quits the game -- a load that never waited for a frame can end
+             * before it has (its frames let go, the guest was hardly ever let go
+             * for the timer's thread).  So the race waits for that first tick,
+             * the guest let go meanwhile (at most a second). */
+            const Uint64 waitFrom = SDL_GetTicks();
+            while (app->getMemory<x86::reg32>(0x5537a4) != 0
+                   && x86::sreg32(app->getMemory<x86::reg32>(0x5efdf8)) <= 0 && SDL_GetTicks() - waitFrom < 1000)
+            {
+                // The timer's thread runs the game's code too: the guest let go meanwhile.
+                app->unlockContext(cpu);
+                SDL_Delay(2);
+                app->lockContext(cpu);
+            }
+            SDL_Log("[LOAD] the race loaded in %.2f s (clock %d, waited %u ms)", double(SDL_GetTicks() - started) / 1000.0,
+                    x86::sreg32(app->getMemory<x86::reg32>(0x5efdf8)), unsigned(SDL_GetTicks() - waitFrom));
+            started = 0;
+        }
+    }
     if (on)
         win32::glide2x::clearPicture(app, cpu);
     win32::glide2x::fitFourThree(on);
+    /* The loading picture's flips unpaced (NFS_FAST_LOAD, on; 0 or off for
+     * paced): the game flips it as it reads, and each flip waited for its
+     * turn at the frame rate -- most of a race's loading time. */
+    static const bool fast = [] {
+        const char* text = SDL_getenv("NFS_FAST_LOAD");
+        return !(text && (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0));
+    }();
+    win32::glide2x::unpacedFrames(on && fast);
     s_loadingScreen = on;
 }
 

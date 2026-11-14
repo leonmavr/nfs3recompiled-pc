@@ -1424,8 +1424,19 @@ def main(argv=None):
     clone.add_argument("--derive", action="store_true",
                        help="rebuild the AI acceleration tables from the tuned engine")
 
+    report = sub.add_parser("report",
+                            help="a full sheet per car (engine, gearbox, push in each gear, "
+                                 "acceleration, specs) and every car compared, as PNGs and a CSV")
+    report.add_argument("cars", nargs="*", help="car folders (default: every car)")
+    report.add_argument("--out", default="car_reports", help="the folder for the sheets (default: %(default)s)")
+
     args = parser.parse_args(argv)
     root = Path(args.root)
+    if args.command == "report":
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import car_report
+        car_report.run(str(root), args.out, args.cars)
+        return 0
     try:
         if args.command == "list":
             if args.fields:

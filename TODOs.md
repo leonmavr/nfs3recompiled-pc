@@ -27,7 +27,7 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 - [ ] Tyre marks that last the lap, darker and softer than the game's.
 - [ ] Heat haze over the road on desert tracks by day.
 - [ ] Brake discs glowing faintly orange after hard braking at night.
-- [ ] Wider, sharper reflections on the cars from the sky already captured.
+- [x] Wider, sharper reflections on the cars from the sky already captured.
 - [ ] Camera shake on big impacts and hard landings, by the hit's speed.
 - [x] Grass particles: off the road on grass, slightly elongated flying blades,
   more with speed, beside the dirt grains.
@@ -95,6 +95,15 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   - Done: the world smeared away from the screen's centre by speed over its
     distance (from the depth buffer), from 10 m/s, whole from 35; the cars
     stay sharp (`NFS_MOTION_BLUR`, 2).
+- [ ] Exhaust flames; when gearing up transmission, eject exhaust flames behind
+  each exhaust of each cars. However before doing that, exhaust positions
+  (notice that exhausts are symmetrical in terms of width axis) will need to be
+  marked by a human; number and size of each and flame color. We will need a car
+  model visualization tool for that. Stored as exhaust data ideally packed 
+  within the car folder. If no data, no flames. 
+  Then you can work out the flames and light emission.
+  Flames can also appear at the beginning of race when revving and torque is at
+  the top 20% or 15% highest.
 
 ### Races/locations
 
@@ -108,6 +117,8 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
       the shader (`NFS_HEADLIGHT_OBJECTS`, 1.6).
 - [ ] Emissive light from environmental models that emit light. Note that this
   is partially implementned by the original game but check if it can improved
+- [ ] Track editor. Tool to copy, edit, add new tracks with custom terrain and
+  environemtn too.
 
 ### Oppponents and AI
 - [x] Bug: a quick race against Class A opponents had police cars (and cars
@@ -181,8 +192,9 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   have a spike strip graphic, etc). Also in general, cops should be twice as
   likely to throw spike strips. Road blocks by cops should consist of 2-3 cars,
   not one.
-- [ ] In full grid hot pursuit, number of cop cars should increase 3x of what it
-  nomally is.
+- [x] In full grid hot pursuit, number of cop cars should increase 3x of what it
+  nomally is -> partly done. Each race has 16 cars slots, full grid hot pursuit
+  implies 5 total races, so more available slots for cops.
 - [ ] Hot Pursuit: cops ahead of the player for a while drop a spike strip
   (the game never deploys them). Not too fast to drop, never right onto a
   car: far enough ahead to be seen and dodged. A cop car waits idle at one
@@ -193,8 +205,10 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   otherwise unchanged.
   - Done (`NFS_COP_WEIGHT`), and the cops faster: their cars tuned up 10-20%
     in pull and 8-15% in top speed by model (`NFS_COP_PACE`).
-- [ ] Cops should deploy their high-end cars (depending on location) on high
-  heat levels, e.g. pursuit McLaren, Corvette, or Diablo.
+- [x] Cops should deploy their high-end cars (depending on location) on high
+  heat levels, e.g. pursuit McLaren, Corvette, or Diablo. -> partly done by
+  marking each slot with a car. However they never deploy McLaren (it's an added
+  cop car).
 - [x] SERIOUS BUG: in the rain, opponents often lose control on turnining
   (possibly when braking, not sure?) causing them to turn 90 or even 180
   degrees, slow down dramatically, and then they have to re-align with their trajectory.
@@ -217,7 +231,10 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   toggleable)
 - [ ] Add difficulty slider instead of just normal and agressive (presets in
   slider will still be normal and agressive but we can slide in between to
-  adjust opponent AI)
+  adjust opponent AI). You already have some slider asset in volume control.
+- [ ] Currently in 'Control' menu, setting a key for brake other than arrows
+  doesn't work. Bind x key to brake by keyfault ('keyboard x')
+- [ ] Fix brake key binding.
 
 ### Driving/Gameplay
 - [x] Tire grip by surface: less on snow, sand and grass than on asphalt. Each
@@ -230,6 +247,9 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   - Done (`NFS_SURFACE_GRIP`): gently, for the player only -- drag, softer
     steering, a little slip kept on loose ground, a light shake -- by the
     share of wheels on grass, sand/dirt/gravel, snow or mud.
+- [x] By default, make grip properties apply to opponents too (switch:
+  NFS_GRIP_ON_OPPONENTS=1 by default)
+  - Done: every car in the race feels the ground, their driving unchanged.
 - [ ] Nitro and nitro UI. However if you add nitro, opponents also need to know
   how to use it (e.g. to prevent them from staying inside the turn or blast it
   when they see enough straight road ahead, however they need to take crashes
@@ -252,6 +272,19 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   - Done: from 80 km/h every car's tail lights leave a trail of fading glow
     behind it, longer the faster (`NFS_TAILLIGHT_TRAILS`, 1); and a short
     streak under each lamp on the screen from 10 m/s (`NFS_LIGHT_TRAILS`, 1).
+- [ ] Rack of achievements: collect all kinds of achievements; e.g. reach
+  250/300/350 in each car (a long as it's below its top speed), do a lap of less than
+  XX:XX  in track Y, end up first after being behind last driver for n seconds,
+  n seconds of air time, not caught after XX:XX minutes of total hot pursuit
+  gameplay, 1st in track X with car Y, each A-class opponents with C class car
+  on normal/aggressive difficulty, not crash with walls/drivers for n seconds
+  while going over 100 kph, etc. Each can have a badge and classification. 
+  Other achievements you can think of too.
+- [ ] Flipping after ramps: often when cars drive over ramps of ground, they
+  jump high. But they turn two twist soo much sideways in the air, causing them
+  to often flip upside down and then having to reset the car. Twisting like that should be
+  much harder to happen - possibly set twisting effect via a switch. Jump up is
+  high but twisting sideways is annoying.
 
 ### Music/Sound
 - [x] Sound quality is great and sound works well but volume is still too
@@ -275,10 +308,18 @@ Obviously this effect depends on speed.
   car, etc.
 
 ### Performance
-- [ ] Races take quite long to load by defaul. Find out if you and reduce
+- [x] Races take quite long to load by defaul. Find out if you and reduce
   loading times by caching anything etc.
+  - Done (`NFS_FAST_LOAD`): the loading picture's flips were each held to the
+    frame rate; unpaced and mostly not drawn, Atlantica loads in about 0.3 s
+    here instead of 13.5.
 
 ### Infrastructure
 - [ ] Asset extractor (roads, signposts, buildings, etc) and re-injecter. Figure
   out a way to export assets and view/edit them in a tool, or add custom assets
-  and place them in locations in games.
+  and place them in locations in games. 3D model (such as for cops etc) extractor.
+- [ ]  Make a way to convert 3d models .obj files into game environment ones.
+- [x] Peformance curve and other stuff like transmission visualizer based on the data of each car model
+  - Done: `tools/car_perf.py report` (`tools/car_report.py`): a sheet per car
+    (torque/power, gearbox, push in each gear, acceleration, specs), every car
+    compared, and a CSV.
