@@ -51,7 +51,37 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-CARMODEL = Path("gamedata/carmodel")
+def _carmodel_root():
+    """The cars' folder: gamedata/carmodel where the tool is run, or else the
+    one under the repository this tool lives in -- so it runs from anywhere."""
+    here = Path("gamedata/carmodel")
+    if here.is_dir():
+        return here
+    return Path(__file__).resolve().parent.parent / "gamedata" / "carmodel"
+
+
+CARMODEL = _carmodel_root()
+
+
+def car_folders(root=None):
+    """Every car's folder under the cars' folder, as paths relative to it: the
+    racers, and the ones further down (traffic/0001, traffic/pursuit/0005) --
+    any folder holding a car.viv or a carp.txt, three levels deep at most."""
+    root = Path(root or CARMODEL)
+    found = []
+
+    def walk(folder, depth):
+        for entry in sorted(folder.iterdir(), key=lambda p: p.name.lower()):
+            if not entry.is_dir():
+                continue
+            if (entry / "car.viv").exists() or (entry / "carp.txt").exists():
+                found.append(entry.relative_to(root).as_posix())
+            elif depth < 3:
+                walk(entry, depth + 1)
+
+    if root.is_dir():
+        walk(root, 1)
+    return found
 
 # The labels the game parses, in file order, with what each one is for.  The
 # numbers are the "(n)" in the file; `short` is what --set accepts, and `unit`
@@ -605,6 +635,9 @@ def find_car(name, root=CARMODEL):
     if not root.is_dir():
         raise CarFileError("no %s here; run me from the repository root" % root)
     wanted = name.lower()
+    nested = root / name   # traffic/0001, as car_folders names them
+    if "/" in name and nested.is_dir() and ((nested / "car.viv").exists() or (nested / "carp.txt").exists()):
+        return Car(nested)
     for folder in sorted(root.iterdir()):
         if folder.is_dir() and folder.name.lower() == wanted and (folder / "carp.txt").exists():
             return Car(folder)
@@ -1430,8 +1463,16 @@ def main(argv=None):
     report.add_argument("cars", nargs="*", help="car folders (default: every car)")
     report.add_argument("--out", default="car_reports", help="the folder for the sheets (default: %(default)s)")
 
+    editor = sub.add_parser("edit", help="a window: every car, its charts, its specs to change and save")
+    editor.add_argument("car", nargs="?", help="the car to open on")
+
     args = parser.parse_args(argv)
     root = Path(args.root)
+    if args.command == "edit":
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import car_report
+        car_report.edit(str(root), args.car)
+        return 0
     if args.command == "report":
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         import car_report

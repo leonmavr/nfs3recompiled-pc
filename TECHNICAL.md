@@ -1132,6 +1132,39 @@ function that still has it behind it, `NFS_FE_NATIVE_OFF=sub_437e00,...` for
 the ones named; the log says which ran which way (`[FE]`). The screens that
 are native whole have none to go back to.
 
+### Binding letters to controls, and the brake on X
+
+The Controllers screen never took a letter: choosing Brake and pressing X left
+it waiting. The game reads the menus' keys from its own queue, and its
+`WM_KEYDOWN` handler (`sub_4cd020`, through `sub_4ccaa0`) queues only the
+arrows, the function keys and the keypad -- letters, digits and the rest it
+takes as `WM_CHAR`, which Windows' `TranslateMessage` makes and the port only
+made for control characters. A printable key now brings its `WM_CHAR` too
+(`src/lib/window.cpp`), except while typed text is on (a name being entered,
+where SDL's own text events bring it), so the capture (`sub_43cda0`: the
+character, and the scan code `sub_451960` left at `[0x66465c]`) takes letters
+as it did on Windows. And the keyboard brakes on X by default: the game's own
+default set (data in the code at `0x490430`, the brake its fourth dword) is
+patched from the down arrow (`0x5004`) to X (`0x58002d04`) at start; "Reset to
+Defaults" and a new settings file take it from there, a settings file already
+written keeps its own. `NFS_CONTROLS_TRACE=1` logs player one's race controls,
+the actions they made and the keys held, twice a second.
+
+### Cars roll less in the air
+
+Off a ramp the game keeps whatever spin a car took off with until it lands:
+the word at `+0x164` counts its ticks in the air, and the spin (`+0xe4`, in
+the world's axes, and `+0x4f8` in the car's own) is left alone. A car that
+left a ramp a little crooked rolled on through the jump and often landed on
+its roof. While a car is in the air its roll -- the spin about its forward
+axis (`+0xd8`), and the third of `+0x4f8` -- now dies away (`airRoll`,
+`native_surface.cpp`): three quarters of it in a quarter of a second. The
+jump's height, the pitch and the turning stay the game's; every car in the
+race. Tested with a throw (`NFS_AIR_TEST=1`: 5 s on the clock the player's
+car goes up 3 m, rolling): the game's own rolled it past its roof and round;
+damped it tips about 40 degrees and lands on its wheels.
+`NFS_AIR_ROLL_DAMP` (1; up to 3 for more, `0`/`off` for the game's).
+
 ### A race loads in a moment
 
 Most of a race's loading time was waiting: the game flips its loading picture
@@ -1479,6 +1512,44 @@ final drive, top speed, drive, brakes, grip, tyres). With several cars it
 adds `compare.png` (top speed, 0-100, 0-200 and power to weight, every car
 ranked) and `summary.csv`.
 
+`edit` (`python3 tools/car_perf.py edit [car]`, or `tools/car_report.py
+--edit`) opens a window: every car in a list on the left, a page at a time;
+its charts in the middle; and on the right its specs as boxes -- mass, the
+torque curve scaled, redline, idle, the forward gear ratios, the final drive,
+top speed and cap, front drive, brakes and their bias, grip, front grip and
+downforce. Change one and press Enter (or click elsewhere) and the charts and
+the worked-out figures follow at once; a car with changes is marked `*` in the
+list. Save writes the car through `car_perf.py` (car.viv and the loose
+carp.txt, the gearbox's rpm per m/s kept in step with the ratios and the final
+drive, the automatic gearbox's the same where they were the same); Cancel puts
+it back as it is on disk. The acceleration table is the game's own and does
+not follow these edits (`car_perf.py derive` rebuilds it). It needs a window
+for matplotlib (Tk or Qt).
+
+All of these find the cars on their own: `gamedata/carmodel` where they are run,
+or else the repository's (the folder above `tools/`), so they run from
+anywhere; and the list holds every car's folder under it -- the racers, and
+the traffic and police cars further down (`traffic/0001`,
+`traffic/pursuit/0005`; `car_perf.car_folders`).
+
+### Marking a car's exhausts
+
+`python3 tools/car_model.py exhausts [car]` (or `tools/car_exhausts.py`, or the
+editor's "Mark exhausts..." button) opens a window: the cars in a list on the
+left, the car's body seen from behind (its high level of detail, shaded), and
+small on the right from the side and from above with the marks on them. A left
+click on the body puts an exhaust there -- on its surface, the nearest point
+seen from behind -- and holding the button grows it; a left click on a mark
+grows it, a right click shrinks it while held; a middle click or `d` takes it
+away; `m` mirrors (on by default: a mark made, grown or shrunk on one side is
+on the other too); `s` or Save writes them, `r` or Revert goes back. They are
+kept in the car's folder as `exhausts.json`:
+
+    {"exhausts": [{"x": 0.45, "y": -0.32, "z": -1.98, "radius": 0.056}, ...]}
+
+in the model's own space (car.fce), metres: x to the car's right, y up, z
+forward. A car with no file has no exhausts -- what the flames will read.
+
 Three things are worth knowing before tuning:
 
 - **Acceleration comes from two different places.** The eight `AI ACC`
@@ -1714,6 +1785,7 @@ from the phone; the rest matter for a desktop run.
 | `NFS_WHEEL_SPRAY` | off (`0`) | `1`/`on`: the port's spray off a wet road instead of the game's; known bug: the weather's particles then show as small turned squares (Grass, and spray off a wet road). |
 | `NFS_SUN_GLARE` | on (`1`) | `0`/`off`: no glare from the sun. A number up to 3: how strong (Sun glare); by day with no weather only. |
 | `NFS_GRIP_ON_OPPONENTS` | on (`1`) | `0`/`off`: grip by terrain for the player's car only, not every car (Grip by terrain). |
+| `NFS_AIR_ROLL_DAMP` | on (`1`) | `0`/`off`: cars keep their roll in the air, as the game has it. A number up to 3: how fast it dies away (Cars roll less in the air). |
 | `NFS_FAST_LOAD` | on (`1`) | `0`/`off`: the loading picture's frames paced and all shown, as before (A race loads in a moment). |
 | `NFS_SURFACE_GRIP` | on (`1`) | `0`/`off`: every surface as the game has it. A number up to 3: how much the player's car feels grass, dirt, snow and mud (Grip by terrain). |
 | `NFS_TRAFFIC_WEIGHT` | `0.5` | How heavy the traffic is against the game's, 0.1 to 2; `0`/`off` for the game's (Traffic lighter). |

@@ -104,6 +104,10 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   Then you can work out the flames and light emission.
   Flames can also appear at the beginning of race when revving and torque is at
   the top 20% or 15% highest.
+  - Partly done: the marking tool (`tools/car_model.py exhausts`, or "Mark
+    exhausts..." in `car_perf.py edit`) keeps each car's exhausts -- place
+    and radius in the model -- as `exhausts.json` in its folder. The flames
+    themselves are still to do.
 
 ### Races/locations
 
@@ -218,6 +222,11 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 - [x] Traffic: for each traffic car, halve its weight. This way they don't
   complely slow you down when crashing.
   - Done: mass and inertia halved (`NFS_TRAFFIC_WEIGHT`, 0.5).
+- [ ] More persistent cops: currently they just chase you for a relatively short
+  amount of time, disappear, rinse and repeat. Each cop car should: chase their target for much
+  longer, disappear from maps if it has lost target, wait (cool down) for some
+  period (e.g. 10-15 sec) and respawn in a position pretty close to target to
+  chaseagain.
 
 ### UI
 - [ ] Figure out how to add/create menu elements without breaking the visual
@@ -232,9 +241,12 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 - [ ] Add difficulty slider instead of just normal and agressive (presets in
   slider will still be normal and agressive but we can slide in between to
   adjust opponent AI). You already have some slider asset in volume control.
-- [ ] Currently in 'Control' menu, setting a key for brake other than arrows
+- [x] Currently in 'Control' menu, setting a key for brake other than arrows
   doesn't work. Bind x key to brake by keyfault ('keyboard x')
-- [ ] Fix brake key binding.
+- [x] Fix brake key binding.
+  - Done: letters (and digits, punctuation) reach the Controllers screen as
+    on Windows (WM_CHAR), and X is the keyboard's default brake ("Reset to
+    Defaults" to get it in a settings file already written).
 
 ### Driving/Gameplay
 - [x] Tire grip by surface: less on snow, sand and grass than on asphalt. Each
@@ -262,6 +274,9 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   stars, checkflag flags, tribals)
 - [ ] Car visual customization; bodykits and spoiler and side vents, rims etc - these
   also change the performance/weight distribution/traction.
+- [ ] More immersive crashes: small vibration on crash with other drivers, even biger
+  vibration on wall. Vibration depends on speed.
+- [ ] More immersive crashes: different sounds, sound depending on crash speed. 
 - [x] Make speeding more immersive, i.e. gently pull camera back on pressing
   acceleration button up to some small distance , pull back in when releasing
   it.
@@ -280,11 +295,19 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   on normal/aggressive difficulty, not crash with walls/drivers for n seconds
   while going over 100 kph, etc. Each can have a badge and classification. 
   Other achievements you can think of too.
-- [ ] Flipping after ramps: often when cars drive over ramps of ground, they
+- [x] Flipping after ramps: often when cars drive over ramps of ground, they
   jump high. But they turn two twist soo much sideways in the air, causing them
   to often flip upside down and then having to reset the car. Twisting like that should be
   much harder to happen - possibly set twisting effect via a switch. Jump up is
   high but twisting sideways is annoying.
+  - Done (`NFS_AIR_ROLL_DAMP`): in the air a car's roll dies away, every car.
+- [ ] Slipstreaming: slipstreaming (driving behind another driver) should be
+  possible and emulate less air resistance, possibly by increasing acceleration
+  (?). While slipstremaing a flickering faded icon bottom left shows up and
+  showsthe slipstreaming time like XX.Y sec. Also add subtle visual cues, like
+  'air line' trails left and right on player's only car that follow the car's
+  path. Opponents can slip stream too and opponent AI knows it but it's not
+  their priority. If slipstreaming AI is a lot of effort, just skip it.
 
 ### Music/Sound
 - [x] Sound quality is great and sound works well but volume is still too
@@ -315,10 +338,11 @@ Obviously this effect depends on speed.
     here instead of 13.5.
 
 ### Infrastructure
-- [ ] Asset extractor (roads, signposts, buildings, etc) and re-injecter. Figure
+- [ ] Asset extractor (roads, signposts, lamps including emmission, buildings, etc) and re-injecter. Figure
   out a way to export assets and view/edit them in a tool, or add custom assets
   and place them in locations in games. 3D model (such as for cops etc) extractor.
-- [ ]  Make a way to convert 3d models .obj files into game environment ones.
+- [ ]  Make a way to convert 3d models .obj files into game environment ones OR 
+  directly proceduraly make models and insert them.
 - [x] Peformance curve and other stuff like transmission visualizer based on the data of each car model
   - Done: `tools/car_perf.py report` (`tools/car_report.py`): a sheet per car
     (torque/power, gearbox, push in each gear, acceleration, specs), every car

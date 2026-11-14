@@ -206,6 +206,60 @@ static void feelGround(win32::WinApplication* app, x86::reg32 car, int ticks, fl
     put(app, car + 0xe8, yaw);
 }
 
+/* Cars in the air roll less (NFS_AIR_ROLL_DAMP, 1; a number up to 3 for
+ * more, 0 or off for the game's).  Off a ramp the game lets a car keep
+ * whatever spin it took off with -- the word at +0x164 counts the ticks it has
+ * been in the air, and the spin (+0xe4, the world's axes) is left alone until
+ * it lands -- so a car that left a ramp a little crooked rolled on through
+ * the whole jump and often landed on its roof.  While it is in the air its
+ * roll -- the spin about its own forward axis (+0xd8), and the same in the
+ * car's own axes (the third of +0x4f8) -- now dies away, three
+ * quarters of it in a quarter of a second (faster with a bigger number): a
+ * test throw that rolled the car onto its roof and past now tips it about 40
+ * degrees and it lands on its wheels.  The height of the jump,
+ * the pitch and the turning are the game's.  Every car in the race. */
+static float airRollSetting()
+{
+    static const float value = [] {
+        const char* text = SDL_getenv("NFS_AIR_ROLL_DAMP");
+        if (!text || !*text || SDL_strcasecmp(text, "on") == 0)
+            return 1.0f;
+        if (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0)
+            return 0.0f;
+        const float parsed = float(SDL_atof(text));
+        return parsed > 0.0f ? SDL_min(parsed, 3.0f) : 1.0f;
+    }();
+    return value;
+}
+
+static void airRoll(win32::WinApplication* app, int ticks)
+{
+    const float setting = airRollSetting();
+    if (setting <= 0.0f || ticks <= 0)
+        return;
+    const float keep = std::exp(-6.0f * setting * float(ticks) / 64.0f);
+    const x86::reg32 count = SDL_min(word(app, 0x5efda0), x86::reg32(16));
+    for (x86::reg32 k = 0; k < count; ++k)
+    {
+        const x86::reg32 car = word(app, 0x5efc48 + 4 * k);
+        if (car < 0x5e1120 || car >= 0x5e1120 + 16 * 0x9ac || (car - 0x5e1120) % 0x9ac != 0)
+            continue;
+        if (app->getMemory<uint16_t>(car + 0x164) == 0)
+            continue;   // on the ground
+        float w[3], f[3];
+        for (int i = 0; i < 3; ++i)
+        {
+            w[i] = value(app, car + 0xe4 + 4 * x86::reg32(i));
+            f[i] = value(app, car + 0xd8 + 4 * x86::reg32(i));
+        }
+        const float roll = w[0] * f[0] + w[1] * f[1] + w[2] * f[2];
+        for (int i = 0; i < 3; ++i)
+            put(app, car + 0xe4 + 4 * x86::reg32(i), w[i] - f[i] * roll * (1.0f - keep));
+        // The same spin in the car's own axes (+0x4f8; its third, about forward), which the game turns it by too.
+        put(app, car + 0x500, value(app, car + 0x500) * keep);
+    }
+}
+
 void surfaceFrame(win32::WinApplication* app)
 {
     static x86::sreg32 last = -1;
@@ -216,6 +270,29 @@ void surfaceFrame(win32::WinApplication* app)
     const int ticks = last < 0 || clock < last || player != lastPlayer ? 0 : SDL_min(int(clock - last), 8);
     last = clock;
     lastPlayer = player;
+    if (player && SDL_getenv("NFS_AIR_TEST"))
+    {
+        /* Test only: 5 s on the clock the player's car is thrown up 3 m,
+         * rolling at 2 rad/s; its up axis is logged as it flies. */
+        static bool thrown = false;
+        if (clock < 64)
+            thrown = false;
+        if (!thrown && clock > 64 * 5)
+        {
+            thrown = true;
+            put(app, player + 0x9c, value(app, player + 0x9c) + 3.0f);
+            put(app, player + 0xa8, value(app, player + 0xa8) + 4.0f);
+            for (int k = 0; k < 3; ++k)
+                put(app, player + 0xe4 + 4 * x86::reg32(k), value(app, player + 0xd8 + 4 * x86::reg32(k)) * 2.0f);
+        }
+        if (ticks > 0 && clock / 8 != (clock - ticks) / 8)
+            SDL_Log("[AIR] t %d air %u up %.2f %.2f %.2f roll %.3f", clock, unsigned(app->getMemory<uint16_t>(player + 0x164)),
+                    value(app, player + 0xcc), value(app, player + 0xd0), value(app, player + 0xd4),
+                    value(app, player + 0xe4) * value(app, player + 0xd8) + value(app, player + 0xe8) * value(app, player + 0xdc)
+                        + value(app, player + 0xec) * value(app, player + 0xe0));
+    }
+    if (player)
+        airRoll(app, ticks);
     if (!player || ticks <= 0 || setting() <= 0.0f || app->getMemory<x86::reg32>(0x6fd3b0) == 1)
         return;
     static const int every = [] {

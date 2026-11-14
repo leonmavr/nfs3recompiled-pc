@@ -28,6 +28,7 @@ game's levels of detail.
     python3 tools/car_model.py export hgts --out /tmp
     python3 tools/car_model.py import mycar mycar.obj
     python3 tools/car_model.py swap hgts mycar --from diab
+    python3 tools/car_model.py exhausts [hgts]       # mark the exhausts (car_exhausts.py)
 
 `export` writes an .obj (and .mtl) to look at or edit in Blender; `import` is
 the other way and is the one that makes a car of your own -- see below; `swap`
@@ -76,7 +77,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from car_perf import CarFileError, bigf_entries, find_car, read_carp_text, replace_archive_entry
+from car_perf import CARMODEL, CarFileError, bigf_entries, find_car, read_carp_text, replace_archive_entry
 
 HEADER_SIZE = 0x1F04
 VERTEX_SIZE = 12
@@ -759,7 +760,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Inspect a car's model, export it as OBJ, build one from an OBJ, "
                     "or give a car a different body.")
-    parser.add_argument("--root", default="gamedata/carmodel")
+    parser.add_argument("--root", default=str(CARMODEL),
+                        help="the carmodel folder (default: the repository's, wherever this is run)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     info = sub.add_parser("info", help="the mesh, its parts, its paint")
@@ -807,7 +809,15 @@ def main(argv=None):
     swap.add_argument("--showcase", action="store_true", help="car00.tga too")
     swap.add_argument("--dry-run", action="store_true")
 
+    marks = sub.add_parser("exhausts", help="a window to mark where the car's exhausts are, "
+                                            "kept as exhausts.json in its folder")
+    marks.add_argument("car", nargs="?", help="the car to open on (default: the first)")
+
     args = parser.parse_args(argv)
+    if args.command == "exhausts":
+        import car_exhausts
+        car_exhausts.run(args.root, args.car)
+        return 0
     try:
         if args.command == "info":
             car = find_car(args.car, args.root)

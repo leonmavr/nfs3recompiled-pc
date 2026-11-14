@@ -458,6 +458,25 @@ x86::reg32 Window::getMessageImpl(const x86::CPU& cpu, MSG* result, Window *wind
                                 event2.user.data2 = reinterpret_cast<void*>(static_cast<intptr_t>(result->lParam));
                                 SDL_PushEvent(&event2);
                             }
+                            /* A printable key's character, as TranslateMessage
+                             * gives it on Windows: the game takes letters,
+                             * digits and the like only as WM_CHAR (its WM_KEYDOWN
+                             * handler, sub_4cd020, queues just the arrows and the
+                             * function keys), so without it the Controllers
+                             * screen never saw a letter pressed and a control
+                             * could only be bound to an arrow.  While typed text
+                             * is on (a name being entered) SDL's own
+                             * SDL_EVENT_TEXT_INPUT brings the character instead. */
+                            else if (sym >= 0x20 && sym < 0x7f
+                                     && !SDL_TextInputActive(SDL_GetWindowFromID(event.key.windowID)))
+                            {
+                                x86::reg32 character = x86::reg32(sym);
+                                if (character >= 'a' && character <= 'z' && (event.key.mod & SDL_KMOD_SHIFT))
+                                    character -= 0x20;
+                                event2.user.data1 = reinterpret_cast<void*>(static_cast<intptr_t>(character));
+                                event2.user.data2 = reinterpret_cast<void*>(static_cast<intptr_t>(result->lParam));
+                                SDL_PushEvent(&event2);
+                            }
                         }
 
                         if (sym >= SDLK_A && sym <= SDLK_Z)

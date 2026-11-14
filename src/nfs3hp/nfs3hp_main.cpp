@@ -2265,6 +2265,28 @@ void layoutTick(win32::WinApplication* app)
  * and picks the pause screen by (0x44d4fb). */
 void raceControlsTick(win32::WinApplication* app)
 {
+    /* NFS_CONTROLS_TRACE=1: twice a second, player one's race controls (the
+     * 12 at 0x79c340), the actions they made (0x79c338) and the keys held by
+     * scan code (0x564818) -- in the menus too. */
+    if (SDL_getenv("NFS_CONTROLS_TRACE"))
+    {
+        static Uint64 last = 0;
+        if (SDL_GetTicks() - last > 500)
+        {
+            last = SDL_GetTicks();
+            char line[512];
+            int n = 0;
+            for (x86::reg32 k = 0; k < 12; ++k)
+                n += SDL_snprintf(line + n, sizeof line - n, " %08x", x86::reg32(app->getMemory<x86::reg32>(0x79c340 + 4 * k)));
+            char keys[256];
+            int m = 0;
+            for (x86::reg32 k = 0; k < 0x80 && m < 200; ++k)
+                if (app->getMemory<x86::reg8>(0x564818 + k))
+                    m += SDL_snprintf(keys + m, sizeof keys - m, " %02x", k);
+            keys[m] = 0;
+            SDL_Log("[CTRLTRACE] slots%s | actions %08x | mode %u | keys%s", line, x86::reg32(app->getMemory<x86::reg32>(0x79c338)), x86::reg32(app->getMemory<x86::reg32>(0x7f7488)), keys);
+        }
+    }
     static int s_last = -1;
     if (!nfs3hp::raceIsRunning())
     {
@@ -3049,6 +3071,11 @@ static bool settingsPath(const std::string& root, std::string& path)
  * character << 24; an axis's low byte is 1.  The arrows' scan codes are their
  * Win32 virtual-key codes' -- 0x4D right, 0x4B left, 0x48 up, 0x50 down -- as
  * ControlProfile.java writes them. */
+/* The keyboard's brake by default: X (character 'X' << 24, scan code 0x2d << 8,
+ * a key's 4), as the game's own defaults have it once patched
+ * (keyboardBrakeOnX). */
+constexpr x86::reg32 kBrakeX = 0x58002d04;
+
 static void keyboardDrivingIfNoPad(const std::string& root)
 {
     int pads = 0;
@@ -3071,8 +3098,8 @@ static void keyboardDrivingIfNoPad(const std::string& root)
     }
 
     struct { x86::reg32 offset, steerRight, steerLeft, accelerate, brake; } tables[] = {
-        { 0x16CC, 0x4D04, 0x4B04, 0x4804, 0x5004 },  // one player
-        { 0x1700, 0x4D04, 0x4B04, 0x4804, 0x5004 },  // split screen, first player
+        { 0x16CC, 0x4D04, 0x4B04, 0x4804, kBrakeX },  // one player
+        { 0x1700, 0x4D04, 0x4B04, 0x4804, kBrakeX },  // split screen, first player
     };
     auto* bytes = static_cast<unsigned char*>(loaded);
     bool changed = false;
@@ -3110,6 +3137,16 @@ static void keyboardDrivingIfNoPad(const std::string& root)
  * read text 0 of the language's -- the game's own "BAD TEXT INDEX 0" line --
  * and the car lists scrolled through nothing.  Those pointers are data, out of
  * the reach of the code patches, so they are repointed here. */
+/* The keyboard brakes on X by default: the game's defaults (the one player's
+ * set at 0x490430, data in the code; the brake its fourth dword) had the down
+ * arrow.  "Reset to Defaults" on the Controllers screen and a new settings
+ * file take it from there; a settings file already written keeps its own. */
+static void keyboardBrakeOnX(win32::WinApplication& app)
+{
+    if (app.getMemory<x86::reg32>(0x490430 + 12) == 0x5004)
+        app.getMemory<x86::reg32>(0x490430 + 12) = 0x58002d04;
+}
+
 static void patchCarListDescriptors(win32::WinApplication& app)
 {
     const x86::reg32 lists[] = { 0x5564ac, 0x5564c0, 0x5564d4, 0x5564e8, 0x5564fc };
@@ -3244,6 +3281,7 @@ int main(int argc, char* argv[])
         app.addRegistryKey(win32::HKEY_LOCAL_MACHINE, "SOFTWARE\\Electronic Arts\\Need For Speed III", "Hardware Acceleration", new win32::RegistryValue(x86::reg32(1)));
 
         patchCarListDescriptors(app);
+        keyboardBrakeOnX(app);
 
         /* Car detail is chosen by distance alone -- there is no per-car role
          * anywhere in the selection.  The table at 0x55fdf4 holds four floats
