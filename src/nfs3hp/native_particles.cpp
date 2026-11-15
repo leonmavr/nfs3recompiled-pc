@@ -423,13 +423,109 @@ bool particleTakeOver(win32::WinApplication* app, x86::CPU& cpu)
 /* Each frame, the main view's (view: its camera at +0x38, matrix at +0x44, as
  * sub_492370 turns a point into it; the projection at [0x56009c..a8]). */
 void pursuitFrame(win32::WinApplication* app, std::vector<std::array<float, 3>>& teeth);  // native_pursuit.cpp
+float slipstreamOf(win32::WinApplication* app, x86::reg32 car);                           // native_surface.cpp
+
+namespace
+{
+
+/* The air trails round the player's car while it slipstreams
+ * (NFS_SLIPSTREAM_TRAILS, on; 0 or off for none), drawn as the air lines of a
+ * cartoon: a few thin white strands beside it, three a side and three behind
+ * it, each at its own place -- a little further out, higher or lower, shorter
+ * or longer -- following the way the car went, narrow at their front and wider
+ * towards their tail, fading as they go.  Each lives 0.6 to 1.3 s: it comes up
+ * quickly, fades out briefly, and a new one starts near its place, a little
+ * off it.  As strong as the slipstream.  Their places are the car's own
+ * (right, up, forward, metres from its centre); where each was, every frame. */
+struct TrailPoint
+{
+    float p[3];
+    float strength;
+    x86::sreg32 clock;
+};
+struct Strand
+{
+    float right, up, forward;   // its place now, by the car
+    float width;                // metres at its widest
+    x86::sreg32 born = -1, life = 0;
+    std::vector<TrailPoint> points;
+};
+struct Slot
+{
+    float right, up, forward, width;
+};
+// Three a side, out from the body and staggered; three behind, wider.
+constexpr Slot kSlots[] = {
+    { -1.02f, 0.05f, 0.4f, 0.022f }, { -1.12f, 0.32f, -0.4f, 0.018f }, { -1.25f, -0.12f, -1.0f, 0.026f },
+    { 1.02f, 0.05f, 0.4f, 0.022f },  { 1.12f, 0.32f, -0.4f, 0.018f },  { 1.25f, -0.12f, -1.0f, 0.026f },
+    { -0.55f, 0.28f, -2.2f, 0.034f }, { 0.08f, 0.45f, -2.3f, 0.04f },  { 0.6f, 0.2f, -2.2f, 0.034f },
+};
+constexpr int kStrands = int(sizeof kSlots / sizeof kSlots[0]);
+Strand s_strands[kStrands];
+constexpr x86::sreg32 kTrailTicks = 18;   // how long a point of a strand stays: 0.36 s
+
+bool trailsOn()
+{
+    static const bool on = [] {
+        const char* text = SDL_getenv("NFS_SLIPSTREAM_TRAILS");
+        return !(text && (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0));
+    }();
+    return on;
+}
+
+void noteTrail(win32::WinApplication* app, x86::sreg32 clock)
+{
+    const x86::reg32 car = app->getMemory<x86::reg32>(0x5efa48);
+    const float strength = car ? slipstreamOf(app, car) : 0.0f;
+    auto f = [app](x86::reg32 address) { return float(app->getMemory<float>(address)); };
+    for (int n = 0; n < kStrands; ++n)
+    {
+        Strand& strand = s_strands[n];
+        auto& points = strand.points;
+        while (!points.empty() && (clock - points.front().clock > kTrailTicks || clock < points.front().clock))
+            points.erase(points.begin());
+        if (clock < strand.born)
+            strand.born = -1;   // a new race
+        const bool alive = strand.born >= 0 && clock - strand.born < strand.life;
+        if (!alive)
+        {
+            if (strength < 0.05f || !car || !points.empty())
+                continue;   // a new one only once the last has gone
+            // A new one, near its place, a little off it; staggered so they do not come and go together.
+            const Slot& slot = kSlots[n];
+            strand.right = slot.right + randomRange(-0.18f, 0.18f) * (slot.right < 0.0f ? -1.0f : 1.0f);
+            strand.up = slot.up + randomRange(-0.1f, 0.1f);
+            strand.forward = slot.forward + randomRange(-0.35f, 0.35f);
+            strand.width = slot.width * randomRange(0.75f, 1.25f);
+            strand.life = x86::sreg32(randomRange(38.0f, 84.0f));
+            strand.born = clock - x86::sreg32(random01() * 6.0f);
+        }
+        if (!car || (!points.empty() && points.back().clock == clock))
+            continue;
+        TrailPoint t{};
+        t.clock = clock;
+        for (int i = 0; i < 3; ++i)
+        {
+            const x86::reg32 k = 4 * x86::reg32(i);
+            t.p[i] = f(car + 0x98 + k) + f(car + 0xc0 + k) * strand.right + f(car + 0xcc + k) * strand.up
+                     + f(car + 0xd8 + k) * strand.forward;
+        }
+        // Its life: up in the first sixth, down in the last quarter.
+        const float lived = float(clock - strand.born) / float(SDL_max(strand.life, x86::sreg32(1)));
+        t.strength = strength * SDL_min(1.0f, lived * 6.0f) * SDL_min(1.0f, (1.0f - lived) * 4.0f);
+        points.push_back(t);
+    }
+}
+
+}  // namespace
 
 void particlesFrame(win32::WinApplication* app, x86::reg32 view)
 {
     // Hot Pursuit's spike strips, their spikes drawn with the particles.
     std::vector<std::array<float, 3>> teeth;
     pursuitFrame(app, teeth);
-    if (setting() <= 0.0f && teeth.empty())
+    const bool trails = trailsOn() && app->getMemory<x86::reg32>(0x6fd3b0) != 1;
+    if (setting() <= 0.0f && teeth.empty() && !trails)
         return;
     auto f = [app](x86::reg32 address) { return app->getMemory<float>(address); };
     const x86::sreg32 clock = x86::sreg32(app->getMemory<x86::reg32>(0x7d3684));
@@ -439,6 +535,8 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
         s_particles.clear();
     const float dt = float(clock - s_clock) / 64.0f;
     s_clock = clock;
+    if (trails)
+        noteTrail(app, clock);
     if (dt > 0.0f)
     {
         move(dt);
@@ -542,6 +640,35 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
         e.type = float(EffectParticle::Spike);
         e.tx = e.ty = -1.0f;
         out.push_back(e);
+    }
+    /* The air trails: each strand's pieces between two frames' points a thin
+     * streak, narrow at its newest end and wider towards its oldest, fading
+     * with its age and its life. */
+    for (int n = 0; trails && n < kStrands; ++n)
+    {
+        const Strand& strand = s_strands[n];
+        const auto& points = strand.points;
+        for (std::size_t k = 1; k < points.size(); ++k)
+        {
+            const TrailPoint& a = points[k - 1];
+            const TrailPoint& b = points[k];
+            const float age = float(clock - b.clock) / float(kTrailTicks);
+            const float alpha = 0.6f * SDL_min(a.strength, b.strength) * (1.0f - age) * (1.0f - 0.5f * age);
+            if (alpha < 0.01f || b.clock - a.clock > 20)
+                continue;
+            EffectParticle e{};
+            float za = 0.0f, zb = 0.0f;
+            if (!project(b.p, e.x, e.y, zb) || !project(a.p, e.tx, e.ty, za) || SDL_min(za, zb) < 1.5f)
+                continue;
+            e.depth = SDL_min(za, zb);
+            constexpr float thick_overall = 2.0, thick_head = 0.3, thick_tail = 1.4;
+            e.size = SDL_max(0.6f, scale * strand.width * 
+                             thick_overall * (thick_head + thick_tail * age) / e.depth);
+            e.r = e.g = e.b = 1.0f;
+            e.a = alpha * smoothStep(1.5f, 3.0f, e.depth);
+            e.type = float(EffectParticle::Streak);
+            sparks.push_back(e);
+        }
     }
     std::sort(out.begin(), out.end(), [](const EffectParticle& a, const EffectParticle& b) { return a.depth > b.depth; });
     out.insert(out.end(), sparks.begin(), sparks.end());

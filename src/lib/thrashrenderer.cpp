@@ -1233,6 +1233,10 @@ static const char g_particleShader[] =
 "    float room = zBehind - z;"
 "    if (room < (type == 4 ? -0.4 : -0.05)) discard;"
 "    float r = length(v_uv);"
+"    if (type == 5) {"   /* a piece of an air trail: thin, even, soft at its sides */
+"        o_color = vec4(v_color.rgb, exp(-v_uv.y * v_uv.y * 4.0) * v_color.a);"
+"        return;"
+"    }"
 "    if (type == 2) {"
 "        float across = exp(-v_uv.y * v_uv.y * 5.0);"
 "        float along = clamp(v_uv.x * 0.5 + 0.5, 0.0, 1.0);"
@@ -1491,7 +1495,7 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
     for (const EffectParticle& p : list)
     {
         float ax, ay, bx, by;   // the quad's two axes, half its length and width
-        if (p.type == EffectParticle::Spark)
+        if (p.type == EffectParticle::Spark || p.type == EffectParticle::Streak)
         {
             float dx = p.x - p.tx, dy = p.y - p.ty;
             float length = std::sqrt(dx * dx + dy * dy);
@@ -1515,9 +1519,10 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
             by = p.size;
             ++blended;
         }
-        const float cx = p.type == EffectParticle::Spark ? 0.5f * (p.x + p.tx) : p.x;
-        const float cy = p.type == EffectParticle::Spark ? 0.5f * (p.y + p.ty) : p.y;
-        const float fromX = p.type == EffectParticle::Spark ? -1.0f : p.tx;
+        const bool streak = p.type == EffectParticle::Spark || p.type == EffectParticle::Streak;
+        const float cx = streak ? 0.5f * (p.x + p.tx) : p.x;
+        const float cy = streak ? 0.5f * (p.y + p.ty) : p.y;
+        const float fromX = streak ? -1.0f : p.tx;
         auto corner = [&](float s, float t) {
             corners.push_back({ cx + ax * s + bx * t, cy + ay * s + by * t, s, t, p.r, p.g, p.b, p.a, fromX, p.ty,
                                 p.depth, p.seed, p.type, p.turn });

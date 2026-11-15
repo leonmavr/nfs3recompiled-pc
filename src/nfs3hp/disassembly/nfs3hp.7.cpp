@@ -599,10 +599,22 @@ L_0x0042ca34:
     cpu.eax = app->getMemory<x86::reg32>(cpu.edx + x86::reg32(20) /* 0x14 */);
 L_0x0042ca40:
     // 0042ca40  e86bc80000             -call 0x4392b0
-    cpu.esp -= 4;
-    sub_4392b0(app, cpu.sync());
-    cpu.reload();
-    if (cpu.terminate) return;
+    /* PORT: a traffic body's folder (carmodel/traffic/<name>): its id, 50 to
+     * 0x1f3, named from the game's own table at 0x55cfb0 rather than by
+     * sub_4392b0, which looks the number up as a place in the car list first
+     * and, with more than fifty cars, finds a player car there
+     * (traffic/pmf1/car.viv, an open that stops the game). */
+    if (cpu.eax >= 0x32 && cpu.eax <= 0x1f3)
+    {
+        cpu.eax = app->getMemory<x86::reg32>(x86::reg32(0x55cfb0) + cpu.eax * 4);
+    }
+    else
+    {
+        cpu.esp -= 4;
+        sub_4392b0(app, cpu.sync());
+        cpu.reload();
+        if (cpu.terminate) return;
+    }
     // 0042ca45  50                     -push eax
     app->getMemory<x86::reg32>(cpu.esp-4) = cpu.eax;
     cpu.esp -= 4;

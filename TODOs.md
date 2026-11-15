@@ -308,6 +308,18 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   'air line' trails left and right on player's only car that follow the car's
   path. Opponents can slip stream too and opponent AI knows it but it's not
   their priority. If slipstreaming AI is a lot of effort, just skip it.
+  - Partly done (`NFS_SLIPSTREAM`, `NFS_SLIPSTREAM_TRAILS`): the push behind
+    another car, for every car, and the air trails beside the player's car.
+    Still to do: the icon with the slipstream's time.
+- [ ] More car visual feedback based on actions; e.g. Slight body roll during cornering.
+      Front-end compression under hard braking.
+      Rear-end compression during acceleration.
+      Suspension compression when landing after a jump.
+      Small vertical movements when driving over uneven terrain.
+      Different suspension responses depending on the vehicle. No need to re-do the
+      physics here, just tilt, or vibrate the body kit slightly based on motion.
+- [ ] Trees and lamp posts shouldn't be immovable; they should be able to be
+  destroyed the same way signposts get destroyed and respawn after 10 sec.
 
 ### Music/Sound
 - [x] Sound quality is great and sound works well but volume is still too

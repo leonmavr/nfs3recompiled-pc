@@ -260,6 +260,116 @@ static void airRoll(win32::WinApplication* app, int ticks)
     }
 }
 
+/* Slipstreaming (NFS_SLIPSTREAM, 1; a number up to 3 for more, 0 or off for
+ * none): a car close behind another meets less air.  Each tick, for every car
+ * of the race over 80 km/h, the nearest car ahead of it -- 3 to 37.5 m along
+ * its way, within 1.6 m to either side, heading the same way (their forward
+ * axes within 25 degrees) and itself over 80 km/h -- gives it a push forward:
+ * 0.5 m/s2 at 200 km/h when right behind, as the square of the speed and less
+ * the further back and the further aside, which is about 5% more top speed
+ * tucked in.  Every car, the opponents, cops and traffic too; the AI is not
+ * told to look for one.  How strongly each car is in one, 0 to 1, is kept for
+ * the air trails beside the player's car (native_particles.cpp). */
+static float slipSetting()
+{
+    static const float value = [] {
+        const char* text = SDL_getenv("NFS_SLIPSTREAM");
+        if (!text || !*text || SDL_strcasecmp(text, "on") == 0)
+            return 1.0f;
+        if (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0)
+            return 0.0f;
+        const float parsed = float(SDL_atof(text));
+        return parsed > 0.0f ? SDL_min(parsed, 3.0f) : 1.0f;
+    }();
+    return value;
+}
+
+static float s_slip[16] = {};   // each car slot's slipstream, 0 to 1
+
+float slipstreamOf(win32::WinApplication* app, x86::reg32 car)
+{
+    (void)app;
+    if (car < 0x5e1120 || car >= 0x5e1120 + 16 * 0x9ac || (car - 0x5e1120) % 0x9ac != 0)
+        return 0.0f;
+    return s_slip[(car - 0x5e1120) / 0x9ac];
+}
+
+static float speedOf(win32::WinApplication* app, x86::reg32 car)
+{
+    // Out of its velocity: +0xb8 is kept up only for the cars the player drives.
+    const float v[3] = { value(app, car + 0xa4), value(app, car + 0xa8), value(app, car + 0xac) };
+    return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+}
+
+static void slipstream(win32::WinApplication* app, int ticks)
+{
+    const float setting = slipSetting();
+    if (ticks <= 0)
+        return;
+    const x86::reg32 count = SDL_min(word(app, 0x5efda0), x86::reg32(16));
+    x86::reg32 cars[16];
+    x86::reg32 n = 0;
+    for (x86::reg32 k = 0; k < count; ++k)
+    {
+        const x86::reg32 car = word(app, 0x5efc48 + 4 * k);
+        if (car >= 0x5e1120 && car < 0x5e1120 + 16 * 0x9ac && (car - 0x5e1120) % 0x9ac == 0)
+            cars[n++] = car;
+    }
+    const float dt = float(ticks) / 64.0f;
+    static const float minKmh = SDL_getenv("NFS_SLIP_TEST") ? 10.0f : 80.0f;   // test only: from 10 km/h
+    const float minSpeed = minKmh / 3.6f;
+    for (x86::reg32 i = 0; i < n; ++i)
+    {
+        const x86::reg32 car = cars[i];
+        float& slip = s_slip[(car - 0x5e1120) / 0x9ac];
+        const float speed = speedOf(app, car);
+        float best = 0.0f;
+        if (setting > 0.0f && speed > minSpeed && app->getMemory<uint16_t>(car + 0x164) == 0)
+        {
+            const float p[3] = { value(app, car + 0x98), value(app, car + 0x9c), value(app, car + 0xa0) };
+            const float f[3] = { value(app, car + 0xd8), value(app, car + 0xdc), value(app, car + 0xe0) };
+            const float r[3] = { value(app, car + 0xc0), value(app, car + 0xc4), value(app, car + 0xc8) };
+            for (x86::reg32 j = 0; j < n; ++j)
+            {
+                const x86::reg32 other = cars[j];
+                if (other == car || speedOf(app, other) < minSpeed)
+                    continue;
+                const float d[3] = { value(app, other + 0x98) - p[0], value(app, other + 0x9c) - p[1],
+                                     value(app, other + 0xa0) - p[2] };
+                const float along = d[0] * f[0] + d[1] * f[1] + d[2] * f[2];
+                const float aside = std::fabs(d[0] * r[0] + d[1] * r[1] + d[2] * r[2]);
+                const float facing = f[0] * value(app, other + 0xd8) + f[1] * value(app, other + 0xdc)
+                                     + f[2] * value(app, other + 0xe0);
+                if (along < 3.0f || along > 37.5f || aside > 1.6f || facing < 0.9f || std::fabs(d[1]) > 3.0f)
+                    continue;
+                const float close = 1.0f - smoothStep(3.0f, 37.5f, along);
+                const float centred = 1.0f - smoothStep(0.6f, 1.6f, aside);
+                best = SDL_max(best, close * centred);
+            }
+        }
+        // Test only (NFS_SLIP_TEST): the player's car always in one, from 10 km/h.
+        if (SDL_getenv("NFS_SLIP_TEST") && car == word(app, 0x5efa48) && speed > minSpeed)
+            best = 1.0f;
+        // Eased in and out, a quarter of a second, so the push and the trails do not flicker.
+        slip += (best - slip) * SDL_min(1.0f, dt * 4.0f);
+        if (SDL_getenv("NFS_SLIP_TRACE") && car == word(app, 0x5efa48))
+        {
+            static x86::sreg32 last = -1;
+            const x86::sreg32 clock = x86::sreg32(word(app, 0x7d3684));
+            if (clock / 16 != last / 16)
+                SDL_Log("[SLIP] t %d speed %.1f behind %.2f slip %.2f", clock, speed, best, slip);
+            last = clock;
+        }
+        if (slip < 1e-3f || setting <= 0.0f)
+            continue;
+        const float pace = speed / (200.0f / 3.6f);
+        const float push = 0.5f * setting * slip * pace * pace * dt;   // m/s this tick
+        const float f[3] = { value(app, car + 0xd8), value(app, car + 0xdc), value(app, car + 0xe0) };
+        for (int k = 0; k < 3; k += 2)
+            put(app, car + 0xa4 + 4 * x86::reg32(k), value(app, car + 0xa4 + 4 * x86::reg32(k)) + f[k] * push);
+    }
+}
+
 void surfaceFrame(win32::WinApplication* app)
 {
     static x86::sreg32 last = -1;
@@ -292,7 +402,10 @@ void surfaceFrame(win32::WinApplication* app)
                         + value(app, player + 0xec) * value(app, player + 0xe0));
     }
     if (player)
+    {
         airRoll(app, ticks);
+        slipstream(app, ticks);
+    }
     if (!player || ticks <= 0 || setting() <= 0.0f || app->getMemory<x86::reg32>(0x6fd3b0) == 1)
         return;
     static const int every = [] {

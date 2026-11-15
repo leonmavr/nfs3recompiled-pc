@@ -1150,6 +1150,33 @@ Defaults" and a new settings file take it from there, a settings file already
 written keeps its own. `NFS_CONTROLS_TRACE=1` logs player one's race controls,
 the actions they made and the keys held, twice a second.
 
+### Slipstreaming
+
+A car close behind another meets less air (`slipstream`, `native_surface.cpp`).
+Each tick, for every car of the race over 80 km/h, the nearest car ahead of
+it -- 3 to 37.5 m along its way, within 1.6 m to either side, heading the same
+way (forward axes within 25 degrees) and itself over 80 km/h -- gives it a push
+forward: 0.5 m/s2 at 200 km/h when right behind, growing as the square of the
+speed, less the further back and the further aside -- about 5% more top speed
+tucked in. Eased in and out over a quarter of a second. Every car, the
+opponents, cops and traffic too; the AI is not told to look for one. The
+speed is the velocity's (`+0xa4`): `+0xb8` is kept up only for the player's
+car. `NFS_SLIPSTREAM` (1; up to 3 for more, `0`/`off` for none).
+
+Round the player's car, while it slipstreams, air lines like a cartoon's
+(`noteTrail`, `native_particles.cpp`; `NFS_SLIPSTREAM_TRAILS`, on): nine thin
+white strands, three a side just outside its body and three behind it, wider.
+Each has its own place (`kSlots`: metres right, up and forward of the car's
+centre, and a width), so they do not overlap; where it was each frame is
+joined up as streaks (`EffectParticle::Streak`, drawn added like the sparks)
+that follow the way the car went, narrow at the newest end and up to 4-5
+times wider at the oldest, fading within 0.36 s. Each strand lives
+0.6 to 1.3 s, fades in over its first sixth and out over its last quarter;
+once its last point has gone a new one starts at its place, a little off it
+(up to 18 cm aside, 10 cm up or down, 35 cm along) and 25% wider or narrower.
+At most three quarters opaque, times the slipstream. `NFS_SLIP_TEST=1` puts the player's car
+in a slipstream all the time from 10 km/h, and `NFS_SLIP_TRACE=1` logs it.
+
 ### Cars roll less in the air
 
 Off a ramp the game keeps whatever spin a car took off with until it lands:
@@ -1459,7 +1486,12 @@ falling back to that table when `sub_439a50` has nothing at that index. Below
 fifty cars there is never anything there; past it there is, so the race asks
 for `carmodel/traffic/<a player car>/car.viv`, which does not exist. The open
 fails, the log says so, and the race carries on without that body — it is not
-a crash. Fixing it means letting `sub_439a50` answer by id — the record's own
+a crash -- except where the game opens the body itself, sub_42c960's
+`openhandlea`, which stops it with "OPEN FAILED ON
+gamedata\carmodel\traffic\pmf1\car.viv" (Hot Pursuit with the Blitz R348,
+52 cars). That one call (0x42ca40) now names an id from 50 to 0x1f3 straight
+from `0x55cfb0` (`nfs3hp.7.cpp`, marked PORT). A player car past the fiftieth
+place still goes down the traffic folder's path. The whole fix means letting `sub_439a50` answer by id — the record's own
 id byte at `+0x31c` — instead of by place, so a place and an id stop meaning
 the same number, and that is the next piece of work here.
 
@@ -1785,6 +1817,8 @@ from the phone; the rest matter for a desktop run.
 | `NFS_WHEEL_SPRAY` | off (`0`) | `1`/`on`: the port's spray off a wet road instead of the game's; known bug: the weather's particles then show as small turned squares (Grass, and spray off a wet road). |
 | `NFS_SUN_GLARE` | on (`1`) | `0`/`off`: no glare from the sun. A number up to 3: how strong (Sun glare); by day with no weather only. |
 | `NFS_GRIP_ON_OPPONENTS` | on (`1`) | `0`/`off`: grip by terrain for the player's car only, not every car (Grip by terrain). |
+| `NFS_SLIPSTREAM` | on (`1`) | `0`/`off`: no slipstream. A number up to 3: how strong the push behind another car (Slipstreaming). |
+| `NFS_SLIPSTREAM_TRAILS` | on (`1`) | `0`/`off`: no air lines round the player's car in a slipstream (Slipstreaming). |
 | `NFS_AIR_ROLL_DAMP` | on (`1`) | `0`/`off`: cars keep their roll in the air, as the game has it. A number up to 3: how fast it dies away (Cars roll less in the air). |
 | `NFS_FAST_LOAD` | on (`1`) | `0`/`off`: the loading picture's frames paced and all shown, as before (A race loads in a moment). |
 | `NFS_SURFACE_GRIP` | on (`1`) | `0`/`off`: every surface as the game has it. A number up to 3: how much the player's car feels grass, dirt, snow and mud (Grip by terrain). |

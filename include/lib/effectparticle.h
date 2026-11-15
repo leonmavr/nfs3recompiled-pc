@@ -6,7 +6,8 @@
  * before its whole-picture pass (ThrashRenderer::drawParticles). */
 struct EffectParticle
 {
-    enum Type { Grain = 0, Puff = 1, Spark = 2, Blade = 3, Spike = 4 };   // Blade: off grass; Spike: a strip's
+    // Blade: off grass; Spike: a strip's; Streak: a piece of the air trail beside a slipstreaming car
+    enum Type { Grain = 0, Puff = 1, Spark = 2, Blade = 3, Spike = 4, Streak = 5 };
     float x, y;         // the centre, in the picture's pixels
     float tx, ty;       // a spark: where it was a moment ago; else where it was thrown from
     float depth;        // its distance in the view, as the depth buffer has it (z)
