@@ -51,6 +51,10 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     lights, strongest at grazing angles, the HUD kept out (`NFS_WET_ROADS`).
   - [ ] Next: splashes/ripples where rain hits puddles; drier line where cars
     drive; wet look on the cars' paint.
+  - [ ] Rain puddles in scattered placed on the road in rainy weather
+    (randomlized size and location) - shouldn't have any grip effect, just
+    splash more water particles and more dense water particles than normal,
+    higher than normal ones (2x higher), depending on speed.
 - [ ] Add natural shadows given a light position, both for cars and environment.
   - Partly done: each car's shadow is stretched away from the track's sun,
     turning as the car turns, and its edges are soft (`NFS_SHADOW_STRETCH`,
@@ -318,8 +322,14 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
       Small vertical movements when driving over uneven terrain.
       Different suspension responses depending on the vehicle. No need to re-do the
       physics here, just tilt, or vibrate the body kit slightly based on motion.
-- [ ] Trees and lamp posts shouldn't be immovable; they should be able to be
+- [x] Trees and lamp posts shouldn't be immovable; they should be able to be
   destroyed the same way signposts get destroyed and respawn after 10 sec.
+  - Done: knocked down like the signs, falling slower, slowing the car by
+    their mass, standing again after 10 s (`NFS_KNOCK_TREES`,
+    `NFS_TREE_MASS`, `NFS_LAMP_MASS`, `NFS_KNOCK_RESPAWN`). Which objects are
+    trees and lamp posts is guessed from their models' size.
+- [ ] More paint types; iridescent, glossy, chrome, matte. However when
+  selecting paint > custom, you will need a UI arrow and list to choose it.
 
 ### Music/Sound
 - [x] Sound quality is great and sound works well but volume is still too

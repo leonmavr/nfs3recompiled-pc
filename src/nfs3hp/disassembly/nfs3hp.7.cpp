@@ -3,6 +3,9 @@
 
 namespace nfs3hp
 {
+// Port (tools/apply_object_knock.py): defined in native_objects.cpp.
+void objectHitBefore(win32::WinApplication* app, x86::reg32 car, x86::reg32 index);
+void objectHitAfter(win32::WinApplication* app, x86::reg32 answer);
 
 /* align: skip 0x8d 0x80 0x00 0x00 0x00 0x00 0x8d 0x54 0x22 0x00 */
 void Application::sub_42c7f0(WinApplication* __restrict app, x86::CPU& cpu_)
@@ -17069,9 +17072,11 @@ L_0x00430eac:
     // 00430eff  8b45f0                 -mov eax, dword ptr [ebp - 0x10]
     cpu.eax = app->getMemory<x86::reg32>(cpu.ebp + x86::reg32(-16) /* -0x10 */);
     // 00430f02  e849c4feff             -call 0x41d350
+    objectHitBefore(app, cpu.eax, cpu.edx); /* port: trees and lamp posts knocked down (tools/apply_object_knock.py) */
     cpu.esp -= 4;
     sub_41d350(app, cpu.sync());
     cpu.reload();
+    objectHitAfter(app, cpu.eax); /* port (tools/apply_object_knock.py) */
     if (cpu.terminate) return;
     // 00430f07  d945b4                 -fld dword ptr [ebp - 0x4c]
     {  // x87 stack in locals (codegen/fpu_stack.py)

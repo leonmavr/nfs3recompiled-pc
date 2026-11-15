@@ -1177,6 +1177,40 @@ once its last point has gone a new one starts at its place, a little off it
 At most three quarters opaque, times the slipstream. `NFS_SLIP_TEST=1` puts the player's car
 in a slipstream all the time from 10 km/h, and `NFS_SLIP_TRACE=1` logs it.
 
+### Trees and lamp posts knocked down
+
+How the game knocks a sign down: a car touching one of the track's objects
+(`sub_430da0`) asks `sub_41d350(car, index)` what to do. The index is the
+object's REFXOBJ record in its block (`[[car+0xc]+0x5a4]`, 20 bytes each: its
+global number at `+0xe`, its kind at `+0x13`), and each global number has
+three bytes at `0x5dd230`: `0xff` standing, `0xfe` lying (the way it fell, its
+yaw), anything else the slot of the animation it is flying through (24 bytes
+from `0x56f234`: the animation, its start on the race clock, flags). Kind 2
+is a sign: standing and hit at 11 m/s (|vx| + |vz|; a cop at any speed) it is
+given a keyframed fall -- the slow one below 25 m/s, the fast one above -- and
+the answer is -1, nothing to bounce off. Kind 1, everything else solid, trees
+and lamp posts among it, answers 1: the car bounces off. A sign stands again
+only at the next race (`sub_41de40`).
+
+Now (`native_objects.cpp`, called round that call at `0x430f02` by
+`tools/apply_object_knock.py`; `NFS_KNOCK_TREES`, on) a kind-1 object whose
+model -- its XOBJ, type 4, crossno = index, in one of its block's lists at
+`+0x564` -- is a lamp post (4 m or taller, within 0.6 m of its foot) or a tree
+(2.5 to 25 m, within 10 m, at most 8 vertices: one billboard or two crossed --
+Redrock's and Hometown's trees, Atlantica's palms (17-20 m), Country Woods'
+pines (18 m, 8-9 m across); nearly every kind-1 object is one) is a sign for that one
+question, so it is knocked down at the same speeds -- and, once down, driven
+over as a fallen sign is (the answer 0: nothing to bounce off). Then it always takes the
+slow fall, played at half the clock for a tree and 0.65 for a lamp post (the
+animation's start pushed on each frame), so it spins and flies more lazily
+than a sign; the car keeps v * 1400 / (1400 + mass) of its speed on the
+ground (an inelastic hit; a tree 150 kg times `NFS_TREE_MASS`, a lamp post 70
+kg times `NFS_LAMP_MASS`: about 90% and 95%); and after `NFS_KNOCK_RESPAWN`
+seconds (10) it stands again, once no car is within 5 m. The sizes, masses
+and timings are named constants at the top of the file. `NFS_KNOCK_TRACE=1`
+logs every touch; `NFS_KNOCK_TEST=1` (or `lamp`, `sign`) puts the player's
+car 12 m short of one, 4 s in, at 30 m/s.
+
 ### Cars roll less in the air
 
 Off a ramp the game keeps whatever spin a car took off with until it lands:
@@ -1819,6 +1853,10 @@ from the phone; the rest matter for a desktop run.
 | `NFS_GRIP_ON_OPPONENTS` | on (`1`) | `0`/`off`: grip by terrain for the player's car only, not every car (Grip by terrain). |
 | `NFS_SLIPSTREAM` | on (`1`) | `0`/`off`: no slipstream. A number up to 3: how strong the push behind another car (Slipstreaming). |
 | `NFS_SLIPSTREAM_TRAILS` | on (`1`) | `0`/`off`: no air lines round the player's car in a slipstream (Slipstreaming). |
+| `NFS_KNOCK_TREES` | on (`1`) | `0`/`off`: trees and lamp posts stand as the game has them, solid (Trees and lamp posts knocked down). |
+| `NFS_TREE_MASS` | `1` | Times 150 kg: how much a tree slows the car that knocks it down; `0` for none. |
+| `NFS_LAMP_MASS` | `1` | Times 70 kg: the same for a lamp post. |
+| `NFS_KNOCK_RESPAWN` | `10` | Seconds before a knocked-down tree or lamp post stands again. |
 | `NFS_AIR_ROLL_DAMP` | on (`1`) | `0`/`off`: cars keep their roll in the air, as the game has it. A number up to 3: how fast it dies away (Cars roll less in the air). |
 | `NFS_FAST_LOAD` | on (`1`) | `0`/`off`: the loading picture's frames paced and all shown, as before (A race loads in a moment). |
 | `NFS_SURFACE_GRIP` | on (`1`) | `0`/`off`: every surface as the game has it. A number up to 3: how much the player's car feels grass, dirt, snow and mud (Grip by terrain). |
