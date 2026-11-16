@@ -443,6 +443,10 @@ int MessageBoxA(WinApplication* app, x86::CPU& cpu,
     if (uType & 0x0001) type |= SDL_MESSAGEBOX_ERROR;
     if (uType & 0x0002) type |= SDL_MESSAGEBOX_WARNING;
     if (uType & 0x0000) type |= SDL_MESSAGEBOX_INFORMATION;
+    /* Said first: a box nobody is there to see -- a headless run, a machine
+     * with no window manager -- would otherwise be the only word on why the
+     * game stopped. */
+    SDL_Log("[MESSAGEBOX] %s: %s", lpCaption ? lpCaption : "", lpText ? lpText : "");
     SDL_ShowSimpleMessageBox(type, lpCaption, lpText, nullptr);
     return 0;
 }

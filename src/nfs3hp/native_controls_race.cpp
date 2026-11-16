@@ -937,10 +937,11 @@ void bumpJolt(win32::WinApplication* app, x86::CPU& cpu)
 }
 
 /* 0x4714f0: the kick of the car at eax's gear changed, its gear at 0x50b
- * against the last one's: into neutral or reverse a short rumble (once its
- * throttle, at 0x4f4, is past 1), into a gear a jolt from ahead (from behind
- * shifting down) as long and as hard as its engine's revs (0x590) say.  None
- * below a throttle of 0.1, nor for the race's first gear. */
+ * against the last one's: into reverse a short rumble (once its speed, at
+ * 0x4f4, is past 1 m/s -- see carSpeedMph, so not a throttle), nothing into
+ * neutral, into a gear a jolt from ahead (from behind shifting down) as long
+ * and as hard as its engine's revs (0x590) say.  None below a speed of
+ * 0.1 m/s, nor for the race's first gear. */
 void gearChangeKick(win32::WinApplication* app, x86::CPU& cpu)
 {
     enter(app, cpu, {&cpu.ebx, &cpu.ecx, &cpu.edx, &cpu.esi, &cpu.edi}, 0x20);

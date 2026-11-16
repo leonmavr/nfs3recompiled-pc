@@ -28,7 +28,8 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 - [ ] Heat haze over the road on desert tracks by day.
 - [ ] Brake discs glowing faintly orange after hard braking at night.
 - [x] Wider, sharper reflections on the cars from the sky already captured.
-- [ ] Camera shake on big impacts and hard landings, by the hit's speed.
+- [x] Camera shake on big impacts and hard landings, by the hit's speed.
+  - Done: `NFS_CRASH_SHAKE` (Crashes you feel).
 - [x] Grass particles: off the road on grass, slightly elongated flying blades,
   more with speed, beside the dirt grains.
 - [ ] 3D background objects, such as trees. 
@@ -108,10 +109,21 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   Then you can work out the flames and light emission.
   Flames can also appear at the beginning of race when revving and torque is at
   the top 20% or 15% highest.
-  - Partly done: the marking tool (`tools/car_model.py exhausts`, or "Mark
+  - Done: the marking tool (`tools/car_model.py exhausts`, or "Mark
     exhausts..." in `car_perf.py edit`) keeps each car's exhausts -- place
-    and radius in the model -- as `exhausts.json` in its folder. The flames
-    themselves are still to do.
+    and radius in the model -- as `exhausts.json` in its folder, with an
+    optional `flame` colour (else `#f2380a`, lighter to near white in the
+    middle). Shifting up throws one flame per tip, out of a ball of noise that
+    grows for 0.18 s, holds and trembles for 0.8, and is gone by its one
+    second; it stays at the pipe, going with the car (`NFS_EXHAUST_FLAMES`).
+    A car with no file throws none. Every car of the race throws them, the
+    opponents' too. Revving at a standstill with the engine in the top
+    seventh of its revs (the start line) pops one out of an exhaust every
+    0.15-0.35 s instead, a limiter's backfire.
+    A car with nothing marked gets two default pipes with
+    `NFS_EXHAUST_DEFAULTS=1`, so every car can be seen throwing them before it
+    is marked.
+  - Left to do: light thrown by the flames on the road and the spray.
 
 ### Races/locations
 
@@ -278,9 +290,10 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   stars, checkflag flags, tribals)
 - [ ] Car visual customization; bodykits and spoiler and side vents, rims etc - these
   also change the performance/weight distribution/traction.
-- [ ] More immersive crashes: small vibration on crash with other drivers, even biger
+- [x] More immersive crashes: small vibration on crash with other drivers, even biger
   vibration on wall. Vibration depends on speed.
-- [ ] More immersive crashes: different sounds, sound depending on crash speed. 
+- [x] More immersive crashes: different sounds, sound depending on crash speed. 
+  - Done: the crash as loud as the hit and pitched by it (`NFS_CRASH_SOUND`).
 - [x] Make speeding more immersive, i.e. gently pull camera back on pressing
   acceleration button up to some small distance , pull back in when releasing
   it.
@@ -341,7 +354,7 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   cyrretnly plating song when it starts and then slide the popup away.
 - [ ] Music control: what tracks play in game, skip current track button.
 - [ ] Radio: be able to add your own tracks.
-- [ ] Crash sounds by how hard the hit was; metal scraping rising with speed.
+- [x] Crash sounds by how hard the hit was; metal scraping rising with speed.
 - [ ] Doppler Effect: Passing rival cars, tunnel walls, and roadside barriers 
 creates rapid whooshing sounds that rise and fall in pitch as you fly past them. 
 Obviously this effect depends on speed.

@@ -10,6 +10,7 @@
 #include <lib/gliderenderer.h>
 #include "native_thrash.h"
 #include "car_arrays.h"
+#include "native_exhausts.h"
 #include "dynamic_fullscreen.h"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -3204,6 +3205,11 @@ int main(int argc, char* argv[])
         dataRoot += '/';
 #endif
     win32::FileEnumerator::setListingOrder(carFolderOrder);
+    /* NFS_EXHAUSTS_TRACE: every car's exhausts, and the colour its flames burn,
+     * read and said before the game starts (native_exhausts.cpp) -- so a file
+     * the marking tool wrote can be checked without driving a lap. */
+    if (SDL_getenv("NFS_EXHAUSTS_TRACE"))
+        nfs3hp::loadCarExhausts();
     nfs3hp::installMenuData();
     /* The game pumps its message queue from a guest thread, which is not
      * the thread SDL considers "main" on Android.  SDL only warns about

@@ -47,3 +47,6 @@ plan.md
 
 # Debug build (RelWithDebInfo, -g) for gdb work on the generated code.
 build-dbg/
+
+# Dev environment
+.justfile

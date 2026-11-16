@@ -1237,6 +1237,22 @@ static const char g_particleShader[] =
 "        o_color = vec4(v_color.rgb, exp(-v_uv.y * v_uv.y * 4.0) * v_color.a);"
 "        return;"
 "    }"
+/* An exhaust flame (6): a ball of burning gas, ragged and flickering by its
+ * seed, the car's flame colour at its edge and much lighter -- near white -- in
+ * its core (v_color.rgb is the car's colour, v_params.y its own flicker).  It is
+ * added to what is behind it, so the core reads as light rather than paint. */
+"    if (type == 6) {"
+"        vec2 q = v_uv * 1.8 + vec2(seed * 13.7, seed * 27.1);"
+"        float n = noise(q) * 0.55 + noise(q * 2.3) * 0.3 + noise(q * 4.7) * 0.15;"
+"        float rr = length(v_uv) * (0.72 + 0.5 * n);"
+"        float a = 1.0 - smoothstep(0.35, 1.0, rr);"
+"        if (a <= 0.002) discard;"
+"        a *= v_color.a;"
+"        float core = 1.0 - smoothstep(0.0, 0.85, rr);"
+"        vec3 c = mix(v_color.rgb, vec3(1.0, 0.96, 0.86), core * core * 0.85 + 0.1);"
+"        o_color = vec4(c * (0.9 + 0.6 * core), a * (0.8 + 0.2 * core));"
+"        return;"
+"    }"
 "    if (type == 2) {"
 "        float across = exp(-v_uv.y * v_uv.y * 5.0);"
 "        float along = clamp(v_uv.x * 0.5 + 0.5, 0.0, 1.0);"
@@ -1494,8 +1510,13 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
     std::size_t blended = 0;
     for (const EffectParticle& p : list)
     {
+        /* A spark or a streak is a quad stretched from where it was to where it
+         * is, white hot at its head; a flame is a quad like a puff's, but added
+         * to what is behind it rather than blended over it -- light, not paint. */
+        const bool streak = p.type == EffectParticle::Spark || p.type == EffectParticle::Streak;
+        const bool additive = streak || p.type == EffectParticle::Flame;
         float ax, ay, bx, by;   // the quad's two axes, half its length and width
-        if (p.type == EffectParticle::Spark || p.type == EffectParticle::Streak)
+        if (streak)
         {
             float dx = p.x - p.tx, dy = p.y - p.ty;
             float length = std::sqrt(dx * dx + dy * dy);
@@ -1517,9 +1538,9 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
             ay = 0.0f;
             bx = 0.0f;
             by = p.size;
-            ++blended;
+            if (!additive)
+                ++blended;   // the alpha-blended ones come first in the buffer
         }
-        const bool streak = p.type == EffectParticle::Spark || p.type == EffectParticle::Streak;
         const float cx = streak ? 0.5f * (p.x + p.tx) : p.x;
         const float cy = streak ? 0.5f * (p.y + p.ty) : p.y;
         const float fromX = streak ? -1.0f : p.tx;

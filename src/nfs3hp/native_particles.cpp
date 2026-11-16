@@ -1,5 +1,6 @@
 #include <nfs3hp.h>
 #include "native_guest.h"
+#include "native_exhausts.h"
 #include <winapi/glide2x.h>
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -41,7 +42,16 @@
  * over the world before its whole-picture pass (ThrashRenderer::drawParticles),
  * each one's shape made from its seed rather than a picture.  Not in split
  * screen, where there is more than one view, nor without that renderer: the
- * game's own then. */
+ * game's own then.
+ *
+ * And the exhaust flames (NFS_EXHAUST_FLAMES, native_exhausts.cpp): a car that
+ * shifts up throws one out of each exhaust it has marked, a second long -- grown
+ * to its size in a fifth of it, trembling there, then out -- in the colour the
+ * car's exhausts.json names, #f2380a where it names none.  A car revving at a
+ * standstill -- at the start, throttle down, the engine at the top of its revs
+ * -- pops them out one exhaust at a time instead, every quarter of a second or
+ * so.  Every car of the race, the opponents' too, the player's; a car with no
+ * exhausts marked has none. */
 namespace nfs3hp
 {
 
@@ -67,6 +77,28 @@ struct Particle
 
 constexpr std::size_t kMost = 2400;
 std::vector<Particle> s_particles;
+
+/* An exhaust flame: which of the car's exhausts it burns at, in the car's own
+ * space, and how far through its second of life it is.  It does not move --
+ * not on the car, and not with the road either: it stays at the pipe's mouth it
+ * was lit at as the car goes, growing, trembling and going out there. */
+struct Flame
+{
+    x86::reg32 car;    // the car it burns on, its exhausts moving with it
+    float at[3];       // the mouth of the exhaust in that car's space, a little out of it
+    float age, life;   // seconds; a second
+    float size;        // the radius it grows to, metres
+    float seed;
+    float colour[3];
+};
+constexpr std::size_t kMostFlames = 96;
+std::vector<Flame> s_flames;
+x86::reg32 s_gear[16];   // each car's gear, as last seen: a shift up is a flame
+float s_pop[16];         // seconds until a car revving at rest pops its next flame
+float s_revs[16];        // each car's revs a frame ago: rising fast is being revved
+bool s_revsKnown[16];
+float s_saidRevs[16];    // the revs NFS_EXHAUSTS_TRACE last said of a car at rest
+unsigned s_traced[16];   // what NFS_EXHAUSTS_TRACE has said of each: 1 a shift up, 2 a rev
 std::uint32_t s_random = 0x9e3779b9u;
 x86::sreg32 s_clock = -1;
 
@@ -246,6 +278,161 @@ void throwSpray(win32::WinApplication* app, const float at[3], const float veloc
     }
 }
 
+/* One flame out of one of a car's exhausts, where the marking tool put it, in
+ * the model's own space -- x to the car's right, y up, z forward -- which is the
+ * car's own space here: its centre is at +0x98 and its axes at +0xc0 (right),
+ * +0xcc (up) and +0xd8 (forward).  A hand's width behind the pipe, so it is out
+ * of the body and shows from behind.  Which tip is the caller's. */
+void throwFlame(const CarExhausts& exhausts, x86::reg32 car, std::size_t tip)
+{
+    Flame flame{};
+    flame.car = car;
+    flame.at[0] = exhausts.tips[tip].x;
+    flame.at[1] = exhausts.tips[tip].y;
+    flame.at[2] = exhausts.tips[tip].z - 0.06f;
+    flame.life = 1.0f;
+    flame.size = SDL_clamp(exhausts.tips[tip].radius * 2.6f, 0.05f, 0.16f);
+    flame.seed = random01();
+    for (int i = 0; i < 3; ++i)
+        flame.colour[i] = exhausts.flame[i];
+    if (s_flames.size() >= kMostFlames)
+        s_flames.erase(s_flames.begin());   // the oldest makes room
+    s_flames.push_back(flame);
+}
+
+/* A shift up: a flame out of each of the car's exhausts at once. */
+void throwFlames(const CarExhausts& exhausts, x86::reg32 car)
+{
+    for (std::size_t tip = 0; tip < exhausts.tips.size(); ++tip)
+        throwFlame(exhausts, car, tip);
+}
+
+/* The engine's redline in rpm: the car's own data table (at [car+0x528], the one
+ * the AI's pull comes from) keeps it at +0x1c4, and the drivetrain drives to it
+ * -- redline less 200 rpm at full demand (0x406200, its `fild [eax+0x1c4]`), the
+ * rev counter's needle at the dial's end.  Zero where the car has no table yet. */
+x86::reg32 redline(win32::WinApplication* app, x86::reg32 car)
+{
+    const x86::reg32 table = app->getMemory<x86::reg32>(car + 0x528);
+    /* Where the port maps guest memory: the image's sections from 0x400000, then
+     * the simulated 128 MB above them (memmap.cpp, s_addressOffset), no further
+     * than 0x11000000.  Anything else is not a table, and reading it would fault.
+     * The game's own drivetrain subscribes to the same pointer for the same
+     * number (sub_406160), so a car in the race has one -- the car's data, set
+     * when it was loaded. */
+    if (table < 0x400000 || table >= 0x11000000)
+        return 0;
+    const x86::sreg32 rpm = app->getMemory<x86::sreg32>(table + 0x1c4);
+    return (rpm >= 2000 && rpm <= 20000) ? x86::reg32(rpm) : 0;   // if it is what we think it is
+}
+
+bool tracing()
+{
+    static const bool on = SDL_getenv("NFS_EXHAUSTS_TRACE") != nullptr;
+    return on;
+}
+
+/* The car the game's first view follows -- the first player's -- as every hook
+ * that needs to know finds it: [0x5e10b0] is the view, its car eight bytes in
+ * (sub_422bd0).  Zero where there is no view yet. */
+x86::reg32 playerCar(win32::WinApplication* app)
+{
+    const x86::reg32 view = app->getMemory<x86::reg32>(0x5e10b0);
+    return view ? x86::reg32(app->getMemory<x86::reg32>(view + 8)) : 0;
+}
+
+/* What the cars' engines are doing, each frame, for a flame out of the exhausts:
+ * a car that has just shifted up (the game's 1 is neutral, 2 the first forward
+ * gear, and 0x64 "none yet") throws them all; a car held at the top of its revs
+ * with the throttle down and no speed (the start line) pops one now and then,
+ * an exhaust at a time, as a limiter does.  Every car of the race is looked at
+ * -- the opponents' as much as the player's -- a car in it being one with a
+ * record of its own. */
+void engineFlames(win32::WinApplication* app, float dt)
+{
+    auto f = [app](x86::reg32 address) { return app->getMemory<float>(address); };
+    const bool trace = tracing();
+    const x86::reg32 player = playerCar(app);
+    for (x86::reg32 k = 0; k < 16; ++k)
+    {
+        const x86::reg32 car = 0x5e1120 + k * 0x9ac;
+        const x86::reg32 record = app->getMemory<x86::reg32>(car + 0x220);
+        if (record < 0x6fd52c || record >= 0x6fd52c + 16 * 0x6c || (record - 0x6fd52c) % 0x6c)
+        {
+            s_gear[k] = 0;   // not in the race: nothing remembered of it
+            s_pop[k] = 0.0f;
+            s_revsKnown[k] = false;
+            s_saidRevs[k] = 0.0f;
+            s_traced[k] = 0;
+            continue;
+        }
+        const CarExhausts* exhausts = carExhausts(app, car);
+        if (!exhausts)
+            continue;   // this car has none marked, and so shows no flames
+        const x86::reg32 gear = app->getMemory<x86::reg8>(car + 0x50b);
+        const x86::reg32 was = s_gear[k];
+        s_gear[k] = gear;
+        if (was >= 1 && was <= 0x63 && gear > was && gear >= 2)
+        {
+            throwFlames(*exhausts, car);
+            if (trace && !(s_traced[k] & 1))
+            {
+                s_traced[k] |= 1;
+                SDL_Log("[EXHAUST] slot %u \"%s\": shifted up into %u -- %zu flames", unsigned(k),
+                        exhausts->folder.c_str(), unsigned(gear), exhausts->tips.size());
+            }
+        }
+        /* Revved at a standstill -- the start line.  A car going nowhere has no
+         * throttle of its own to ask about, and what the game makes of its revs
+         * there is the game's to decide, so there are three ways to be revving
+         * and any will do: the player's throttle down (below), the revs pinned at
+         * the redline (the top seventh, where its pull is), or climbing by 60 rpm
+         * a frame, a blip no car over a walking pace can be doing without the
+         * speed to go with it.  The next pop is a quarter of a second off, more
+         * or less; the timer only runs while the engine is held there, so a
+         * limiter's bounce cannot turn into a stream of them. */
+        const float vx = f(car + 0xa4), vy = f(car + 0xa8), vz = f(car + 0xac);
+        const float speed = SDL_sqrtf(vx * vx + vy * vy + vz * vz);
+        const x86::reg32 limit = redline(app, car);
+        const float revs = float(app->getMemory<x86::sreg32>(car + 0x590));
+        const bool known = s_revsKnown[k];
+        const bool climbing = known && revs > s_revs[k] + 60.0f;
+        s_revs[k] = revs;
+        s_revsKnown[k] = true;
+        const bool pinned = limit && revs >= 0.85f * float(limit);
+        /* The first player's own throttle, 0 to 255, at 0x79c339 (the camera's
+         * pull is off the same byte): a car does not keep one, and what a car
+         * standing still does with its revs is the game's to decide -- so it is
+         * asked directly, of the player's car, and the revs are only a second and
+         * third opinion (native_effects.cpp's cameraToView reads it too). */
+        const bool throttle = car == player && app->getMemory<x86::reg8>(0x79c339) > 0xa0;   // over five eighths
+        if (speed < 3.0f && (pinned || climbing || throttle))
+        {
+            s_pop[k] -= dt;
+            if (s_pop[k] <= 0.0f)
+            {
+                throwFlame(*exhausts, car, std::size_t(random01() * float(exhausts->tips.size()))
+                                              % exhausts->tips.size());
+                s_pop[k] = randomRange(0.15f, 0.35f);
+                if (trace && !(s_traced[k] & 2))
+                {
+                    s_traced[k] |= 2;
+                    SDL_Log("[EXHAUST] slot %u \"%s\": revving at a standstill (%s), %.0f of %u rpm -- %zu tips",
+                            unsigned(k), exhausts->folder.c_str(),
+                            pinned ? "at the redline" : climbing ? "climbing" : "throttle down", revs,
+                            unsigned(limit), exhausts->tips.size());
+                }
+            }
+        }
+        if (trace && speed < 3.0f && revs > s_saidRevs[k] + 1000.0f)
+        {
+            s_saidRevs[k] = revs;   // the revs it has got to, as they climb: what to tune from
+            SDL_Log("[EXHAUST] slot %u \"%s\": at rest, %.0f rpm (redline %u), %.2f m/s", unsigned(k),
+                    exhausts->folder.c_str(), revs, unsigned(limit), speed);
+        }
+    }
+}
+
 void throwSpark(const float at[3], const float velocity[3])
 {
     const int count = random01() < 0.35f * setting() ? 2 : 1;
@@ -271,6 +458,11 @@ void throwSpark(const float at[3], const float velocity[3])
 
 void move(float dt)
 {
+    for (Flame& flame : s_flames)
+        flame.age += dt;
+    s_flames.erase(std::remove_if(s_flames.begin(), s_flames.end(),
+                                  [](const Flame& flame) { return flame.age >= flame.life; }),
+                   s_flames.end());
     for (Particle& q : s_particles)
     {
         q.age += dt;
@@ -525,18 +717,36 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
     std::vector<std::array<float, 3>> teeth;
     pursuitFrame(app, teeth);
     const bool trails = trailsOn() && app->getMemory<x86::reg32>(0x6fd3b0) != 1;
-    if (setting() <= 0.0f && teeth.empty() && !trails)
+    const bool flames = exhaustFlamesOn();
+    if (setting() <= 0.0f && teeth.empty() && !trails && !flames)
         return;
     auto f = [app](x86::reg32 address) { return app->getMemory<float>(address); };
     const x86::sreg32 clock = x86::sreg32(app->getMemory<x86::reg32>(0x7d3684));
     if (s_clock < 0 || clock < s_clock || clock - s_clock > 64)
-        s_clock = clock;   // a new race, or a jump: nothing is moved by it
+    {
+        for (x86::reg32& gear : s_gear)
+            gear = 0;      // a new race, or a jump: no shift since the last frame
+        for (float& pop : s_pop)
+            pop = 0.0f;
+        for (bool& known : s_revsKnown)
+            known = false;
+        for (float& said : s_saidRevs)
+            said = 0.0f;
+        for (unsigned& traced : s_traced)
+            traced = 0;
+        s_clock = clock;   // and nothing is moved by it
+    }
     if (clock < 2)
+    {
         s_particles.clear();
+        s_flames.clear();
+    }
     const float dt = float(clock - s_clock) / 64.0f;
     s_clock = clock;
     if (trails)
         noteTrail(app, clock);
+    if (flames)
+        engineFlames(app, dt);
     if (dt > 0.0f)
     {
         move(dt);
@@ -623,6 +833,43 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
         if (q.noGround || !project(q.origin, e.tx, e.ty, oz))
             e.tx = e.ty = -1.0f;
         out.push_back(e);
+    }
+    /* The exhaust flames: each a ball that grows to its size in a fifth of its
+     * second, holds there -- trembling, a little of the car's movement in it --
+     * and is out by the end of it (native_exhausts.cpp lit them).  Added to the
+     * picture rather than blended into it: light, not paint. */
+    for (const Flame& flame : s_flames)
+    {
+        EffectParticle e{};
+        float z = 0.0f;
+        /* Where it burns: the car's own space, turned into the world as the car
+         * is now, so it stays at the pipe's mouth while the car goes. */
+        float at[3];
+        for (int i = 0; i < 3; ++i)
+        {
+            const x86::reg32 k = 4 * x86::reg32(i);
+            at[i] = f(flame.car + 0x98 + k) + f(flame.car + 0xc0 + k) * flame.at[0]
+                    + f(flame.car + 0xcc + k) * flame.at[1] + f(flame.car + 0xd8 + k) * flame.at[2];
+        }
+        if (!project(at, e.x, e.y, z) || z < 1.5f)
+            continue;
+        constexpr float grow = 0.18f;   // seconds to its size
+        constexpr float hold = 0.80f;   // at its size, trembling, until this
+        const float out = 1.0f - smoothStep(hold, flame.life, flame.age);   // and out
+        const float size = flame.size * std::sqrt(SDL_min(1.0f, flame.age / grow)) * out;
+        const float shake = scale * size * 0.12f / z;
+        e.x += std::sin(flame.age * 47.0f + flame.seed * 39.0f) * shake;
+        e.y += std::cos(flame.age * 59.0f + flame.seed * 23.0f) * shake;
+        e.size = SDL_min(SDL_max(1.0f, scale * size / z), 400.0f);
+        e.depth = z;
+        e.r = flame.colour[0];
+        e.g = flame.colour[1];
+        e.b = flame.colour[2];
+        e.a = SDL_min(1.0f, flame.age / 0.05f) * out * smoothStep(1.5f, 3.5f, z);
+        e.seed = flame.seed;
+        e.type = float(EffectParticle::Flame);
+        e.tx = e.ty = -1.0f;
+        sparks.push_back(e);
     }
     for (std::size_t k = 0; k < teeth.size(); ++k)
     {

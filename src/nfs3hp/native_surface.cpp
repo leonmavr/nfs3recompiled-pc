@@ -371,10 +371,12 @@ static void slipstream(win32::WinApplication* app, int ticks)
 }
 
 void objectsFrame(win32::WinApplication* app);   // native_objects.cpp
+void crashFrame(win32::WinApplication* app);     // native_crash.cpp
 
 void surfaceFrame(win32::WinApplication* app)
 {
     objectsFrame(app);
+    crashFrame(app);
     static x86::sreg32 last = -1;
     static x86::reg32 lastPlayer = 0;
     static float slips[16] = {};   // each car slot's sideways speed after the last tick
