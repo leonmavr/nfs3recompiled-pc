@@ -1253,6 +1253,34 @@ static const char g_particleShader[] =
 "        o_color = vec4(c * (0.9 + 0.6 * core), a * (0.8 + 0.2 * core));"
 "        return;"
 "    }"
+/* The light a flame throws (7): a soft pool of it on the road under the pipe,
+ * its colour the flame's, squared away to nothing at its edge, squashed
+ * lengthwise -- a disc on the ground seen from behind.  Additive, like the
+ * flame it comes from. */
+"    if (type == 7) {"
+"        float rr = length(vec2(v_uv.x, v_uv.y * 2.6));"
+"        float a = max(1.0 - rr, 0.0);"
+"        a *= a;"
+"        a *= v_color.a;"
+"        if (a <= 0.002) discard;"
+"        o_color = vec4(v_color.rgb * (0.75 + 0.5 * a), a);"
+"        return;"
+"    }"
+/* Tyre smoke (8): a dark cloud off a wheel spinning or locked, ragged by its
+ * own noise, its top catching the sky and its heart almost black, neither of
+ * them the ground's colour.  Blended over the picture, not added to it. */
+"    if (type == 8) {"
+"        vec2 q = v_uv * 1.7 + vec2(seed * 21.3, seed * 37.7);"
+"        float n = noise(q) * 0.55 + noise(q * 2.2) * 0.3 + noise(q * 4.6) * 0.15;"
+"        float rr = length(v_uv) * (0.72 + 0.45 * n);"
+"        float a = 1.0 - smoothstep(0.25, 1.0, rr);"
+"        if (a <= 0.002) discard;"
+"        a *= a * v_color.a;"
+"        float up = clamp(v_uv.y * 0.6 + 0.5, 0.0, 1.0);"
+"        vec3 c = v_color.rgb * (0.7 + 0.7 * up) + vec3(0.045) * up;"
+"        o_color = vec4(c, a * clamp(room / 0.3 + 0.25, 0.0, 1.0));"
+"        return;"
+"    }"
 "    if (type == 2) {"
 "        float across = exp(-v_uv.y * v_uv.y * 5.0);"
 "        float along = clamp(v_uv.x * 0.5 + 0.5, 0.0, 1.0);"
@@ -1514,7 +1542,8 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
          * is, white hot at its head; a flame is a quad like a puff's, but added
          * to what is behind it rather than blended over it -- light, not paint. */
         const bool streak = p.type == EffectParticle::Spark || p.type == EffectParticle::Streak;
-        const bool additive = streak || p.type == EffectParticle::Flame;
+        const bool additive =
+            streak || p.type == EffectParticle::Flame || p.type == EffectParticle::Glow;
         float ax, ay, bx, by;   // the quad's two axes, half its length and width
         if (streak)
         {

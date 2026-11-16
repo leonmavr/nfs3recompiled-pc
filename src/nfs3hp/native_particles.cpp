@@ -33,6 +33,10 @@
  *   ground -- and grains after all where that ground is not green.
  * - Spray off a wet road (kind 10) becomes a pale mist billowing out behind
  *   the wheels and fine drops thrown up, both more the faster (throwSpray).
+ * - The smoke off a wheel spinning or locked (kind 6) becomes the port's own
+ *   (throwSmoke, NFS_TYRE_SMOKE): dark clouds of its own colour that rise and
+ *   spread -- no gravity, no ground to settle on -- and are gone in a second or
+ *   two.  Off a wheel on grass that kind is still grass thrown up instead.
  * - A spark is a short white-hot streak that cools through yellow and orange
  *   to red as it falls, thrown at the game's speed with a little scatter.
  *
@@ -50,8 +54,11 @@
  * car's exhausts.json names, #f2380a where it names none.  A car revving at a
  * standstill -- at the start, throttle down, the engine at the top of its revs
  * -- pops them out one exhaust at a time instead, every quarter of a second or
- * so.  Every car of the race, the opponents' too, the player's; a car with no
- * exhausts marked has none. */
+ * so.  A hard downshift, and lifting off at the top of the revs, pop half a
+ * one instead (popFlame) -- a racing car's overrun crackle.  Every car of the
+ * race, the opponents' too, the player's; a car with no exhausts marked has
+ * none.  Each throws a pool of its light on the road under the car
+ * (EffectParticle::Glow, NFS_FLAME_LIGHT), coming up and going out with it. */
 namespace nfs3hp
 {
 
@@ -88,6 +95,7 @@ struct Flame
     float at[3];       // the mouth of the exhaust in that car's space, a little out of it
     float age, life;   // seconds; a second
     float size;        // the radius it grows to, metres
+    float light;       // how much light it throws on the road, 0 to 1
     float seed;
     float colour[3];
 };
@@ -95,6 +103,7 @@ constexpr std::size_t kMostFlames = 96;
 std::vector<Flame> s_flames;
 x86::reg32 s_gear[16];   // each car's gear, as last seen: a shift up is a flame
 float s_pop[16];         // seconds until a car revving at rest pops its next flame
+float s_crackle[16];     // seconds until an engine on the overrun pops its next
 float s_revs[16];        // each car's revs a frame ago: rising fast is being revved
 bool s_revsKnown[16];
 float s_saidRevs[16];    // the revs NFS_EXHAUSTS_TRACE last said of a car at rest
@@ -125,6 +134,23 @@ float setting()
 {
     static const float value = [] {
         const char* text = SDL_getenv("NFS_PARTICLES");
+        if (!text || !*text || SDL_strcasecmp(text, "on") == 0)
+            return 1.0f;
+        if (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0)
+            return 0.0f;
+        const float parsed = float(SDL_atof(text));
+        return parsed > 0.0f ? SDL_min(parsed, 3.0f) : 1.0f;
+    }();
+    return value;
+}
+
+/* The smoke off a wheel spinning or locked (the game's kind 6, throwSmoke):
+ * NFS_TYRE_SMOKE, on; a number up to 3 for more and thicker, 0 or off for the
+ * game's. */
+float smokeSetting()
+{
+    static const float value = [] {
+        const char* text = SDL_getenv("NFS_TYRE_SMOKE");
         if (!text || !*text || SDL_strcasecmp(text, "on") == 0)
             return 1.0f;
         if (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0)
@@ -278,12 +304,48 @@ void throwSpray(win32::WinApplication* app, const float at[3], const float veloc
     }
 }
 
+/* Smoke off a wheel spinning or locked -- the game's kind 6, taken over: a dark
+ * cloud that comes off the tread, flies up and spreads, and is gone in a second
+ * or two.  No gravity and no ground to settle on (it rises, thinning as it
+ * grows), more of it and thicker the faster the wheel was going. */
+void throwSmoke(const float at[3], const float velocity[3])
+{
+    const float smoke = smokeSetting();
+    if (smoke <= 0.0f)
+        return;
+    const float speed = std::sqrt(velocity[0] * velocity[0] + velocity[1] * velocity[1] + velocity[2] * velocity[2]);
+    const float pace = SDL_min(speed / 30.0f, 1.2f);
+    const int clouds = int((1.0f + speed / 10.0f) * smoke + random01());
+    for (int k = 0; k < SDL_min(clouds, 3); ++k)
+    {
+        Particle m{};
+        for (int i = 0; i < 3; ++i)
+            m.p[i] = at[i] + randomRange(-0.2f, 0.2f);
+        m.p[1] = at[1] + randomRange(0.02f, 0.2f);
+        for (int i = 0; i < 3; i += 2)
+            m.v[i] = velocity[i] * randomRange(0.2f, 0.45f) + randomRange(-0.9f, 0.9f) * (0.5f + pace);
+        m.v[1] = randomRange(0.6f, 1.7f) * (0.5f + pace);
+        m.life = randomRange(1.1f, 2.1f);
+        m.size = randomRange(0.2f, 0.4f) * (0.7f + 0.5f * pace);
+        m.grow = randomRange(1.3f, 2.5f) * (0.6f + pace);
+        m.seed = random01();
+        m.alpha = randomRange(0.22f, 0.42f) * SDL_min(1.0f, 0.55f + pace);
+        const float grey = randomRange(0.14f, 0.21f);
+        for (int i = 0; i < 3; ++i)
+            m.colour[i] = grey;
+        m.noGround = true;
+        m.type = EffectParticle::Smoke;
+        add(m);
+    }
+}
+
 /* One flame out of one of a car's exhausts, where the marking tool put it, in
  * the model's own space -- x to the car's right, y up, z forward -- which is the
  * car's own space here: its centre is at +0x98 and its axes at +0xc0 (right),
  * +0xcc (up) and +0xd8 (forward).  A hand's width behind the pipe, so it is out
- * of the body and shows from behind.  Which tip is the caller's. */
-void throwFlame(const CarExhausts& exhausts, x86::reg32 car, std::size_t tip)
+ * of the body and shows from behind.  Which tip is the caller's.  A pop of the
+ * overrun is half a flame (`scale` 0.5), and throws half the light. */
+void throwFlame(const CarExhausts& exhausts, x86::reg32 car, std::size_t tip, float scale = 1.0f)
 {
     Flame flame{};
     flame.car = car;
@@ -291,7 +353,8 @@ void throwFlame(const CarExhausts& exhausts, x86::reg32 car, std::size_t tip)
     flame.at[1] = exhausts.tips[tip].y;
     flame.at[2] = exhausts.tips[tip].z - 0.06f;
     flame.life = 1.0f;
-    flame.size = SDL_clamp(exhausts.tips[tip].radius * 2.6f, 0.05f, 0.16f);
+    flame.size = SDL_clamp(exhausts.tips[tip].radius * 2.6f, 0.05f, 0.16f) * scale;
+    flame.light = scale;
     flame.seed = random01();
     for (int i = 0; i < 3; ++i)
         flame.colour[i] = exhausts.flame[i];
@@ -305,6 +368,14 @@ void throwFlames(const CarExhausts& exhausts, x86::reg32 car)
 {
     for (std::size_t tip = 0; tip < exhausts.tips.size(); ++tip)
         throwFlame(exhausts, car, tip);
+}
+
+/* A pop of the overrun -- a downshift, or the throttle lifted at the top of the
+ * revs: one exhaust, half the size, a crackle rather than a flame. */
+void popFlame(const CarExhausts& exhausts, x86::reg32 car)
+{
+    const std::size_t tip = std::size_t(random01() * float(exhausts.tips.size())) % exhausts.tips.size();
+    throwFlame(exhausts, car, tip, 0.5f);
 }
 
 /* The engine's redline in rpm: the car's own data table (at [car+0x528], the one
@@ -324,6 +395,22 @@ x86::reg32 redline(win32::WinApplication* app, x86::reg32 car)
         return 0;
     const x86::sreg32 rpm = app->getMemory<x86::sreg32>(table + 0x1c4);
     return (rpm >= 2000 && rpm <= 20000) ? x86::reg32(rpm) : 0;   // if it is what we think it is
+}
+
+/* How much light the exhaust flames throw on the road (NFS_FLAME_LIGHT, on;
+ * a number up to 3 for more, 0 or off for none). */
+float flameLightSetting()
+{
+    static const float value = [] {
+        const char* text = SDL_getenv("NFS_FLAME_LIGHT");
+        if (!text || !*text || SDL_strcasecmp(text, "on") == 0)
+            return 1.0f;
+        if (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0)
+            return 0.0f;
+        const float parsed = float(SDL_atof(text));
+        return parsed > 0.0f ? SDL_min(parsed, 3.0f) : 1.0f;
+    }();
+    return value;
 }
 
 bool tracing()
@@ -361,6 +448,7 @@ void engineFlames(win32::WinApplication* app, float dt)
         {
             s_gear[k] = 0;   // not in the race: nothing remembered of it
             s_pop[k] = 0.0f;
+            s_crackle[k] = 0.0f;
             s_revsKnown[k] = false;
             s_saidRevs[k] = 0.0f;
             s_traced[k] = 0;
@@ -372,6 +460,10 @@ void engineFlames(win32::WinApplication* app, float dt)
         const x86::reg32 gear = app->getMemory<x86::reg8>(car + 0x50b);
         const x86::reg32 was = s_gear[k];
         s_gear[k] = gear;
+        const float vx = f(car + 0xa4), vy = f(car + 0xa8), vz = f(car + 0xac);
+        const float speed = SDL_sqrtf(vx * vx + vy * vy + vz * vz);
+        const x86::reg32 limit = redline(app, car);
+        const float revs = float(app->getMemory<x86::sreg32>(car + 0x590));
         if (was >= 1 && was <= 0x63 && gear > was && gear >= 2)
         {
             throwFlames(*exhausts, car);
@@ -380,6 +472,23 @@ void engineFlames(win32::WinApplication* app, float dt)
                 s_traced[k] |= 1;
                 SDL_Log("[EXHAUST] slot %u \"%s\": shifted up into %u -- %zu flames", unsigned(k),
                         exhausts->folder.c_str(), unsigned(gear), exhausts->tips.size());
+            }
+        }
+        /* A hard downshift at speed: the overrun pops out of the exhausts as the
+         * engine is dragged up to the lower gear's revs -- one exhaust at a
+         * time, half a flame each, a crackle rather than a jet.  Real racing
+         * cars do it on the overrun, and a downshift is the hardest overrun
+         * there is. */
+        if (was >= 2 && was <= 0x63 && gear >= 2 && gear < was && speed > 4.0f)
+        {
+            const int pops = random01() < 0.5f ? 2 : 1;
+            for (int n = 0; n < pops; ++n)
+                popFlame(*exhausts, car);
+            if (trace && !(s_traced[k] & 4))
+            {
+                s_traced[k] |= 4;
+                SDL_Log("[EXHAUST] slot %u \"%s\": downshifted from %u into %u at %.0f m/s -- %d pops",
+                        unsigned(k), exhausts->folder.c_str(), unsigned(was), unsigned(gear), speed, pops);
             }
         }
         /* Revved at a standstill -- the start line.  A car going nowhere has no
@@ -391,10 +500,6 @@ void engineFlames(win32::WinApplication* app, float dt)
          * speed to go with it.  The next pop is a quarter of a second off, more
          * or less; the timer only runs while the engine is held there, so a
          * limiter's bounce cannot turn into a stream of them. */
-        const float vx = f(car + 0xa4), vy = f(car + 0xa8), vz = f(car + 0xac);
-        const float speed = SDL_sqrtf(vx * vx + vy * vy + vz * vz);
-        const x86::reg32 limit = redline(app, car);
-        const float revs = float(app->getMemory<x86::sreg32>(car + 0x590));
         const bool known = s_revsKnown[k];
         const bool climbing = known && revs > s_revs[k] + 60.0f;
         s_revs[k] = revs;
@@ -421,6 +526,28 @@ void engineFlames(win32::WinApplication* app, float dt)
                             unsigned(k), exhausts->folder.c_str(),
                             pinned ? "at the redline" : climbing ? "climbing" : "throttle down", revs,
                             unsigned(limit), exhausts->tips.size());
+                }
+            }
+        }
+        /* Lifting off at the top of the revs on the move: the other overrun, the
+         * one a driver hears as a crackle out of the exhausts for as long as the
+         * engine is dragged down by the car -- a pop every eighth to a third of
+         * a second, half a flame each, quieter than a gear change's.  Only the
+         * player's throttle is a byte the port can read (0x79c339), so only the
+         * player's car crackles here. */
+        if (car == player && speed > 12.0f && limit && revs > 0.7f * float(limit)
+            && app->getMemory<x86::reg8>(0x79c339) < 0x30)
+        {
+            s_crackle[k] = SDL_max(0.0f, s_crackle[k] - dt);
+            if (s_crackle[k] <= 0.0f)
+            {
+                popFlame(*exhausts, car);
+                s_crackle[k] = randomRange(0.1f, 0.35f);
+                if (trace && !(s_traced[k] & 8))
+                {
+                    s_traced[k] |= 8;
+                    SDL_Log("[EXHAUST] slot %u \"%s\": crackling on the overrun at %.1f m/s, %.0f of %u rpm",
+                            unsigned(k), exhausts->folder.c_str(), speed, revs, unsigned(limit));
                 }
             }
         }
@@ -471,8 +598,13 @@ void move(float dt)
         const float drag = q.type == EffectParticle::Puff    ? 1.6f
                            : q.type == EffectParticle::Spark ? 0.4f
                            : q.type == EffectParticle::Blade ? 1.8f   // a blade flutters down
+                           : q.type == EffectParticle::Smoke ? 1.15f
                                                              : 0.9f;
-        const float gravity = q.type == EffectParticle::Puff ? -0.15f : 9.8f;
+        /* Smoke has no ground to fall to and nothing weighing it down: it rises,
+         * slowing and spreading, until it is gone. */
+        const float gravity = q.type == EffectParticle::Puff    ? -0.15f
+                              : q.type == EffectParticle::Smoke ? -0.5f
+                                                                : 9.8f;
         const float keep = std::exp(-drag * dt);
         for (int i = 0; i < 3; ++i)
             q.v[i] *= keep;
@@ -480,7 +612,8 @@ void move(float dt)
         for (int i = 0; i < 3; ++i)
             q.p[i] += q.v[i] * dt;
         q.size += q.grow * dt;
-        if (q.type != EffectParticle::Puff && q.p[1] < q.floor && q.v[1] < 0.0f)
+        if (q.type != EffectParticle::Puff && q.type != EffectParticle::Smoke && q.p[1] < q.floor
+            && q.v[1] < 0.0f)
         {
             q.p[1] = q.floor;
             if (q.type == EffectParticle::Grain || q.type == EffectParticle::Blade)
@@ -508,6 +641,19 @@ void move(float dt)
  * instead, the game's call then returned from with none made (eax 0). */
 int groundUnder(win32::WinApplication* app, x86::reg32 car, int wheel);   // native_surface.cpp
 
+/* Where a car's wheel (0 to 3) touches the road: the suspension record at
+ * car+0x300, 0x78 bytes each, keeps it at +4 as three 16.16 fixed-point ints --
+ * whole units of 1/65536, which the game itself turns into floats that way
+ * (`sub_4ca160`, the dust its own wheels throw, `fild`s each and times it by
+ * 1/65536).  Read as floats they are nonsense, and a particle thrown there
+ * lands at the world's origin. */
+void wheelContact(win32::WinApplication* app, x86::reg32 car, int wheel, float at[3])
+{
+    const x86::reg32 record = car + 0x300 + x86::reg32(wheel) * 0x78;
+    for (int i = 0; i < 3; ++i)
+        at[i] = float(app->getMemory<x86::sreg32>(record + 4 + x86::reg32(i) * 4)) * (1.0f / 65536.0f);
+}
+
 /* The kind of ground under the wheel nearest a point (within 1.2 m): as
  * groundUnder, or -1 for none near. */
 int groundAt(win32::WinApplication* app, const float at[3])
@@ -519,9 +665,9 @@ int groundAt(win32::WinApplication* app, const float at[3])
         const x86::reg32 car = 0x5e1120 + k * 0x9ac;
         for (int w = 0; w < 4; ++w)
         {
-            const x86::reg32 wheel = car + 0x304 + x86::reg32(w) * 0x78;
-            const float d[3] = { app->getMemory<float>(wheel) - at[0], app->getMemory<float>(wheel + 4) - at[1],
-                                 app->getMemory<float>(wheel + 8) - at[2] };
+            float wheel[3];
+            wheelContact(app, car, w, wheel);
+            const float d[3] = { wheel[0] - at[0], wheel[1] - at[1], wheel[2] - at[2] };
             const float distance = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
             if (distance < nearest)
             {
@@ -552,10 +698,84 @@ void grassFromWheels(win32::WinApplication* app, float dt)
         {
             if (random01() >= SDL_min(speed / 25.0f, 1.2f) * 60.0f * dt * setting() || groundUnder(app, car, w) != 1)
                 continue;
-            const x86::reg32 wheel = car + 0x304 + x86::reg32(w) * 0x78;
-            const float at[3] = { app->getMemory<float>(wheel), app->getMemory<float>(wheel + 4),
-                                  app->getMemory<float>(wheel + 8) };
+            float at[3];
+            wheelContact(app, car, w, at);
             throwDirt(at, velocity, true, 1 + int(random01() * 2.5f), random01() < 0.05f);
+        }
+    }
+}
+
+/* What makes a tyre smoke: a wheel scrubbed sideways -- cornering at the limit,
+ * or sliding -- a wheel spun up from low speed, a wheel locked under braking.
+ * That is when the game lays its tyre marks, so it is when smoke comes off them
+ * (the game's own kind 6, throwSmoke, only ever came off some ground).  Each
+ * frame, each car of the race, from one of the wheels that is scrubbing, on
+ * pavement: more often and thicker the harder it scrubs. */
+void tyreSmoke(win32::WinApplication* app, float dt)
+{
+    const float smoke = smokeSetting();
+    if (smoke <= 0.0f || dt <= 0.0f)
+        return;
+    auto f = [app](x86::reg32 address) { return app->getMemory<float>(address); };
+    const x86::reg32 player = playerCar(app);
+    for (x86::reg32 k = 0; k < 16; ++k)
+    {
+        const x86::reg32 car = 0x5e1120 + k * 0x9ac;
+        const x86::reg32 record = app->getMemory<x86::reg32>(car + 0x220);
+        if (record < 0x6fd52c || record >= 0x6fd52c + 16 * 0x6c || (record - 0x6fd52c) % 0x6c)
+            continue;   // not in the race
+        if (app->getMemory<uint16_t>(car + 0x164) != 0)
+            continue;   // in the air, nothing on the road
+        const float velocity[3] = { f(car + 0xa4), f(car + 0xa8), f(car + 0xac) };
+        const float speed = SDL_sqrtf(velocity[0] * velocity[0] + velocity[1] * velocity[1]
+                                      + velocity[2] * velocity[2]);
+        if (!(speed > 4.0f))
+            continue;
+        /* Sideways is the velocity across the car (+0xc0 is its right): over a
+         * metre a second the tyres are being dragged over a road they no longer
+         * roll along. */
+        const float right[3] = { f(car + 0xc0), f(car + 0xc4), f(car + 0xc8) };
+        const float lateral = SDL_fabsf(velocity[0] * right[0] + velocity[1] * right[1] + velocity[2] * right[2]);
+        float scrub = lateral > 1.2f ? SDL_min(1.0f, (lateral - 1.2f) / 3.0f) : 0.0f;
+        bool driven = false;   // the smoke comes off the wheels that are driven
+        if (car == player)
+        {
+            /* The first player's own pedals, 0 to 255: the throttle at 0x79c339
+             * and the brake at 0x79c33a (after the steering at 0x79c338). */
+            const float throttle = float(app->getMemory<x86::reg8>(0x79c339)) / 255.0f;
+            const float brake = float(app->getMemory<x86::reg8>(0x79c33a)) / 255.0f;
+            const x86::reg32 limit = redline(app, car);
+            const float revs = float(app->getMemory<x86::sreg32>(car + 0x590));
+            const x86::reg32 gear = app->getMemory<x86::reg8>(car + 0x50b);
+            // Spun up from a standstill: throttle down, in gear, revs up, the car
+            // barely moving -- the wheels are going round faster than the road.
+            if (throttle > 0.6f && gear >= 2 && speed < 12.0f && limit && revs > 0.5f * float(limit))
+            {
+                scrub = SDL_max(scrub, throttle);
+                driven = true;
+            }
+            // Locked: the brakes hard on with the car still going.
+            if (brake > 0.6f && speed > 8.0f)
+                scrub = SDL_max(scrub, brake);
+        }
+        if (!(scrub > 0.05f))
+            continue;
+        const float forward[3] = { f(car + 0xd8), f(car + 0xdc), f(car + 0xe0) };
+        for (int w = 0; w < 4; ++w)
+        {
+            if (groundUnder(app, car, w) != 0)
+                continue;   // pavement: grass, dirt and snow have dust of their own
+            float at[3];
+            wheelContact(app, car, w, at);
+            // Which end of the car it is: the contact point, along its forward axis.
+            const float ahead = (at[0] - f(car + 0x98)) * forward[0] + (at[1] - f(car + 0x9c)) * forward[1]
+                                + (at[2] - f(car + 0xa0)) * forward[2];
+            if (driven && ahead > 0.0f)
+                continue;   // a wheel spinning smokes at the driven end, not both
+            if (random01() >= scrub * 6.0f * dt * smoke)
+                continue;
+            throwSmoke(at, velocity);
+            break;   // one wheel a frame is enough to see
         }
     }
 }
@@ -564,8 +784,9 @@ bool particleTakeOver(win32::WinApplication* app, x86::CPU& cpu)
 {
     static bool s_inner = false;   // the game's own call, made from here (below)
     x86::reg32 kind = cpu.eax;
-    /* The game's smoke (6) off a wheel on grass -- sliding or braking on it --
-     * is grass thrown up instead of a dark cloud. */
+    /* The game's smoke (6) -- off a wheel spinning or locked -- is the port's
+     * own: on grass, grass thrown up instead of a dark cloud; anywhere else,
+     * smoke blacker than the game's, flying up and spreading (throwSmoke). */
     if (kind == 6 && !s_inner && setting() > 0.0f && win32::glide2x::effectParticlesDrawn()
         && app->getMemory<x86::reg32>(0x6fd3b0) != 1)
     {
@@ -573,7 +794,7 @@ bool particleTakeOver(win32::WinApplication* app, x86::CPU& cpu)
         if (groundAt(app, here) == 1)
             kind = 5;
     }
-    if (s_inner || (kind != 2 && kind != 3 && kind != 5 && kind != 10) || setting() <= 0.0f
+    if (s_inner || (kind != 2 && kind != 3 && kind != 5 && kind != 6 && kind != 10) || setting() <= 0.0f
         || !win32::glide2x::effectParticlesDrawn() || (kind == 10 && !spraySetting()))
         return false;
     if (app->getMemory<x86::reg32>(0x6fd3b0) == 1)
@@ -603,6 +824,8 @@ bool particleTakeOver(win32::WinApplication* app, x86::CPU& cpu)
     }
     if (kind == 10)
         throwSpray(app, at, velocity);
+    else if (kind == 6)
+        throwSmoke(at, velocity);
     else if (kind == 2 || kind == 5)
         throwDirt(at, velocity, kind == 5);
     else
@@ -728,6 +951,8 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
             gear = 0;      // a new race, or a jump: no shift since the last frame
         for (float& pop : s_pop)
             pop = 0.0f;
+        for (float& crackle : s_crackle)
+            crackle = 0.0f;
         for (bool& known : s_revsKnown)
             known = false;
         for (float& said : s_saidRevs)
@@ -751,7 +976,10 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
     {
         move(dt);
         if (setting() > 0.0f && app->getMemory<x86::reg32>(0x6fd3b0) != 1)
+        {
             grassFromWheels(app, dt);
+            tyreSmoke(app, dt);
+        }
     }
 
     const float* m = &app->getMemory<float>(view + 0x44);
@@ -828,16 +1056,43 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
         e.g = q.colour[1];
         e.b = q.colour[2];
         const float in = SDL_min(1.0f, q.age / 0.08f) * near;
-        e.a = q.alpha * in * (q.type == EffectParticle::Puff ? left * left : SDL_min(1.0f, left * 3.0f));
+        const bool puffing = q.type == EffectParticle::Puff || q.type == EffectParticle::Smoke;
+        e.a = q.alpha * in * (puffing ? left * left : SDL_min(1.0f, left * 3.0f));
         float oz;
         if (q.noGround || !project(q.origin, e.tx, e.ty, oz))
             e.tx = e.ty = -1.0f;
         out.push_back(e);
     }
+    /* The road under each car's wheels, for the light its flames throw on it: a
+     * wheel's contact point is at +0x304, 0x78 bytes each, and the lowest of the
+     * four is the ground the car stands on.  Worked out once a frame, for the
+     * cars that light something. */
+    float groundY[16];
+    bool groundKnown[16] = {};
+    auto groundOf = [&](x86::reg32 car) {
+        const x86::reg32 slot = (car - x86::reg32(0x5e1120)) / 0x9ac;
+        if (car < 0x5e1120 || slot >= 16 || (car - x86::reg32(0x5e1120)) % 0x9ac)
+            return f(car + 0x9c) - 0.6f;   // not one of the race's cars: under its centre
+        if (!groundKnown[slot])
+        {
+            float low = 1e9f, at[3];
+            for (int w = 0; w < 4; ++w)
+            {
+                wheelContact(app, car, w, at);
+                low = SDL_min(low, at[1]);
+            }
+            groundY[slot] = low;
+            groundKnown[slot] = true;
+        }
+        return groundY[slot];
+    };
+    const float light = flameLightSetting();
     /* The exhaust flames: each a ball that grows to its size in a fifth of its
      * second, holds there -- trembling, a little of the car's movement in it --
      * and is out by the end of it (native_exhausts.cpp lit them).  Added to the
-     * picture rather than blended into it: light, not paint. */
+     * picture rather than blended into it: light, not paint.  Each throws a pool
+     * of its own light on the road under it (EffectParticle::Glow), as wide as
+     * the ball is big and as bright as it burns. */
     for (const Flame& flame : s_flames)
     {
         EffectParticle e{};
@@ -870,6 +1125,27 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
         e.type = float(EffectParticle::Flame);
         e.tx = e.ty = -1.0f;
         sparks.push_back(e);
+        if (!(light > 0.0f))
+            continue;
+        const float pool[3] = { at[0], groundOf(flame.car) + 0.04f, at[2] };
+        EffectParticle glow{};
+        float poolZ = 0.0f;
+        if (!project(pool, glow.x, glow.y, poolZ) || poolZ < 1.5f)
+            continue;
+        glow.depth = poolZ;
+        glow.size = SDL_min(scale * (0.35f + size * 5.0f) / poolZ, 400.0f);
+        glow.r = flame.colour[0];
+        glow.g = flame.colour[1];
+        glow.b = flame.colour[2];
+        /* Faint on purpose: light spilling out of a pipe onto the road is a
+         * glow, not a puddle of paint -- a third of what the flame itself is
+         * worth, so it reads as a tint under the car and nothing more. */
+        glow.a = SDL_min(1.0f, flame.age / 0.08f) * out * SDL_min(light, 2.0f) * flame.light * 0.15f
+                 * smoothStep(1.5f, 3.5f, poolZ);
+        glow.seed = flame.seed;
+        glow.type = float(EffectParticle::Glow);
+        glow.tx = glow.ty = -1.0f;
+        sparks.push_back(glow);
     }
     for (std::size_t k = 0; k < teeth.size(); ++k)
     {

@@ -7,8 +7,9 @@
 struct EffectParticle
 {
     // Blade: off grass; Spike: a strip's; Streak: a piece of the air trail beside a slipstreaming car;
-    // Flame: out of an exhaust on a gear change
-    enum Type { Grain = 0, Puff = 1, Spark = 2, Blade = 3, Spike = 4, Streak = 5, Flame = 6 };
+    // Flame: out of an exhaust on a gear change; Glow: the light a flame throws on the road;
+    // Smoke: off a wheel spinning or locked
+    enum Type { Grain = 0, Puff = 1, Spark = 2, Blade = 3, Spike = 4, Streak = 5, Flame = 6, Glow = 7, Smoke = 8 };
     float x, y;         // the centre, in the picture's pixels
     float tx, ty;       // a spark: where it was a moment ago; else where it was thrown from
     float depth;        // its distance in the view, as the depth buffer has it (z)

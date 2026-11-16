@@ -25,6 +25,14 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     port's -- small droplets that refract the picture behind them (rain) or
     small organic frost specks (snow) -- rather than chase the game's sprites.
 - [ ] Tyre marks that last the lap, darker and softer than the game's.
+- [x] Tyre smoke on wheelspin and lock-up, taken over from the game's kind 6
+  and made procedural.
+  - Done (`NFS_TYRE_SMOKE`, on): dark clouds of its own, ragged by noise, more
+    and thicker the faster the wheel was going -- no gravity and no ground,
+    rising and spreading, gone in one to two seconds. On grass the same kind is
+    still grass thrown up. It comes whenever a tyre is scrubbed, which is
+    whenever the game lays a tyre mark: sliding sideways, a wheel spun up from a
+    standstill, a wheel locked under braking.
 - [ ] Heat haze over the road on desert tracks by day.
 - [ ] Brake discs glowing faintly orange after hard braking at night.
 - [x] Wider, sharper reflections on the cars from the sky already captured.
@@ -123,7 +131,11 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     A car with nothing marked gets two default pipes with
     `NFS_EXHAUST_DEFAULTS=1`, so every car can be seen throwing them before it
     is marked.
-  - Left to do: light thrown by the flames on the road and the spray.
+  - Done: each flame pools a soft disc of its light on the road under the car,
+    as wide as the ball is big, coming up, flickering and going out with it
+    (`NFS_FLAME_LIGHT`).
+  - Done: a hard downshift, and lifting off at the top of the revs, pop half a
+    flame out of one exhaust at a time -- a real car's overrun crackle.
 
 ### Races/locations
 
@@ -139,6 +151,16 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   is partially implementned by the original game but check if it can improved
 - [ ] Track editor. Tool to copy, edit, add new tracks with custom terrain and
   environemtn too.
+- [ ] Replace the 3,2,1,GO spinning text when race is beginning with a move race-relaced UI,
+  such as a LED panel with circular lamps lighting 3,2,1,GO.
+- [ ] When race is beginning, instead of directly panning/zooming into player's
+  car, camera moves along the opponents car's, reaching player's car and
+  adjusting behing it, in the same duration as before.
+- [ ] More and moving sky effects. For example  in summit, there are already
+  northern lights at night which nicely glow on track. Make them more
+  pronounced, higher quality and smoothly and proceduraly slowly move and glow.
+  At day time in hometown and rocky pass u can add moving clouds which occlude 
+  sun and reduce glare when in front of it.
 
 ### Oppponents and AI
 - [x] Bug: a quick race against Class A opponents had police cars (and cars
@@ -254,6 +276,11 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   without however stetching/scaling things sideways.
 - [ ] Add those added graphics enhancements in graphics menu in game (e.g. as
   toggleable)
+  - Done, the first half: every `NFS_*` switch the port reads now lives in
+    `nfs3hp.ini` beside the game data, written out on the first run at its
+    default and read once before the game starts (`settingsLoad`,
+    `native_settings.cpp`). What is left is the menu: `settingsSet` and
+    `settingsSave` are there for it to call.
 - [ ] Add difficulty slider instead of just normal and agressive (presets in
   slider will still be normal and agressive but we can slide in between to
   adjust opponent AI). You already have some slider asset in volume control.
@@ -343,6 +370,25 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     trees and lamp posts is guessed from their models' size.
 - [ ] More paint types; iridescent, glossy, chrome, matte. However when
   selecting paint > custom, you will need a UI arrow and list to choose it.
+- [ ] BUG: some cars like CLK-GTR have 3 entries or duplicates, remove
+  duplicates. zip them and move them to /tmp first just in case i wanna
+  re-import them. also modify the car import script to list /remove model(s)
+  (for art files and gamedata). Particularly for CLK-GTR, one is plain (no
+  decals etc) and 2 have racing vinyls, i wanna keep only of the vilyn ones and
+  remov the plain. Datsun and Camaro are also duplicated and I think Lister too.
+- [ ] S-class: some cars are way too fast for A-class, such as murcielago and
+  ferrari f40. create a new S-class and be able to select S class as opponents
+  as A+S class. I know these need a slide for the menu but don't worry - i'll
+  create it later and just use a placeholder for it.
+- [ ] Lift the limit of 50 cars for usable cars.
+- [ ] Remove airborne slowdown
+- [ ] Police mod: call police backup when pressing H on a player - other cops
+  spawn near u and chase him.
+- [ ] Better weight distribution consideration in collision: most cars have the
+  engine on the front so most of the weight (consider 3/4?) is distributed on the
+  front. Some higher-class cars like ferraris and lambos and the A-class jaguar,
+  the clk gtr etc have the engine on theback so it's the opposite. Traffic cars
+  also have engine on the front.
 
 ### Music/Sound
 - [x] Sound quality is great and sound works well but volume is still too
@@ -376,6 +422,8 @@ Obviously this effect depends on speed.
 - [ ] Asset extractor (roads, signposts, lamps including emmission, buildings, etc) and re-injecter. Figure
   out a way to export assets and view/edit them in a tool, or add custom assets
   and place them in locations in games. 3D model (such as for cops etc) extractor.
+- [ ] Create a track editor tool which can: edit/remove track blocks to design
+  the road, add textures, objects, etc with live preview.
 - [ ]  Make a way to convert 3d models .obj files into game environment ones OR 
   directly proceduraly make models and insert them.
 - [x] Peformance curve and other stuff like transmission visualizer based on the data of each car model
