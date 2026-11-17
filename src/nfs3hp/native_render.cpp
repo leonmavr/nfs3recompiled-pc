@@ -15899,7 +15899,7 @@ static bool noteSun(win32::WinApplication* app, x86::reg32 view)
     const Memory m{app};
     auto f = [&](x86::reg32 address) { return float(m.load(address)); };
     static const float strength = settingOr("NFS_OBJECT_SHADOWS", 0.45f, 1.0f);
-    static const float rain = settingOr("NFS_SHADOW_RAIN", 0.55f, 1.0f);
+    static const float rain = settingOr("NFS_SHADOW_RAIN", 0.8f, 1.0f);
     static const float night = settingOr("NFS_SHADOW_NIGHT", 0.4f, 1.0f);
     float amount = strength;
     if (m.word(0x6fd4cc) != 0)

@@ -246,7 +246,11 @@ static const char g_fragmentShader[] =
 "        vec3 L = u_headOrigin - P;"
 "        float dist = length(L);"
 "        vec3 toLight = L / max(dist, 1e-3);"
-"        float cone = smoothstep(0.82, 0.97, dot(-toLight, u_headDir));"
+/* Wide and soft (2026-11-17): a narrow cone bright on its axis showed as a
+ * brighter beam of its own inside the game's patch on the road. */
+"        const float kConeOuter = 0.45, kConeInner = 0.95, kLevelShare = 0.08;"
+"        float cone = smoothstep(kConeOuter, kConeInner, dot(-toLight, u_headDir));"
+"        cone *= cone;"
 "        float reach = 1.0 / (1.0 + dist * dist / 400.0) * (1.0 - smoothstep(45.0, 70.0, dist));"
 "        vec3 n = cross(dFdx(P), dFdy(P));"
 "        vec3 nn = dot(n, n) > 0.0 ? normalize(n) : -toLight;"
@@ -254,7 +258,7 @@ static const char g_fragmentShader[] =
 /* What lies level -- the road, which has the game's own patch of light, and
  * the ground -- gets a quarter of it; what stands up gets all of it. */
 "        float level = smoothstep(0.6, 0.9, abs(dot(nn, u_headUp)));"
-"        float lit = u_headlight * cone * reach * (0.3 + 0.7 * facing) * mix(1.0, 0.25, level);"
+"        float lit = u_headlight * cone * reach * (0.3 + 0.7 * facing) * mix(1.0, kLevelShare, level);"
 "        color.rgb += textureColor.rgb * vec3(1.0, 0.96, 0.86) * lit;"
 "    }"
 /* The rest of the world's grain (initGl, NFS_OBJECT_DETAIL): the same noise,
@@ -303,7 +307,10 @@ static const char g_fragmentShader[] =
 "                    }"
 "                    vec3 seen = sum / 5.0 + max(brightest - 0.6, 0.0) * 1.5;"
 "                    float fresnel = 0.08 + 0.55 * (1.0 - smoothstep(0.0, 0.3, below));"
-"                    color.rgb += seen * fresnel * wet * (0.35 + 0.65 * puddle);"
+/* Not over what is laid on the road half seen -- the tyre marks: lit by the
+ * reflection as brightly as the road around them, they were gone in the rain
+ * (2026-11-17).  The road under them reflects, through them. */
+"                    color.rgb += seen * fresnel * wet * (0.35 + 0.65 * puddle) * step(0.98, color.a);"
 "                }"
 "            }"
 "        }"
@@ -935,7 +942,7 @@ void ThrashRenderer::flush()
     batch.car = m_carSurface || (!m_textureShadow && (m_textureFormat == TF_ARGB_8888 || m_textureFormat == TF_ARGB_4444));
     batch.decal = m_textureShadow;
     batch.light = m_textureLight;
-    batch.skipDraw = batch.decal && !carShadowSetting();
+    batch.skipDraw = (batch.decal && !carShadowSetting()) || (m_textureWetStreak && !m_wetLightsLit);
     m_batches.push_back(batch);
     /* The batch's own screen box, for the trace: which of a frame's draws a
      * thing on the screen is. */
@@ -1644,6 +1651,13 @@ static GLuint postProgram(GLuint (*compile)(GLenum, const std::string&, const ch
 constexpr float kDepthCutCar = 0.08f;
 constexpr float kDepthCutWorld = 0.5f;
 
+/* A car's shadow (soften, SoftenedPicture::Shadow): a superellipse of this
+ * power -- the cube root below matches it -- dark to this share of the way out,
+ * this dark at its heart. */
+constexpr float kShadowRound = 3.0f;
+constexpr float kShadowSolid = 0.6f;
+constexpr float kShadowDarkness = 0.9f;
+
 /* NFS_CAR_SHADOW: 0 or off leaves the cars' shadows off the road (a car's
  * shadow is a decal the port has recognised, batch.decal). */
 static bool carShadowSetting()
@@ -2183,8 +2197,15 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
     }
     for (const Batch& batch : draw.batches)
     {
+        /* Its vertices passed over too: left in, the next batch drew them as
+         * its own, by its state -- a skipped shadow as whatever came after it
+         * (with NFS_CAR_SHADOW=0), a wet road's light by day as dark strips
+         * (2026-11-17). */
         if (batch.skipDraw)
+        {
+            first = batch.end;
             continue;
+        }
         /* The world drawn, the HUD to come: its first draw is unfogged and
          * writes no depth, after the world's fogged ones.  That is the picture the
          * next frame's wet road reflects, without the HUD in it. */
@@ -2275,8 +2296,10 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
         /* A car's shadow lies on the road and leaves its depth as the road's:
          * written a little above it, its edge stood up as a step, and the
          * shadows of what stands by the road caught on it in a rim. */
-        if (!previous || batch.zBuffer != previous->zBuffer || batch.decal != previous->decal)
-            glDepthMask(batch.zBuffer && !batch.decal ? GL_TRUE : GL_FALSE);
+        /* Nor a lamp's glow: light, not a thing, and (below) cut by nothing. */
+        if (!previous || batch.zBuffer != previous->zBuffer || batch.decal != previous->decal
+            || batch.light != previous->light)
+            glDepthMask(batch.zBuffer && !batch.decal && !batch.light ? GL_TRUE : GL_FALSE);
         /* A car's pixels leave 0 in the picture's alpha, everything else adds
          * its own to what is there: the shadows of what stands by the road are
          * not cast by the cars, which have their own (postProcess) -- and a
@@ -2302,11 +2325,15 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
          * shape: the turned boxes in the rain and snow (2026-11-17, found by
          * drawing the particles with no depth test, and then with this cut for
          * the world's batches alone).  A car's keeps the low cut, its glass
-         * being faint and still the car's. */
+         * being faint and still the car's.  The cut discards what is under
+         * it, so a lamp's glow has none and writes no depth (above): the
+         * softened glow is 8888, the world's by its format, and all but its
+         * middle was cut away -- the tail and brake lights unlit by day
+         * (2026-11-17). */
         if (!previous || batch.alphaBlend != previous->alphaBlend || batch.zBuffer != previous->zBuffer
-            || batch.decal != previous->decal || batch.car != previous->car)
-            glUniform1f(m_locations.depthCut,
-                        batch.zBuffer && !batch.decal ? (batch.car ? kDepthCutCar : kDepthCutWorld) : 0.0f);
+            || batch.decal != previous->decal || batch.car != previous->car || batch.light != previous->light)
+            glUniform1f(m_locations.depthCut, batch.zBuffer && !batch.decal && !batch.light
+                                                  ? (batch.car ? kDepthCutCar : kDepthCutWorld) : 0.0f);
         if (!previous || batch.chromaKey != previous->chromaKey)
             glUniform1i(m_locations.chromaKey, batch.chromaKey ? 1 : 0);
         if (!previous || batch.chromaKeyColor != previous->chromaKeyColor)
@@ -2664,6 +2691,7 @@ void ThrashRenderer::setTexture(x86::reg32, x86::reg32 address)
         m_textureFormat = found->second.format;
         m_textureShadow = found->second.shadow;
         m_textureLight = found->second.light;
+        m_textureWetStreak = found->second.wetStreak;
     }
     found->second.useStamp = m_renderStamp;
 }
@@ -2738,6 +2766,10 @@ static bool softenEffects()
     return on;
 }
 
+// The game's 4444 light on a wet road (the upload's own texels).
+constexpr x86::reg32 kWetLightSize = 64;
+constexpr std::uint32_t kWetLightHash = 0xc4bb8dc1u;
+
 static SoftenedPicture recognise(const std::vector<x86::reg8>& texels, x86::reg32 size)
 {
     if (size == 128 && texelHash(texels.data(), 128 * 128 * 4) == 0x617d2d72u)
@@ -2799,6 +2831,70 @@ static void softenGlow(std::vector<x86::reg8>& texels, x86::reg32 size, x86::reg
     }
 }
 
+/* Each smaller level the game supplied, again from the first: the average of
+ * four of the one above (the GPU draws a picture seen small from these). */
+static void rebuildLevels(std::vector<x86::reg8>& texels, x86::reg32 size, x86::reg32 levels)
+{
+    std::size_t from = 0;
+    for (x86::reg32 at = size, level = 1; level < levels && at > 1; at >>= 1, ++level)
+    {
+        const std::size_t to = from + std::size_t(at) * at * 4;
+        const x86::reg32 half = at / 2;
+        if (to + std::size_t(half) * half * 4 > texels.size())
+            return;
+        for (x86::reg32 y = 0; y < half; ++y)
+            for (x86::reg32 x = 0; x < half; ++x)
+                for (int c = 0; c < 4; ++c)
+                {
+                    auto texel = [&](x86::reg32 tx, x86::reg32 ty) {
+                        return int(texels[from + (std::size_t(ty) * at + tx) * 4 + c]);
+                    };
+                    const int sum = texel(2 * x, 2 * y) + texel(2 * x + 1, 2 * y) + texel(2 * x, 2 * y + 1)
+                                    + texel(2 * x + 1, 2 * y + 1);
+                    texels[to + (std::size_t(y) * half + x) * 4 + c] = x86::reg8((sum + 2) / 4);
+                }
+        from = to;
+    }
+}
+
+/* The headlights' pool (glw2) is the two lamps' hot spots in a wide glow:
+ * laid on the road they were two narrow, brighter beams inside the pool.
+ * Blurred (three passes of a box kPoolBlur texels wide each way, as near a
+ * Gaussian as needed) the pool keeps its shape and its brightness overall and
+ * loses the beams; the edge fade follows. */
+constexpr int kPoolBlur = 13;
+
+static void blurPool(std::vector<x86::reg8>& texels, x86::reg32 size)
+{
+    const int n = int(size);
+    std::vector<float> a(std::size_t(n) * n * 4), b(a.size());
+    for (std::size_t i = 0; i < a.size(); ++i)
+        a[i] = float(texels[i]);
+    auto pass = [&](const std::vector<float>& from, std::vector<float>& to, bool across) {
+        const int r = kPoolBlur / 2;
+        for (int y = 0; y < n; ++y)
+            for (int x = 0; x < n; ++x)
+                for (int c = 0; c < 4; ++c)
+                {
+                    float sum = 0.0f;
+                    for (int k = -r; k <= r; ++k)
+                    {
+                        const int sx = across ? std::clamp(x + k, 0, n - 1) : x;
+                        const int sy = across ? y : std::clamp(y + k, 0, n - 1);
+                        sum += from[(std::size_t(sy) * n + sx) * 4 + c];
+                    }
+                    to[(std::size_t(y) * n + x) * 4 + c] = sum / float(2 * r + 1);
+                }
+    };
+    for (int round = 0; round < 3; ++round)
+    {
+        pass(a, b, true);
+        pass(b, a, false);
+    }
+    for (std::size_t i = 0; i < a.size(); ++i)
+        texels[i] = x86::reg8(std::lround(std::min(255.0f, a[i])));
+}
+
 static void soften(std::vector<x86::reg8>& texels, x86::reg32 size, x86::reg32 levels, SoftenedPicture picture)
 {
     if (picture == SoftenedPicture::Glow)
@@ -2806,6 +2902,8 @@ static void soften(std::vector<x86::reg8>& texels, x86::reg32 size, x86::reg32 l
         softenGlow(texels, size, levels, 0.12f);
         return;
     }
+    if (picture == SoftenedPicture::Pool)
+        blurPool(texels, size);
     for (x86::reg32 y = 0; y < size; ++y)
         for (x86::reg32 x = 0; x < size; ++x)
         {
@@ -2824,9 +2922,15 @@ static void soften(std::vector<x86::reg8>& texels, x86::reg32 size, x86::reg32 l
                  * reads as a rectangle of opaque paint rather than a shadow
                  * (TODOs.md).  The corners of the picture are cut away by the
                  * radius, so no angle of the quad can show one. */
-                const float r = std::sqrt(px * px + py * py);
-                const float alpha = 1.0f - smoothStep(0.55f, 1.0f, r);
-                t[3] = x86::reg8(std::lround(255.0f * 0.85f * alpha));
+                /* 2026-11-17 again: an ellipse gone by 0.55 of the radius left
+                 * the cars all but without shadows -- the car stands over the
+                 * whole of what was dark, and only its faint rim showed beside
+                 * it.  So a rounder rectangle (a superellipse, kShadowRound),
+                 * dark out to kShadowSolid of the way and gone at the edge's
+                 * middle, its corners still cut away. */
+                const float r = std::cbrt(std::pow(std::fabs(px), kShadowRound) + std::pow(std::fabs(py), kShadowRound));
+                const float alpha = 1.0f - smoothStep(kShadowSolid, 1.0f, r);
+                t[3] = x86::reg8(std::lround(255.0f * kShadowDarkness * alpha));
                 continue;
             }
             // The pool and the streak: dimmed to nothing at the edge, the
@@ -2837,6 +2941,8 @@ static void soften(std::vector<x86::reg8>& texels, x86::reg32 size, x86::reg32 l
             for (int c = 0; c < 4; ++c)
                 t[c] = x86::reg8(std::lround(float(t[c]) * fade));
         }
+    if (picture == SoftenedPicture::Pool)
+        rebuildLevels(texels, size, levels);
 }
 
 void ThrashRenderer::setTextureData(x86::reg32, x86::reg32 address, const void* data, x86::reg32 largeMipmap,
@@ -2902,10 +3008,12 @@ void ThrashRenderer::setTextureData(x86::reg32, x86::reg32 address, const void* 
                                   static_cast<const x86::reg8*>(data) + texels * texelBytes);
     texture.shadow = false;
     texture.light = false;
+    texture.wetStreak = false;
     if (format == TF_ARGB_8888 && softenEffects())
     {
         const SoftenedPicture picture = glow16 ? SoftenedPicture::Glow : recognise(copied, size);
         texture.light = picture == SoftenedPicture::Glow;
+        texture.wetStreak = picture == SoftenedPicture::Streak;
         if (picture != SoftenedPicture::None && (picture != SoftenedPicture::Glow || lightGlowSetting() > 0.0f))
         {
             soften(copied, size, levels, picture);
@@ -2921,10 +3029,19 @@ void ThrashRenderer::setTextureData(x86::reg32, x86::reg32 address, const void* 
             texture.shadow = picture == SoftenedPicture::Shadow;
         }
     }
+    /* The game's other picture of a light on a wet road: a 4444 one, drawn
+     * added (red under a tail light) and blended (dark under the body) in long
+     * strips from each car down to the bottom of the view -- the red and dark
+     * smears behind every car in the rain by day (2026-11-17).  Known as glw4
+     * is, so native_thrash.cpp leaves it out by day as well. */
+    if (format == TF_ARGB_4444 && size == kWetLightSize
+        && texelHash(copied.data(), std::size_t(size) * size * texelBytes) == kWetLightHash)
+        texture.wetStreak = true;
     if (texture.index == m_texture)
     {
         m_textureShadow = texture.shadow;
         m_textureLight = texture.light;
+        m_textureWetStreak = texture.wetStreak;
     }
     if (format == TF_ARGB_1555)
     {

@@ -145,7 +145,7 @@ void stretchShadow(win32::WinApplication* app, win32::ThrashVertex (&v)[4])
 /* Port: a car's shadow fainter where the light is: in the rain (Weather,
  * [0x6fd4cc], under an overcast sky) and at night ([0x6fd4c8]), where the sun
  * the game casts it from is not shining.  Its corners' alpha, which the
- * shadow's own alpha is multiplied by, scaled by NFS_SHADOW_RAIN (0.55) and
+ * shadow's own alpha is multiplied by, scaled by NFS_SHADOW_RAIN (0.8) and
  * NFS_SHADOW_NIGHT (0.4), both together when both hold; 1 leaves it as in
  * daylight. */
 float shadowSetting(const char* name, float fallback)
@@ -155,14 +155,30 @@ float shadowSetting(const char* name, float fallback)
     return parsed >= 0.0f && parsed <= 1.0f ? parsed : fallback;
 }
 
+/* A lamp's streak on a wet road (glw4) by day: the game lays it under every
+ * car's lamps whether they are lit or not, so by day each tail light left a
+ * wet, trailing spot on the road behind it with no light to make it.  Not
+ * drawn unless it is night ([0x6fd4c8], kNight); its 4444 kin as well
+ * (thrashrenderer.cpp, kWetLightHash). */
+constexpr x86::reg32 kNight = 0x6fd4c8;
+constexpr x86::reg32 kWeather = 0x6fd4cc;
+
+bool unlitStreak(win32::WinApplication* app)
+{
+    const win32::ThrashRenderer* renderer = win32::glide2x::direct::thrashRenderer();
+    if (!renderer || app->getMemory<x86::reg32>(kNight) != 0)
+        return false;
+    return renderer->drawingWetStreak();
+}
+
 void dimShadow(win32::WinApplication* app, win32::ThrashVertex (&v)[4])
 {
-    static const float rain = shadowSetting("NFS_SHADOW_RAIN", 0.55f);
+    static const float rain = shadowSetting("NFS_SHADOW_RAIN", 0.8f);
     static const float night = shadowSetting("NFS_SHADOW_NIGHT", 0.4f);
     float scale = 1.0f;
-    if (app->getMemory<x86::reg32>(0x6fd4cc) != 0)
+    if (app->getMemory<x86::reg32>(kWeather) != 0)
         scale *= rain;
-    if (app->getMemory<x86::reg32>(0x6fd4c8) != 0)
+    if (app->getMemory<x86::reg32>(kNight) != 0)
         scale *= night;
     if (scale >= 1.0f)
         return;
@@ -396,7 +412,8 @@ struct Vertices
     {
         if (batched(slot, a))
         {
-            plainTriangle(a, b, c);
+            if (!unlitStreak(app))
+                plainTriangle(a, b, c);
             return true;
         }
         const win32::GrVertex va = (*this)(a), vb = (*this)(b), vc = (*this)(c);
@@ -408,6 +425,8 @@ struct Vertices
     {
         if (batched(kQuadDraw, a))
         {
+            if (unlitStreak(app))
+                return true;
             // the four once; each triangle's slots copied from them before rebasing
             win32::ThrashVertex v[4];
             batch(a, v[0]);

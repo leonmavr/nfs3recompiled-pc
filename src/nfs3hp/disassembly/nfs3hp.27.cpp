@@ -3,6 +3,9 @@
 
 namespace nfs3hp
 {
+// Port (tools/apply_tyre_marks.py): defined in native_skids.cpp.
+x86::reg32 tyreMarkBlocks();
+void skidLaid(win32::WinApplication* app);
 // Port (tools/apply_widescreen.py): defined in nfs3hp_main.cpp.
 bool widescreenMode(x86::reg32 width, x86::reg32 height);
 x86::reg32 dynamicSavedMode(x86::reg32 found, x86::reg32 width);
@@ -34539,7 +34542,7 @@ L_0x004c6df6:
     // 004c6dfc  83ff40                 +cmp edi, 0x40
     {
         x86::reg32 tmp1 = cpu.edi;
-        x86::reg32 tmp2 = x86::reg32(x86::sreg32(64 /*0x40*/));
+        x86::reg32 tmp2 = tyreMarkBlocks(); /* port (tools/apply_tyre_marks.py) */
         x86::reg32 result = tmp1 - tmp2;
         cpu.flags.cf = tmp1 < tmp2;
         cpu.flags.of = 1 & (tmp1 >> 31);
@@ -34566,7 +34569,7 @@ L_0x004c6e11:
     // 004c6e16  83f83f                 +cmp eax, 0x3f
     {
         x86::reg32 tmp1 = cpu.eax;
-        x86::reg32 tmp2 = x86::reg32(x86::sreg32(63 /*0x3f*/));
+        x86::reg32 tmp2 = tyreMarkBlocks() - 1; /* port (tools/apply_tyre_marks.py) */
         x86::reg32 result = tmp1 - tmp2;
         cpu.flags.cf = tmp1 < tmp2;
         cpu.flags.of = 1 & (tmp1 >> 31);
@@ -34805,6 +34808,7 @@ L_0x004c6edd:
     cpu.eax = app->getMemory<x86::reg32>(cpu.ebp + x86::reg32(-4) /* -0x4 */);
     // 004c6ee6  ff400c                 -inc dword ptr [eax + 0xc]
     (app->getMemory<x86::reg32>(cpu.eax + x86::reg32(12) /* 0xc */))++;
+    skidLaid(app); /* port: a piece of a tyre mark reshaded (tools/apply_tyre_marks.py) */
 L_0x004c6ee9:
     // 004c6ee9  89ec                   -mov esp, ebp
     cpu.esp = cpu.ebp;
@@ -35285,7 +35289,7 @@ void Application::sub_4c70f0(WinApplication* __restrict app, x86::CPU& cpu_)
     // 004c70f3  89e5                   -mov ebp, esp
     cpu.ebp = cpu.esp;
     // 004c70f5  ba00d00000             -mov edx, 0xd000
-    cpu.edx = 53248 /*0xd000*/;
+    cpu.edx = tyreMarkBlocks() * 0x340; /* port: the ring's size (tools/apply_tyre_marks.py) */
     // 004c70fa  b820025400             -mov eax, 0x540220
     cpu.eax = 5505568 /*0x540220*/;
     // 004c70ff  31db                   -xor ebx, ebx

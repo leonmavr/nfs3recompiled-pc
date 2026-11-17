@@ -38,6 +38,9 @@ void carSurface(bool on);
 /* Port: how wet the road is, 0 to 1 -- its darkening and its reflection
  * (ThrashRenderer::setWetRoad). */
 void wetRoad(float wetness);
+/* Port: whether the lights the game lays on a wet road are lit -- at night;
+ * by day they are left out (ThrashRenderer::setWetLightsLit). */
+void wetLightsLit(bool lit);
 /* The race's colour grade: a tint, a saturation and a contrast, each 1 for
  * none (the native THRASH renderer's whole-picture pass, NFS_GRADE). */
 /* Whether a race is being drawn (the haze and whole-picture pass are for it). */

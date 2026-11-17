@@ -532,7 +532,11 @@ writes it only where its alpha is at least 0.08 (`u_depthCut`) -- and for the
 world's batches (not the cars') at least 0.5 (`kDepthCutWorld`): a faint square
 of the world's still left its whole square in the depth buffer at 0.08, and the
 spray and the weather behind it showed as turned boxes cut out of them, in
-the rain and snow (TODOs.md, 2026-11-17).
+the rain and snow (TODOs.md, 2026-11-17). The cut discards what is under it,
+so a lamp's glow (`batch.light`) has none and writes no depth: the softened glow
+is 8888, the world's by its format, and all but its bright middle was cut
+away -- the tail lights unlit once a race got going, with no halo and no
+trails, and the brake lights barely there.
 
 ### Exhaust flames when gearing up
 
@@ -846,10 +850,19 @@ taken from the quad's plane, the corners keep their texture coordinates.
 
 Where the sun is not shining the shadow is fainter (`dimShadow`): in the rain,
 under its overcast sky (Weather, `0x6fd4cc`), its corners' alpha is scaled by
-`NFS_SHADOW_RAIN` (0.55), and at night (`0x6fd4c8`) by `NFS_SHADOW_NIGHT`
+`NFS_SHADOW_RAIN` (0.8), and at night (`0x6fd4c8`) by `NFS_SHADOW_NIGHT`
 (0.4) -- both together when both hold; 1 keeps the daylight shadow.
 
 ### Wet roads
+
+The game lays its own lights on a wet road: `glw4`, and a 64x64 4444 picture
+(texel hash `0xc4bb8dc1`, `kWetLightHash`) in long strips from every car down
+to the bottom of the view, added red under the tail lights -- lit or not. Both
+are flagged `wetStreak` and, by day (`0x6fd4c8` clear,
+`glide2x::wetLightsLit`), not drawn. A batch left undrawn
+(`skipDraw`) passes over its vertices too: before, the next batch drew them as
+its own -- the dark strips that stayed, and a skipped shadow
+(`NFS_CAR_SHADOW=0`) drawn with whatever texture followed it.
 
 With Weather on, on a track whose weather is rain (the `type` in its
 `3trNNw.hrz`; 2, snow, is left dry), the road is wet (`wetRoadTick`,
@@ -1510,6 +1523,48 @@ and timings are named constants at the top of the file. `NFS_KNOCK_TRACE=1`
 logs every touch; `NFS_KNOCK_TEST=1` (or `lamp`, `sign`) puts the player's
 car 12 m short of one, 4 s in, at 30 m/s.
 
+### Tyre marks
+
+The game lays a tyre mark as quads (`sub_4c6cb0`, from `sub_4db750` splitting
+a wheel's step) into a ring of blocks at `[0x560110]` -- 0x340 bytes each,
+`[0x7d5758]` in use, `[0x7d5754]` being filled; sixteen pieces a block, +0xc
+how many, their four corners from +0x10, which of `skd0`-`skd3` from +0x310,
+the alpha at each piece's start and end from +0x320 -- and draws them in
+`sub_4c6f00`. Nothing fades: a piece lasts until its block is taken again, and
+there were 64 blocks. `native_skids.cpp` (`tools/apply_tyre_marks.py`) makes
+the ring 256 blocks (the allocation at 0x4c70f5, the bounds at 0x4c6dfc and
+0x4c6e16) and, at `sub_4c6cb0`'s end (`skidLaid`), reshades the piece just
+laid by the nearest car's speed: 0.9 to 1.15 of its width about its middle,
+1.6 to 3.4 times its alpha (the game's was 28 of 255), full at 40 m/s; each
+piece a little lighter at random, one in twelve all but a gap, starting at the
+darkness the same wheel's last piece ended at. `skidFrame` fades a piece out
+over its last six seconds of `NFS_TYRE_MARKS_LIFE` (60). `NFS_TYRE_MARKS`
+(on; `0`/`off` the game's ring and shading). `NFS_TYRE_MARKS_TRACE=1` logs
+each piece.
+
+The game lays marks only for a slide. `skidPedals` (from `collisionEffects`,
+the first player's car) lays the port's own through `sub_4c6cb0` too
+(`guest::call`; the two pairs in scratch below the stack, 48 of 255 before
+`skidLaid`'s shading), on pavement only, 30 cm a piece: under the rear wheels
+while they spin -- full throttle pulling away in first below 8 m/s, or revved
+past half the redline below 12 m/s -- and under all four once the brake has
+been held past 0.55 for a second above 3 m/s. The handbrake (bit 0x04 of
+`0x79c33b`) makes a piece 1.7 times darker, and a wet road (`0x6fd4cc`) every
+piece 1.6 times: the wet road darkens the road, and its reflection is not
+added over what lies on the road half seen (alpha under 0.98), so the marks
+show in the rain. The game's first block of a race is filled twice over, so a
+race's first sixteen pieces are not kept.
+
+### Steering in the air
+
+`airSteer` (`native_surface.cpp`): while the player's car has been off its
+wheels for four ticks or more (`+0x164`), its spin about its own up axis
+(`+0xcc`; the world's spin at `+0xe4` and the car's own second component at
+`+0x4fc`, as `airRoll` keeps them) eases towards the steering byte
+(`0x79c338`, -127 to 127) times 0.9 rad/s, with a third of a second to get
+there -- right is positive, as on the ground. `NFS_AIR_STEER` (1; up to 3,
+`0`/`off` none).
+
 ### Crashes you feel
 
 How hard a car was hit is the game's own number: `sub_42ac40`, each car's
@@ -1742,6 +1797,7 @@ what is installed and takes cars out:
 
     python3 tools/import_car.py build/game --list
     python3 tools/import_car.py build/game --remove clk2 clk3 --backup /tmp
+    python3 tools/import_car.py build/game --dedupe --backup /tmp --dry-run
 
 `--list` prints every folder with its four-letter code, its ID and its make and
 model, and marks the folders that are another's duplicate — two imports of the
@@ -1749,9 +1805,21 @@ same car, which the menus show as two identical entries.
 `--remove` zips each folder whole into `--backup` (the system's temporary
 folder by default) before deleting it, and takes its line out of
 `gamedata/carorder.txt` with it, so nothing is lost and the order of the rest is
-kept. The cars it was used on: `clk2` (the plain CLK-GTR) and `clk3` (a second
-copy of the liveried one, `clkg` kept), `chev` (the Camaro, `cama` kept), `d24z`
-(the Datsun, `dats` kept) and `lstm` (the Lister Storm, `lst2` kept).
+kept.
+
+`--dedupe` does that for every duplicate at once: the folders whose texts name
+the same make and model are one car — the importer gives each copy a code and an
+ID of its own, and those are all that tell them apart — and **the copy installed
+first is kept, the lowest car ID**, which is the game's own car where one of the
+pair is one (`ff50` the F50, `merc` the CLK-GTR) and otherwise the earlier
+download. It prints the pair before acting, and takes the rest out exactly as
+`--remove` does, so `--backup` and `--dry-run` mean the same. It was used on
+`cc5r`/`chev` (the Corvette C5R), `clio`/`rena` (the Clio V6), `clkg`/`merc`
+(the CLK-GTR), `ff50`/`nfs3` (the F50), `suba`/`impw` (the Impreza WRC) and
+`peug`/`p206` (the 206 WRC): 54 folders to 48 cars, none a duplicate.
+The cars `--remove` was used on by hand: `clk2` and `clk3` (two more CLK-GTRs),
+`chev` (the Camaro, `cama` kept), `d24z` (the Datsun, `dats` kept) and `lstm`
+(the Lister Storm, `lst2` kept).
 
 **Where a new car goes in the list.** The game numbers its cars by the order
 it finds their folders, and that number is what the settings keep: the
@@ -2229,7 +2297,7 @@ the next time the game starts.
 | `NFS_HEADLIGHT_REACH`, `NFS_HEADLIGHT_WIDTH` | `2`, `1.4` | How far the headlights' patch on the road reaches and how wide it is, against the original's (0.25 to 4; `1` and `1` are the original). |
 | `NFS_SOFT_EFFECTS` | on | `0`: the headlights' pool, the wet road's light streaks and the cars' shadows as the game draws them, hard-edged. |
 | `NFS_SHADOW_STRETCH` | `0.7` | How far a car's shadow is stretched away from the sun, in its own half sizes (0 to 3; `0` the original). |
-| `NFS_SHADOW_RAIN`, `NFS_SHADOW_NIGHT` | `0.55`, `0.4` | How strong a car's shadow is in the rain and at night, against daylight (0 to 1; `1` unchanged). |
+| `NFS_SHADOW_RAIN`, `NFS_SHADOW_NIGHT` | `0.8`, `0.4` | How strong a car's shadow is in the rain and at night, against daylight (0 to 1; `1` unchanged). |
 | `NFS_WET_ROADS` | `1` | How wet the road is in the rain -- darker, puddled, reflecting (0 to 2; `0` never). |
 | `NFS_ORIENTATION` | unset | `auto` allows both landscape directions; anything else pins one. Must be set before `SDL_Init`. |
 | `NFS_CAR_DETAIL_FULL` | on | With Car Detail at High, every car keeps its detailed model and the player's texture size out to the draw distance, in every view, and the limit on how many are drawn at once is lifted. `0` restores the original. |
@@ -2285,6 +2353,9 @@ the next time the game starts.
 | `NFS_LAMP_MASS` | `1` | Times 70 kg: the same for a lamp post. |
 | `NFS_KNOCK_RESPAWN` | `10` | Seconds before a knocked-down tree or lamp post stands again. |
 | `NFS_CRASH_SHAKE` | `2` | How hard the camera shakes and vibrates on a hit, a scrape or a hard landing; up to `3`, `0`/`off` for none (Crashes you feel). |
+| `NFS_TYRE_MARKS` | on | `0`/`off`: the game's tyre marks, faint and kept until 64 blocks of them are used (Tyre marks). |
+| `NFS_TYRE_MARKS_LIFE` | `60` | Seconds a tyre mark lasts, fading over its last six. |
+| `NFS_AIR_STEER` | `1` | How much the steering turns the player's car in the air; up to `3`, `0`/`off` none (Steering in the air). |
 | `NFS_CRASH_SOUND` | on | `0`/`off`: the game's crash and scrape sounds as they were, none of the port's crash, no pitch by the hit. |
 | `NFS_AIR_ROLL_DAMP` | on (`1`) | `0`/`off`: cars keep their roll in the air, as the game has it. A number up to 3: how fast it dies away (Cars roll less in the air). |
 | `NFS_AIR_SPEED` | on | `0`/`off`: a car off its wheels is dragged down by the game, as it has it, so a jump costs speed the ramp never took. On, the speed it took off with is put back each tick, its fall left to gravity; a hit in the air still loses what a hit loses (Cars keep their speed in the air). |
