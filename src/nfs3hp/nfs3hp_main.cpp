@@ -2504,7 +2504,9 @@ float wetnessSetting()
     return setting;
 }
 
-bool trackRains(x86::reg32 track)
+/* The file's own: the port's own weather, which native_particles.cpp asks for
+ * through trackRains() below. */
+bool rainsOn(x86::reg32 track)
 {
     static x86::reg32 known = 0xffffffff;
     static bool rains = false;
@@ -2532,7 +2534,7 @@ void wetRoadTick(win32::WinApplication* app)
 {
     float wetness = 0.0f;
     if (nfs3hp::raceIsRunning() && app->getMemory<x86::reg32>(0x6fd4cc) != 0)
-        wetness = trackRains(app->getMemory<x86::reg32>(0x6fd4ac)) ? wetnessSetting() : 0.0f;
+        wetness = rainsOn(app->getMemory<x86::reg32>(0x6fd4ac)) ? wetnessSetting() : 0.0f;
     win32::glide2x::wetRoad(wetness);
 }
 
@@ -3547,3 +3549,13 @@ Java_dev_nfs3hp_port_NFS3Activity_nativeSetGamepadSlots(JNIEnv* env, jclass, jst
         env->ReleaseStringUTFChars(second, b);
 }
 #endif
+
+namespace nfs3hp
+{
+/* Whether the track it names rains or snows, for what the port drops out of the
+ * sky as its own (native_particles.cpp's throwWeather). */
+bool trackRains(x86::reg32 track)
+{
+    return rainsOn(track);
+}
+}  // namespace nfs3hp

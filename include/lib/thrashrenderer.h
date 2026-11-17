@@ -24,6 +24,13 @@ static_assert(sizeof(ThrashVertex) == 32, "the attribute offsets in thrashrender
 
 struct ThrashDraw;
 
+/* NFS_SPRITE_TRACE: the frame being drawn, and whether it drew anything the
+ * trace flagged (a sprite over the view, a turned quad with no alpha to cut it
+ * out).  The renderer's present() keeps the frames that did, as pictures beside
+ * the trace, so that a line of it can be *seen*. */
+extern bool traceFrameInteresting;
+extern x86::reg32 traceFrameNumber;
+
 /* The native THRASH driver's renderer: what the game draws through voodoo2a,
  * straight to OpenGL ES, with nothing of the Voodoo2 emulated under it.
  *
@@ -168,6 +175,8 @@ private:
         int format;             // 0 RGBA8, 1 565, 2 1555, 3 4444: how the chroma key compares
         bool wrapS, wrapT;
         bool zTest, zTestAlways, zBuffer, alphaBlend, cull, chromaKey;
+        x86::reg32 chromaKeyColor;   // the key it is cut out by: each sheet has its own
+        float alphaRef;              // and what it is cut out at, which each material sets too
         x86::reg32 cullMode;
         x86::reg32 clipMinX, clipMinY, clipMaxX, clipMaxY;
         float gamma;
@@ -180,6 +189,15 @@ private:
         bool car;               // a car's or an effect's: 0 into the picture's alpha (postProcess's shadows)
         bool decal;             // a car's shadow on the road: no depth, the road's alpha kept
         bool light;             // a lamp's glow: drawn into the light layer too (initPost)
+        /* A quad or two that covers a quarter of the view and more: a sprite
+         * drawn over the view, never a piece of the track.  NFS_SPRITE_TRACE
+         * logs it, NFS_TEXTURE_DUMP saves its picture (flush, draw). */
+        bool suspicious = false;
+        /* A car's shadow with NFS_CAR_SHADOW=off: in the list, not in the
+         * picture. */
+        bool skipDraw = false;
+        /* How bright the picture is, 0 to 1: for the sprite trace. */
+        float textureMean = 0.0f;
     };
     friend struct ThrashDraw;
 
@@ -195,6 +213,7 @@ private:
         int format;
         bool shadow;            // a car's shadow (the port's softening, thrashrenderer.cpp)
         bool light;             // a lamp's glow, glw0 or glw3 (the light layer, thrashrenderer.cpp)
+        float meanLuma = 0.0f;  // how bright its picture is, for NFS_SPRITE_TRACE
     };
 
     void initGl();
@@ -280,6 +299,7 @@ private:
     float                   m_surfaceStrength = 0.0f; // NFS_OBJECT_DETAIL; 0 for none
     bool                    m_sharpen = false;        // NFS_TEXTURE_SHARP
     float                   m_carShine = 0.0f;        // NFS_CAR_SHINE
+    float                   m_textureMean = 0.0f;     // the selected picture's brightness, for the trace
     bool                    m_depth16;
     bool                    m_makeMipmaps = false;  // levels made for the textures (initGl)
 

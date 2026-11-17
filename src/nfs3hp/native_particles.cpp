@@ -62,6 +62,10 @@
 namespace nfs3hp
 {
 
+/* Whether the track it names rains or snows (nfs3hp_main.cpp, the weather's
+ * "type" in its 3trNNw.hrz: 1 rain, 2 snow). */
+bool trackRains(x86::reg32 track);
+
 namespace
 {
 
@@ -84,6 +88,10 @@ struct Particle
 
 constexpr std::size_t kMost = 2400;
 std::vector<Particle> s_particles;
+/* How many flakes and drops are in the air: a storm makes a great many, and
+ * they are not to crowd the dust, the smoke and the sparks out of the pool. */
+std::size_t s_weatherCount = 0;
+constexpr std::size_t kMostWeather = 900;
 
 /* An exhaust flame: which of the car's exhausts it burns at, in the car's own
  * space, and how far through its second of life it is.  It does not move --
@@ -161,14 +169,27 @@ float smokeSetting()
     return value;
 }
 
-/* The wheels' spray off a wet road (kind 10, throwSpray): NFS_WHEEL_SPRAY,
- * off by default (the weather's flakes and drops still show as small turned
- * squares with it, TODOs.md); 1 or on for the port's. */
+/* The weather's own flakes and drops (kinds 7 and 8, throwWeather): what falls
+ * is the port's, NFS_WEATHER_PARTICLES on; the game's pictures there are squares
+ * cut out of nothing (TODOs.md), a translucent box round every flake. */
+bool weatherSetting()
+{
+    static const bool value = [] {
+        const char* text = SDL_getenv("NFS_WEATHER_PARTICLES");
+        return !(text && (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0));
+    }();
+    return value;
+}
+
+/* The wheels' spray off a wet road (kind 10, throwSpray): NFS_WHEEL_SPRAY, on;
+ * 0 or off for none.  It was off while the game's own spray still showed as
+ * turned squares; the game's sprites are no longer drawn at all
+ * (gameSprites()), so the port's is what a wet road throws. */
 bool spraySetting()
 {
     static const bool value = [] {
         const char* text = SDL_getenv("NFS_WHEEL_SPRAY");
-        return text && (SDL_strcmp(text, "1") == 0 || SDL_strcasecmp(text, "on") == 0);
+        return !(text && (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0));
     }();
     return value;
 }
@@ -337,6 +358,52 @@ void throwSmoke(const float at[3], const float velocity[3])
         m.type = EffectParticle::Smoke;
         add(m);
     }
+}
+
+/* What falls out of the sky, off the game's own flakes and drops (kinds 7 and
+ * 8): a raindrop is a short bright streak, a snowflake a small soft speck, both
+ * where the game made its own and moving as it had it -- its speed and its size
+ * as it gave them.  Rain or snow is the track's (the "type" in its
+ * 3trNNw.hrz, 1 rain and 2 snow).  The game's pictures of them are squares with
+ * nothing cutting them out, so a flake that came near the lens was a box of
+ * dimmed picture over the view. */
+void throwWeather(win32::WinApplication* app, const float at[3], const float velocity[3], float scale)
+{
+    if (s_weatherCount >= kMostWeather)
+        return;   // as many as the pool keeps of them
+    ++s_weatherCount;
+    bool rains = true;   // without a track of its own, the weather is the rain's
+    if (const x86::reg32 track = app->getMemory<x86::reg32>(0x6fd4ac))
+        rains = trackRains(track);
+    Particle w{};
+    for (int i = 0; i < 3; ++i)
+    {
+        w.p[i] = at[i];
+        w.origin[i] = at[i];
+        w.v[i] = velocity[i];
+    }
+    w.seed = random01();
+    w.noGround = true;
+    w.alpha = rains ? randomRange(0.5f, 0.85f) : randomRange(0.6f, 0.95f);
+    if (rains)
+    {
+        w.life = randomRange(0.35f, 0.7f);
+        w.size = SDL_clamp(scale, 0.004f, 0.03f);
+        w.colour[0] = 0.72f;
+        w.colour[1] = 0.78f;
+        w.colour[2] = 0.9f;
+        w.type = EffectParticle::Droplet;
+    }
+    else
+    {
+        w.life = randomRange(1.2f, 2.6f);
+        w.size = SDL_clamp(scale, 0.01f, 0.06f);
+        w.colour[0] = 0.94f;
+        w.colour[1] = 0.96f;
+        w.colour[2] = 1.0f;
+        w.type = EffectParticle::Flake;
+    }
+    add(w);
 }
 
 /* One flame out of one of a car's exhausts, where the marking tool put it, in
@@ -585,6 +652,9 @@ void throwSpark(const float at[3], const float velocity[3])
 
 void move(float dt)
 {
+    s_weatherCount = 0;
+    for (const Particle& q : s_particles)
+        s_weatherCount += q.type == EffectParticle::Droplet || q.type == EffectParticle::Flake ? 1 : 0;
     for (Flame& flame : s_flames)
         flame.age += dt;
     s_flames.erase(std::remove_if(s_flames.begin(), s_flames.end(),
@@ -599,12 +669,16 @@ void move(float dt)
                            : q.type == EffectParticle::Spark ? 0.4f
                            : q.type == EffectParticle::Blade ? 1.8f   // a blade flutters down
                            : q.type == EffectParticle::Smoke ? 1.15f
+                           : q.type == EffectParticle::Droplet ? 0.2f   // it falls as it was thrown
+                           : q.type == EffectParticle::Flake ? 1.2f     // a flake drifts
                                                              : 0.9f;
         /* Smoke has no ground to fall to and nothing weighing it down: it rises,
          * slowing and spreading, until it is gone. */
-        const float gravity = q.type == EffectParticle::Puff    ? -0.15f
-                              : q.type == EffectParticle::Smoke ? -0.5f
-                                                                : 9.8f;
+        const float gravity = q.type == EffectParticle::Puff     ? -0.15f
+                              : q.type == EffectParticle::Smoke  ? -0.5f
+                              : q.type == EffectParticle::Droplet ? 9.8f
+                              : q.type == EffectParticle::Flake  ? 0.8f
+                                                                 : 9.8f;
         const float keep = std::exp(-drag * dt);
         for (int i = 0; i < 3; ++i)
             q.v[i] *= keep;
@@ -794,7 +868,14 @@ bool particleTakeOver(win32::WinApplication* app, x86::CPU& cpu)
         if (groundAt(app, here) == 1)
             kind = 5;
     }
-    if (s_inner || (kind != 2 && kind != 3 && kind != 5 && kind != 6 && kind != 10) || setting() <= 0.0f
+    if (kind == 7 || kind == 8)
+    {
+        if (!weatherSetting())
+            return false;   // the game's own pictures
+    }
+    if (s_inner
+        || (kind != 2 && kind != 3 && kind != 5 && kind != 6 && kind != 7 && kind != 8 && kind != 10)
+        || setting() <= 0.0f || (kind == 6 && smokeSetting() <= 0.0f)
         || !win32::glide2x::effectParticlesDrawn() || (kind == 10 && !spraySetting()))
         return false;
     if (app->getMemory<x86::reg32>(0x6fd3b0) == 1)
@@ -824,6 +905,8 @@ bool particleTakeOver(win32::WinApplication* app, x86::CPU& cpu)
     }
     if (kind == 10)
         throwSpray(app, at, velocity);
+    else if (kind == 7 || kind == 8)
+        throwWeather(app, at, velocity, argument(app, cpu, 3));
     else if (kind == 6)
         throwSmoke(at, velocity);
     else if (kind == 2 || kind == 5)
@@ -932,17 +1015,29 @@ void noteTrail(win32::WinApplication* app, x86::sreg32 clock)
     }
 }
 
-}  // namespace
+/* The frame's particles, for every view of it -- the main one and, behind the
+ * car, the rear-view mirror's: the alpha-blended ones (grains, puffs, smoke, a
+ * strip's spikes) into the first, in the order drawParticles draws them, and
+ * the added ones (sparks, streaks, flames and the light they throw) into the
+ * second. */
+std::vector<EffectParticle> s_out;
+std::vector<EffectParticle> s_sparks;
+std::vector<std::array<float, 3>> s_teeth;   // Hot Pursuit's spike strips, drawn with them
+bool s_showTrails = false;                  // this frame's slipstream air lines
+bool s_showFlames = false;                  // and its exhaust flames
+bool s_frameOn = false;                     // anything to draw at all
 
-void particlesFrame(win32::WinApplication* app, x86::reg32 view)
+bool deeper(const EffectParticle& a, const EffectParticle& b)
 {
-    // Hot Pursuit's spike strips, their spikes drawn with the particles.
-    std::vector<std::array<float, 3>> teeth;
-    pursuitFrame(app, teeth);
-    const bool trails = trailsOn() && app->getMemory<x86::reg32>(0x6fd3b0) != 1;
-    const bool flames = exhaustFlamesOn();
-    if (setting() <= 0.0f && teeth.empty() && !trails && !flames)
-        return;
+    return a.depth > b.depth;   // back to front
+}
+
+/* The frame's particles moved on and made: once a frame, before any view of it
+ * is turned into the picture. */
+void frameParticles(win32::WinApplication* app)
+{
+    const bool trails = s_showTrails;
+    const bool flames = s_showFlames;
     auto f = [app](x86::reg32 address) { return app->getMemory<float>(address); };
     const x86::sreg32 clock = x86::sreg32(app->getMemory<x86::reg32>(0x7d3684));
     if (s_clock < 0 || clock < s_clock || clock - s_clock > 64)
@@ -981,7 +1076,17 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
             tyreSmoke(app, dt);
         }
     }
+}
 
+/* The frame's particles and flames in one view: its camera (at +0x38 of the
+ * view's record) and its matrix (+0x44) turn where each one is into that view's
+ * space, and the projection ([0x56009c..a8], set for the pass) into the
+ * picture.  The alpha-blended ones go to s_out, the added ones to s_sparks. */
+void projectParticles(win32::WinApplication* app, x86::reg32 view)
+{
+    auto f = [app](x86::reg32 address) { return app->getMemory<float>(address); };
+    const bool trails = s_showTrails;
+    const x86::sreg32 clock = x86::sreg32(app->getMemory<x86::reg32>(0x7d3684));
     const float* m = &app->getMemory<float>(view + 0x44);
     const float t[3] = { f(view + 0x38), f(view + 0x3c), f(view + 0x40) };
     const float k1 = f(0x56009c), k2 = f(0x5600a0), c1 = f(0x5600a4), c2 = f(0x5600a8);
@@ -995,8 +1100,7 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
         sy = k2 * y / z + c2;
         return true;
     };
-    std::vector<EffectParticle> out, sparks;
-    out.reserve(s_particles.size());
+    s_out.reserve(s_out.size() + s_particles.size());
     const float scale = std::fabs(k1);
     for (Particle& q : s_particles)
     {
@@ -1016,6 +1120,35 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
         e.seed = q.seed;
         e.type = float(q.type);
         const float left = 1.0f - q.age / q.life;
+        if (q.type == EffectParticle::Droplet)
+        {
+            // A drop is a short bright streak from where it was a frame ago.
+            e.r = q.colour[0];
+            e.g = q.colour[1];
+            e.b = q.colour[2];
+            e.a = q.alpha * near;
+            e.size = SDL_max(0.8f, scale * q.size / z);
+            if (q.hasLast)
+            {
+                e.tx = q.last[0];
+                e.ty = q.last[1];
+            }
+            else
+            {
+                const float back[3] = { q.p[0] - q.v[0] * 0.03f, q.p[1] - q.v[1] * 0.03f, q.p[2] - q.v[2] * 0.03f };
+                float bz;
+                if (!project(back, e.tx, e.ty, bz))
+                {
+                    e.tx = e.x;
+                    e.ty = e.y;
+                }
+            }
+            q.last[0] = e.x;
+            q.last[1] = e.y;
+            q.hasLast = true;
+            s_sparks.push_back(e);
+            continue;
+        }
         if (q.type == EffectParticle::Spark)
         {
             // White hot to yellow, orange and a dull red as it cools.
@@ -1043,7 +1176,7 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
             q.last[0] = e.x;
             q.last[1] = e.y;
             q.hasLast = true;
-            sparks.push_back(e);
+            s_sparks.push_back(e);
             continue;
         }
         // A grain's quad is twice it: on grass the renderer draws a blade in it.
@@ -1061,7 +1194,7 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
         float oz;
         if (q.noGround || !project(q.origin, e.tx, e.ty, oz))
             e.tx = e.ty = -1.0f;
-        out.push_back(e);
+        s_out.push_back(e);
     }
     /* The road under each car's wheels, for the light its flames throw on it: a
      * wheel's contact point is at +0x304, 0x78 bytes each, and the lowest of the
@@ -1124,7 +1257,7 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
         e.seed = flame.seed;
         e.type = float(EffectParticle::Flame);
         e.tx = e.ty = -1.0f;
-        sparks.push_back(e);
+        s_sparks.push_back(e);
         if (!(light > 0.0f))
             continue;
         const float pool[3] = { at[0], groundOf(flame.car) + 0.04f, at[2] };
@@ -1145,13 +1278,13 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
         glow.seed = flame.seed;
         glow.type = float(EffectParticle::Glow);
         glow.tx = glow.ty = -1.0f;
-        sparks.push_back(glow);
+        s_sparks.push_back(glow);
     }
-    for (std::size_t k = 0; k < teeth.size(); ++k)
+    for (std::size_t k = 0; k < s_teeth.size(); ++k)
     {
         EffectParticle e{};
         float z = 0.0f;
-        if (!project(teeth[k].data(), e.x, e.y, z))
+        if (!project(s_teeth[k].data(), e.x, e.y, z))
             continue;
         // A spike and its belt, 12 cm, its quad round its middle, a little up.
         e.depth = z;
@@ -1162,7 +1295,7 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
         e.seed = float(k % 7) / 7.0f;
         e.type = float(EffectParticle::Spike);
         e.tx = e.ty = -1.0f;
-        out.push_back(e);
+        s_out.push_back(e);
     }
     /* The air trails: each strand's pieces between two frames' points a thin
      * streak, narrow at its newest end and wider towards its oldest, fading
@@ -1190,12 +1323,117 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
             e.r = e.g = e.b = 1.0f;
             e.a = alpha * smoothStep(1.5f, 3.0f, e.depth);
             e.type = float(EffectParticle::Streak);
-            sparks.push_back(e);
+            s_sparks.push_back(e);
         }
     }
-    std::sort(out.begin(), out.end(), [](const EffectParticle& a, const EffectParticle& b) { return a.depth > b.depth; });
-    out.insert(out.end(), sparks.begin(), sparks.end());
-    win32::glide2x::effectParticles(std::move(out));
+}
+
+/* Both views' particles to the renderer: the blended ones first, back to front
+ * in each view, then the added ones. */
+void handOver()
+{
+    std::vector<EffectParticle> all;
+    all.reserve(s_out.size() + s_sparks.size());
+    all.insert(all.end(), s_out.begin(), s_out.end());
+    all.insert(all.end(), s_sparks.begin(), s_sparks.end());
+    win32::glide2x::effectParticles(std::move(all));
+}
+
+}  // namespace
+
+/* Whether the port draws the weather's flakes and drops itself (NFS_WEATHER_PARTICLES):
+ * native_vertices.cpp leaves a particle that comes onto the camera out of the
+ * game's splash when it does. */
+bool ownWeather()
+{
+    return weatherSetting();
+}
+
+/* Whether the game's own particle sprites are drawn at all (NFS_GAME_SPRITES):
+ * off by default, and native_vertices.cpp then draws none of them -- neither
+ * the pool's quads (particlesNative) nor the drops on the view (dropsNative).
+ * Every picture in the game's particle set is a 565 texel with no alpha of its
+ * own and nothing cuts it out (TECHNICAL.md), and the pool turns each quad to
+ * its particle's spin (+0x38, +0x3c), so each one was a turned square of
+ * picture over the view, brighter or dimmer than what was behind it, the
+ * flakes and drops that come onto the camera worst of all.  Nothing the port
+ * needs goes through that path: the dust, the grass, the spray, the smoke, the
+ * exhaust flames and the weather are all made and drawn by this file, and with
+ * the game's kinds taken over (particleTakeOver) it has none of its own to draw.
+ *
+ * They are drawn anyway wherever the port leaves a kind to the game -- its own
+ * particles off, one of their switches off, or split screen, where every kind
+ * is the game's -- since something is better than nothing, the squares and all.
+ * `NFS_GAME_SPRITES=1`/`on` brings them back everywhere, for a comparison. */
+bool gameSprites(win32::WinApplication* app)
+{
+    static const bool forced = [] {
+        const char* text = SDL_getenv("NFS_GAME_SPRITES");
+        return text && (SDL_strcmp(text, "1") == 0 || SDL_strcasecmp(text, "on") == 0);
+    }();
+    return forced || setting() <= 0.0f || smokeSetting() <= 0.0f || !weatherSetting() || !spraySetting()
+        || app->getMemory<x86::reg32>(0x6fd3b0) == 1;
+}
+
+void particlesFrame(win32::WinApplication* app, x86::reg32 view)
+{
+    s_frameOn = false;
+    s_out.clear();
+    s_sparks.clear();
+    s_teeth.clear();
+    /* The drops the game puts on the view (0x7f0bd0, 200 a player, drawn by
+     * sub_4cb750): while the game's sprites are not drawn, one is a turned
+     * rectangle of blurred picture over the view and nothing may show it, so
+     * they are cleared once a frame and the splash that made them splashes
+     * nothing -- whatever path drew them, the weather on the lens is the port's
+     * own particles (throwWeather). */
+    if (!gameSprites(app))
+    {
+        x86::reg32 live = 0;
+        for (int player = 0; player < 2; ++player)
+        {
+            for (int drop = 0; drop < 200; ++drop)
+            {
+                const x86::reg32 address = 0x7f0bd0 + x86::reg32(player) * 0x3200 + x86::reg32(drop) * 0x40;
+                if (app->getMemory<x86::reg32>(address) != 0)
+                    ++live;
+                app->getMemory<x86::reg32>(address) = 0;
+            }
+        }
+        /* NFS_SPRITE_TRACE: how many the game had made, once each time there
+         * are any -- the splash (sub_4ca500), and so the game's own particle
+         * drawing, is what makes them. */
+        static const bool traced = SDL_getenv("NFS_SPRITE_TRACE") != nullptr;
+        static x86::reg32 s_wasLive = 0;
+        if (traced && live != 0 && s_wasLive == 0)
+            SDL_Log("[SPRITE] the drops on the view: %u live, cleared", unsigned(live));
+        s_wasLive = live;
+    }
+    pursuitFrame(app, s_teeth);   // Hot Pursuit's spike strips, their spikes drawn with them
+    s_showTrails = trailsOn() && app->getMemory<x86::reg32>(0x6fd3b0) != 1;
+    s_showFlames = exhaustFlamesOn();
+    if (setting() <= 0.0f && s_teeth.empty() && !s_showTrails && !s_showFlames)
+        return;
+    // The clock's state and what the cars and the engines make, once a frame.
+    frameParticles(app);
+    s_frameOn = true;
+    projectParticles(app, view);
+    std::sort(s_out.begin(), s_out.end(), deeper);
+    handOver();
+}
+
+/* The rear-view mirror: the same particles, in the mirror's own view, so that
+ * what burns or smokes behind the car is behind it in the mirror too.  Called
+ * for a frame's views after the first (the mirror's record is the main one's
+ * +0x54), once the main view has made them. */
+void particlesMirrorFrame(win32::WinApplication* app, x86::reg32 view)
+{
+    if (!s_frameOn || !view)
+        return;
+    const std::size_t from = s_out.size();
+    projectParticles(app, view);
+    std::sort(s_out.begin() + std::ptrdiff_t(from), s_out.end(), deeper);
+    handOver();
 }
 
 }  // namespace nfs3hp

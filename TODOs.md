@@ -17,13 +17,54 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 - [ ] Rain on the windscreen/camera: drops and streaks that clear at speed.
 - [x] Sun glare by day with no weather: a haze and lens ghosts round the sun,
   dimmed behind what stands in front of it (`NFS_SUN_GLARE`).
+- [x] The weather's own flakes and drops drawn as blocky, translucent squares.
+  - Done (`NFS_WEATHER_PARTICLES`, on): kinds 7 and 8 are the port's own now --
+    a raindrop a short bright streak, a snowflake a small soft speck, falling as
+    the game threw them, rain or snow by the track's weather. The game's
+    pictures had no alpha and were cut out by nothing, so a flake near the lens
+    was a box of dimmed picture over the view. `NFS_SPRITE_TRACE=1` prints what
+    every kind of draw is cut out by, for the other squares.
 - [x] Wheel spray in the rain: mist behind every car on wet roads.
-  - BUG (why `NFS_WHEEL_SPRAY` is off by default): with the port's spray on,
-    the weather's particles (snowflakes, raindrops) still draw as small,
-    turned dark squares -- smaller since the depth and puff-edge fixes, but
-    there. Next time: replace the weather's own on-screen particles with the
-    port's -- small droplets that refract the picture behind them (rain) or
-    small organic frost specks (snow) -- rather than chase the game's sprites.
+  - Done (`NFS_WHEEL_SPRAY`, on): a pale mist that billows out behind the
+    wheel and hangs a moment, and fine drops thrown up, both more the faster.
+    It was off while the game's own sprites still showed as turned squares;
+    the game's particle sprites are not drawn any more, so the port's spray is
+    what a wet road throws.
+- [x] The turned squares over the view in the rain and snow (the game's own
+  particle sprites).
+  - Done (`NFS_GAME_SPRITES`, off): nothing the game draws of its particle set
+    is drawn any more -- neither the pool's quads, which its pictures (565,
+    no alpha) and the pool's own spin turned into squares of dimmed picture,
+    nor the drops that land on the camera, which were turned rectangles of
+    blurred view (the dark rectangles in the screenshot of 2026-11-17).
+    Everything the port draws itself (dust, grass, spray, smoke, exhaust
+    flames, weather) is unaffected; the game's are still drawn where it leaves
+    a kind to the game (its particles off, a switch off, split screen), and
+    `1`/`on` brings them back everywhere for a comparison.
+  - Why it took four tries: `particlesNative` and `dropsNative` asked for the
+    race's own single precision (`singlePrecision`), and a race's FPU is
+    extended by default, so the generated code did the drawing in every race
+    and none of the fixes in the native versions ever ran. They now draw under
+    `drawingPrecision` (drawing only, no simulation state) -- worth remembering
+    for anything else that only draws.
+- [x] Turned boxes round the spray and the snowflakes/drops, moving, in rain
+  and snow (2026-11-17, after the fixes above).
+  - Found: not a picture at all but a hole. A faint blended square of the
+    world's wrote its whole square into the depth buffer (only fragments under
+    alpha 0.08 were kept out), nearer than what was behind it, and the port's
+    spray and weather -- depth-tested against that buffer -- were cut away in
+    its shape. With the particles drawn untested the boxes went; with a higher
+    cut for the world's batches alone they went too, and not with it for the
+    cars' alone. A world batch now writes depth only where it is at least half
+    opaque (`kDepthCutWorld`, `thrashrenderer.cpp`); the cars' keep 0.08.
+- [x] A turned black rectangle over the road in some races (2026-11-17).
+  - Found: the port's own car-shadow mask, a **rounded square** -- `shad`'s
+    picture is opaque to within three texels of its edge, and a squircle of it
+    is still a square the size of a car, so a car near the camera cast a turned
+    translucent rectangle on the road instead of a shadow. Its alpha is a soft
+    ellipse now, and `NFS_CAR_SHADOW=0` leaves the cars with no shadow at all.
+    (`NFS_SPRITE_TRACE` + `NFS_TEXTURE_DUMP=/tmp/tex` trace every sprite the
+    game draws, with its box and its picture -- the tools that found it.)
 - [ ] Tyre marks that last the lap, darker and softer than the game's.
 - [x] Tyre smoke on wheelspin and lock-up, taken over from the game's kind 6
   and made procedural.
@@ -108,7 +149,7 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   - Done: the world smeared away from the screen's centre by speed over its
     distance (from the depth buffer), from 10 m/s, whole from 35; the cars
     stay sharp (`NFS_MOTION_BLUR`, 2).
-- [ ] Exhaust flames; when gearing up transmission, eject exhaust flames behind
+- [x] Exhaust flames; when gearing up transmission, eject exhaust flames behind
   each exhaust of each cars. However before doing that, exhaust positions
   (notice that exhausts are symmetrical in terms of width axis) will need to be
   marked by a human; number and size of each and flame color. We will need a car
@@ -136,6 +177,10 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     (`NFS_FLAME_LIGHT`).
   - Done: a hard downshift, and lifting off at the top of the revs, pop half a
     flame out of one exhaust at a time -- a real car's overrun crackle.
+- [ ] The headlights light up in front of the car well but show some explicit
+  narrow beam brighter cones. These narrow cones shouldn't show up. The tail
+  lights are also draw as 'wet trailing spots' on the road when they're turned
+  off - disable this.
 
 ### Races/locations
 
@@ -370,18 +415,31 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     trees and lamp posts is guessed from their models' size.
 - [ ] More paint types; iridescent, glossy, chrome, matte. However when
   selecting paint > custom, you will need a UI arrow and list to choose it.
-- [ ] BUG: some cars like CLK-GTR have 3 entries or duplicates, remove
+- [x] BUG: some cars like CLK-GTR have 3 entries or duplicates, remove
   duplicates. zip them and move them to /tmp first just in case i wanna
   re-import them. also modify the car import script to list /remove model(s)
   (for art files and gamedata). Particularly for CLK-GTR, one is plain (no
   decals etc) and 2 have racing vinyls, i wanna keep only of the vilyn ones and
   remov the plain. Datsun and Camaro are also duplicated and I think Lister too.
+  - Done: `tools/import_car.py --list` prints every car with its code, ID and
+    make/model and marks duplicates; `--remove` zips each folder to `--backup`
+    (the temporary folder by default) and takes it and its `carorder.txt` line
+    away. Removed: the plain CLK-GTR (`clk2`) and a second copy of the liveried
+    one (`clk3`, `clkg` kept), the Camaro `chev` (`cama` kept), the Datsun
+    `d24z` (`dats` kept) and the Lister Storm `lstm` (`lst2` kept) -- 49 cars
+    down to 44. `merc`, also a CLK-GTR by name, is a different car and stayed.
+    The removed folders' showcase art and slides are still in `fedata/art`.
 - [ ] S-class: some cars are way too fast for A-class, such as murcielago and
   ferrari f40. create a new S-class and be able to select S class as opponents
   as A+S class. I know these need a slide for the menu but don't worry - i'll
   create it later and just use a placeholder for it.
 - [ ] Lift the limit of 50 cars for usable cars.
-- [ ] Remove airborne slowdown
+- [x] Remove airborne slowdown
+  - Done (`NFS_AIR_SPEED`, on): off its wheels a car is dragged down by the
+    game -- a jump costs speed the ramp never took. Each tick the speed it left
+    the ground at is put back on its velocity (sideways and forward, the fall
+    left to gravity), from `airSpeed` in `native_surface.cpp`; a hit in the air
+    still loses what a hit loses, and on its wheels nothing is put back.
 - [ ] Police mod: call police backup when pressing H on a player - other cops
   spawn near u and chase him.
 - [ ] Better weight distribution consideration in collision: most cars have the
@@ -389,6 +447,8 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   front. Some higher-class cars like ferraris and lambos and the A-class jaguar,
   the clk gtr etc have the engine on theback so it's the opposite. Traffic cars
   also have engine on the front.
+- [ ] Better control in the air - at least be able to turn left right slightly
+  (not with as much control as the ground, with some damping)
 
 ### Music/Sound
 - [x] Sound quality is great and sound works well but volume is still too

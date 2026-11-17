@@ -6,6 +6,7 @@
 #include <lib/glcompat.h>
 #include <lib/glfuncs.h>
 #include <lib/glthread.h>
+#include <lib/thrashrenderer.h>
 #include <array>
 #include <atomic>
 #include <vector>
@@ -91,6 +92,67 @@ void maybeGrabFrame(int width, int height)
         SDL_CloseIO(io);
     }
     free(pixels);
+}
+
+/* NFS_SPRITE_TRACE with NFS_TEXTURE_DUMP: the frames the trace flagged -- a
+ * sprite over the view, a turned quad with nothing cutting it out -- kept as
+ * <dir>/hit-<frame>.bmp beside its lines, so that what a line describes can be
+ * looked at.  Forty of them at most. */
+void maybeGrabInterestingFrame(int width, int height)
+{
+    static const char* s_dir = SDL_getenv("NFS_TEXTURE_DUMP");
+    static unsigned s_written = 0;
+    if (s_dir && *s_dir && win32::traceFrameInteresting && s_written < 40 && width > 0 && height > 0)
+    {
+        char path[512];
+        SDL_snprintf(path, sizeof path, "%s%shit-%05u.bmp", s_dir,
+                     s_dir[SDL_strlen(s_dir) - 1] == '/' ? "" : "/", unsigned(win32::traceFrameNumber));
+        const size_t rowLen = size_t(width) * 3, padded = (rowLen + 3) & ~size_t(3);
+        unsigned char* pixels = static_cast<unsigned char*>(malloc(size_t(height) * rowLen));
+        SDL_IOStream* io = pixels ? SDL_IOFromFile(path, "wb") : nullptr;
+        if (io)
+        {
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixels);
+            Uint8 header[54] = {0};
+            header[0] = 'B'; header[1] = 'M';
+            const Uint32 dataSize = Uint32(padded * size_t(height)), fileSize = 54 + dataSize, offset = 54, dibSize = 40;
+            const Sint32 w32 = width, h32 = height;
+            const Uint16 planes = 1, bpp = 24;
+            SDL_memcpy(header + 2, &fileSize, 4);
+            SDL_memcpy(header + 10, &offset, 4);
+            SDL_memcpy(header + 14, &dibSize, 4);
+            SDL_memcpy(header + 18, &w32, 4);
+            SDL_memcpy(header + 22, &h32, 4);
+            SDL_memcpy(header + 26, &planes, 2);
+            SDL_memcpy(header + 28, &bpp, 2);
+            SDL_memcpy(header + 34, &dataSize, 4);
+            SDL_WriteIO(io, header, sizeof header);
+            unsigned char* row = static_cast<unsigned char*>(malloc(padded));
+            if (row)
+            {
+                SDL_memset(row, 0, padded);
+                for (int y = 0; y < height; ++y)
+                {
+                    const unsigned char* src = pixels + size_t(y) * rowLen;
+                    for (int x = 0; x < width; ++x)
+                    {
+                        row[x * 3 + 0] = src[x * 3 + 2];
+                        row[x * 3 + 1] = src[x * 3 + 1];
+                        row[x * 3 + 2] = src[x * 3 + 0];
+                    }
+                    SDL_WriteIO(io, row, padded);
+                }
+                free(row);
+            }
+            SDL_CloseIO(io);
+            ++s_written;
+            SDL_Log("[SPRITE-TURN] frame %u kept as %s", unsigned(win32::traceFrameNumber), path);
+        }
+        free(pixels);
+    }
+    win32::traceFrameInteresting = false;
+    ++win32::traceFrameNumber;
 }
 
 #ifdef NFS_TRACE_MSG
@@ -576,6 +638,7 @@ void Renderer::presentFrame(x86::reg32 width, x86::reg32 height)
 
     glFlush();
     maybeGrabFrame(w, h);
+    maybeGrabInterestingFrame(w, h);
     if (!SDL_GL_SwapWindow(m_window->m_window))
     {
         static unsigned s_failures = 0;

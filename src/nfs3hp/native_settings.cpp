@@ -73,6 +73,7 @@ each one does.
 # NFS_HEADLIGHT_WIDTH = 1.4
 # NFS_SOFT_EFFECTS = on
 # NFS_OBJECT_SHADOWS = 0.45
+# NFS_CAR_SHADOW = 1
 # NFS_SHADOW_STRETCH = 0.7
 # NFS_SHADOW_RAIN = 0.55
 # NFS_SHADOW_NIGHT = 0.4
@@ -85,7 +86,9 @@ each one does.
 
 [The port's own particles]
 # NFS_PARTICLES = 1
-# NFS_WHEEL_SPRAY = off
+# NFS_GAME_SPRITES = off
+# NFS_WHEEL_SPRAY = on
+# NFS_WEATHER_PARTICLES = on
 # NFS_TYRE_SMOKE = 1
 # NFS_EXHAUST_FLAMES = 1
 # NFS_FLAME_LIGHT = 1
@@ -101,6 +104,7 @@ each one does.
 # NFS_LAMP_MASS = 1
 # NFS_KNOCK_RESPAWN = 10
 # NFS_AIR_ROLL_DAMP = 1
+# NFS_AIR_SPEED = on
 # NFS_FAST_LOAD = 1
 # NFS_CAMERA_PULL = 1.2
 
@@ -130,6 +134,8 @@ each one does.
 # NFS_TICK_TRACE = 1
 # NFS_PERF_HINT = 1
 # NFS_NATIVE_CHECK = 1
+# NFS_CHROMA_TRACE = 1
+# NFS_SPRITE_TRACE = 1
 )INI";
 
 std::string upper(const std::string& text)
