@@ -185,6 +185,28 @@ def listing(carmodel):
           (len(rows), "" if len(rows) == 1 else "s", sum(len(g) - 1 for g in groups.values())))
 
 
+def duplicates(carmodel):
+    """Every car installed that another folder also holds: a list of (kept,
+    [removed...], name), the kept one the copy installed first -- the lowest car
+    ID, so the game's own car where one of them is (the F50, the CLK-GTR) and
+    otherwise the first of the downloads.  Two folders are one car when their
+    texts name the same make and model; what the importer gives each copy of its
+    own is a code and an ID of its own, which is all that tells them apart."""
+    groups = {}
+    for folder in car_folders(carmodel):
+        text = car_text(folder)
+        if not text:
+            continue
+        car = name_of(folder, text)
+        groups.setdefault(car.lower(), (car, []))[1].append((text[ID_AT], folder.name))
+    pairs = []
+    for car, copies in groups.values():
+        if len(copies) > 1:
+            copies.sort()
+            pairs.append((copies[0][1], [copy[1] for copy in copies[1:]], car))
+    return pairs
+
+
 def remove(game, names, backup, dry):
     """Take cars out: each folder zipped into `backup`, then gone, and its line
     out of gamedata/carorder.txt with it."""
@@ -412,6 +434,8 @@ def main():
     parser.add_argument("--name", help="the folder to install a single car as")
     parser.add_argument("--list", action="store_true", help="list the cars installed, duplicates marked")
     parser.add_argument("--remove", nargs="+", metavar="CAR", help="take cars out, zipping each to --backup first")
+    parser.add_argument("--dedupe", action="store_true",
+                        help="take out every copy of a car but the first installed (the lowest car ID)")
     parser.add_argument("--backup", default=tempfile.gettempdir(), help="where --remove puts each car's zip")
     parser.add_argument("--dry-run", action="store_true", help="say what would be done, change nothing")
     args = parser.parse_args()
@@ -425,6 +449,17 @@ def main():
         return
     if args.remove:
         remove(game, args.remove, args.backup, args.dry_run)
+        return
+    if args.dedupe:
+        pairs = duplicates(gamedata / "carmodel")
+        if not pairs:
+            print("no duplicates: every car is one folder")
+            return
+        gone = []
+        for kept, copies, car in pairs:
+            print("%s: keeping %s, %s" % (car, kept, "taking out " + ", ".join(copies)))
+            gone.extend(copies)
+        remove(game, gone, args.backup, args.dry_run)
         return
     if not args.source:
         parser.error("nothing to import: give a source, or --list / --remove")

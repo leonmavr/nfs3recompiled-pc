@@ -70,9 +70,18 @@ public:
     /* Port: whether the texture selected is a car's shadow, which
      * native_thrash.cpp stretches away from the sun. */
     bool drawingShadow() const { return m_textureShadow; }
+    // glw4, the lamps' streak on a wet road (the port's softening knows it).
+    bool drawingWetStreak() const { return m_textureWetStreak; }
+    // A lamp's glow (the port's softening knows it); native_thrash.cpp leaves
+    // the ones the game lays on a wet road by day out.
+    bool drawingLight() const { return m_textureLight; }
     /* Port: how wet the road is (0 dry to 1), from the frame on; the GL
      * thread's reflection of the last frame is taken while it is above 0. */
     void setWetRoad(float wetness) { m_wetness = wetness; }
+    /* Port: whether the lights on a wet road (glw4 and its 4444 kin, the
+     * textures flagged wetStreak) are drawn; false by day, when no lamp is lit
+     * to make them. */
+    void setWetLightsLit(bool lit) { m_wetLightsLit = lit; }
     /* The race's colour grade (glide2x::colourGrade): a tint, a saturation and
      * a contrast, each 1 for none; the picture before its HUD is graded. */
     /* The player's headlights in the view, and the projection (glide2x::headlights). */
@@ -213,6 +222,7 @@ private:
         int format;
         bool shadow;            // a car's shadow (the port's softening, thrashrenderer.cpp)
         bool light;             // a lamp's glow, glw0 or glw3 (the light layer, thrashrenderer.cpp)
+        bool wetStreak = false; // glw4, a lamp's streak on a wet road
         float meanLuma = 0.0f;  // how bright its picture is, for NFS_SPRITE_TRACE
     };
 
@@ -245,8 +255,10 @@ private:
     unsigned int            m_detailTexture = 0;
     bool                    m_carSurface = false;   // the game thread's
     bool                    m_textureShadow = false;
+    bool                    m_textureWetStreak = false;
     bool                    m_textureLight = false;
     float                   m_wetness = 0.0f;
+    bool                    m_wetLightsLit = true;
     // The GL thread's: the last frame, for the wet road's reflection.
     unsigned int            m_reflection = 0;
     int                     m_reflectionW = 0, m_reflectionH = 0;

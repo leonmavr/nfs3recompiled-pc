@@ -65,7 +65,12 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     ellipse now, and `NFS_CAR_SHADOW=0` leaves the cars with no shadow at all.
     (`NFS_SPRITE_TRACE` + `NFS_TEXTURE_DUMP=/tmp/tex` trace every sprite the
     game draws, with its box and its picture -- the tools that found it.)
-- [ ] Tyre marks that last the lap, darker and softer than the game's.
+- [x] Tyre marks that last the lap, darker and softer than the game's.
+  - Done (`NFS_TYRE_MARKS`, `native_skids.cpp`): a minute by default
+    (`NFS_TYRE_MARKS_LIFE`, seconds, fading over the last six), a ring of 256
+    blocks where the game had 64; darker (the game's were 28 of 255) and a
+    little wider the faster the car laying them, uneven along their length
+    with a faint gap now and then.
 - [x] Tyre smoke on wheelspin and lock-up, taken over from the game's kind 6
   and made procedural.
   - Done (`NFS_TYRE_SMOKE`, on): dark clouds of its own, ragged by noise, more
@@ -177,10 +182,30 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     (`NFS_FLAME_LIGHT`).
   - Done: a hard downshift, and lifting off at the top of the revs, pop half a
     flame out of one exhaust at a time -- a real car's overrun crackle.
-- [ ] The headlights light up in front of the car well but show some explicit
+- [x] The headlights light up in front of the car well but show some explicit
   narrow beam brighter cones. These narrow cones shouldn't show up. The tail
   lights are also draw as 'wet trailing spots' on the road when they're turned
   off - disable this.
+  - Done: the headlights' pool (`glw2`) was the two lamps' hot spots in a glow,
+    laid on the road as two brighter beams: blurred now (and its smaller
+    levels rebuilt from it), the pool smooth. The shader's own cone on what
+    stands by the road is wide and soft, and gives the road next to nothing.
+    The lamps' streak on a wet road (`glw4`) is not drawn by day, when the
+    lamps are off (`unlitStreak`, `native_thrash.cpp`).
+  - Done (2026-11-17): the red and dark smears behind every car in the rain by
+    day were the game's other wet-road light (a 4444 strip) and a skipped
+    batch's vertices drawn by the next one; both gone by day.
+- [x] Tyre marks easier to make (2026-11-17): wheelspin pulling away and a brake
+  held over a second lay their own; handbrake marks much darker; marks show on
+  a wet road. Car shadows in rain/snow stronger (`NFS_SHADOW_RAIN` 0.8).
+- [x] Tail lights dark after the start, no glow or trails (2026-11-17): the
+  weather-box depth cut was discarding the softened glows; lamps exempt now.
+- [x] Car shadows back (2026-11-17): the ellipse that took the square away left
+  them almost unseen -- the car stands over all of it. A rounder rectangle now
+  (`kShadowRound`, `kShadowSolid`, `kShadowDarkness`, `thrashrenderer.cpp`).
+- [ ] Auto-exposure. Smooth brightness from the frame's average luminance in 
+  the final blit, next to gamma. Tunnel mouths and dusk stops being a black flash. 
+
 
 ### Races/locations
 
@@ -427,8 +452,16 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     away. Removed: the plain CLK-GTR (`clk2`) and a second copy of the liveried
     one (`clk3`, `clkg` kept), the Camaro `chev` (`cama` kept), the Datsun
     `d24z` (`dats` kept) and the Lister Storm `lstm` (`lst2` kept) -- 49 cars
-    down to 44. `merc`, also a CLK-GTR by name, is a different car and stayed.
-    The removed folders' showcase art and slides are still in `fedata/art`.
+    down to 44.
+  - Done again (2026-11-17), with the tool doing it: `--dedupe` finds every
+    pair and keeps the copy installed first (the lowest car ID -- the game's own
+    car where one of the pair is one), zipping the rest to `--backup`; 54 folders
+    to 48 cars, 0 duplicates. Out: `cc5r` (C5R, `chev` kept), `rena` (Clio,
+    `clio`), `clkg` (CLK-GTR, `merc`), `nfs3` (F50, `ff50`), `impw` (Impreza,
+    `suba`) and `p206` (206 WRC, `peug`).
+  - Still to do: the removed folders' showcase art and slides are in
+    `fedata/art` (and their menus' entries), so a duplicate's picture can still
+    be chosen for a slot the car it belonged to no longer fills.
 - [ ] S-class: some cars are way too fast for A-class, such as murcielago and
   ferrari f40. create a new S-class and be able to select S class as opponents
   as A+S class. I know these need a slide for the menu but don't worry - i'll
@@ -447,8 +480,11 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   front. Some higher-class cars like ferraris and lambos and the A-class jaguar,
   the clk gtr etc have the engine on theback so it's the opposite. Traffic cars
   also have engine on the front.
-- [ ] Better control in the air - at least be able to turn left right slightly
+- [x] Better control in the air - at least be able to turn left right slightly
   (not with as much control as the ground, with some damping)
+  - Done (`NFS_AIR_STEER`, `airSteer` in `native_surface.cpp`): the player's
+    car turns about its up axis by the steering while in the air, easing to
+    0.9 rad/s at full lock over a third of a second, back to none when let go.
 
 ### Music/Sound
 - [x] Sound quality is great and sound works well but volume is still too

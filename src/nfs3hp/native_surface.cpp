@@ -294,6 +294,61 @@ static void airSpeed(win32::WinApplication* app, int ticks)
     }
 }
 
+/* Steering in the air (NFS_AIR_STEER, 1; a number up to 3 for more, 0/off for
+ * none): off its wheels a car went wherever it took off towards.  Now, for
+ * the first player's car, the steering (its byte at kSteering, -127 left to
+ * 127 right) turns it a little about its own up axis (+0xcc) while it is in
+ * the air: the spin about that axis eases towards kAirYawRate rad/s at full
+ * lock, with kAirSteerEase a second to get there -- no grip to push against,
+ * so far less than on the ground, and damped, so a tap only nudges it.  The
+ * spin is the world's (+0xe4) and the car's own (+0x4fc, its second, about
+ * up), as airRoll keeps them. */
+constexpr x86::reg32 kSteering = 0x79c338;      // the first player's steering, signed
+constexpr float kAirYawRate = 0.9f;             // rad/s at full lock, in the air
+constexpr float kAirSteerEase = 0.35f;          // s to come round to it
+constexpr float kAirSteerSign = 1.0f;           // right steering is positive spin about up (as on the ground)
+constexpr x86::sreg32 kAirSteerAfter = 4;       // ticks off the ground before it takes
+
+static float airSteerSetting()
+{
+    static const float value = [] {
+        const char* text = SDL_getenv("NFS_AIR_STEER");
+        if (!text || !*text || SDL_strcasecmp(text, "on") == 0)
+            return 1.0f;
+        if (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0)
+            return 0.0f;
+        const float parsed = float(SDL_atof(text));
+        return parsed > 0.0f ? SDL_min(parsed, 3.0f) : 1.0f;
+    }();
+    return value;
+}
+
+static void airSteer(win32::WinApplication* app, int ticks)
+{
+    const float setting = airSteerSetting();
+    const x86::reg32 car = word(app, 0x5efa48);
+    if (setting <= 0.0f || ticks <= 0 || !car)
+        return;
+    const float steer = float(app->getMemory<x86::sreg8>(kSteering)) / 127.0f;
+    float w[3], up[3];
+    for (int i = 0; i < 3; ++i)
+    {
+        w[i] = value(app, car + 0xe4 + 4 * x86::reg32(i));
+        up[i] = value(app, car + 0xcc + 4 * x86::reg32(i));
+    }
+    const float yaw = w[0] * up[0] + w[1] * up[1] + w[2] * up[2];
+    if (SDL_getenv("NFS_AIR_STEER_TRACE"))
+        SDL_Log("[AIRSTEER] air %u steer %.2f yaw %.3f local %.3f", unsigned(app->getMemory<uint16_t>(car + 0x164)),
+                steer, yaw, value(app, car + 0x4fc));
+    if (x86::sreg32(app->getMemory<uint16_t>(car + 0x164)) < kAirSteerAfter)
+        return;   // on its wheels, or only just off them
+    const float target = kAirSteerSign * steer * kAirYawRate * setting;
+    const float step = (target - yaw) * SDL_min(1.0f, float(ticks) / 64.0f / kAirSteerEase);
+    for (int i = 0; i < 3; ++i)
+        put(app, car + 0xe4 + 4 * x86::reg32(i), w[i] + up[i] * step);
+    put(app, car + 0x4fc, value(app, car + 0x4fc) + step);
+}
+
 static void airRoll(win32::WinApplication* app, int ticks)
 {
     const float setting = airRollSetting();
@@ -434,11 +489,13 @@ static void slipstream(win32::WinApplication* app, int ticks)
 
 void objectsFrame(win32::WinApplication* app);   // native_objects.cpp
 void crashFrame(win32::WinApplication* app);     // native_crash.cpp
+void skidFrame(win32::WinApplication* app);      // native_skids.cpp
 
 void surfaceFrame(win32::WinApplication* app)
 {
     objectsFrame(app);
     crashFrame(app);
+    skidFrame(app);
     static x86::sreg32 last = -1;
     static x86::reg32 lastPlayer = 0;
     static float slips[16] = {};   // each car slot's sideways speed after the last tick
@@ -472,6 +529,7 @@ void surfaceFrame(win32::WinApplication* app)
     {
         airRoll(app, ticks);
         airSpeed(app, ticks);
+        airSteer(app, ticks);
         slipstream(app, ticks);
     }
     if (!player || ticks <= 0 || setting() <= 0.0f || app->getMemory<x86::reg32>(0x6fd3b0) == 1)

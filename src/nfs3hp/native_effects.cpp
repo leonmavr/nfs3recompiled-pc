@@ -57,11 +57,14 @@ x86::reg32 asBits(float value)
 }  // namespace
 
 bool crashHit(win32::WinApplication* app, x86::CPU& cpu, x86::reg32 car);   // native_crash.cpp
+bool skidPedals(win32::WinApplication* app, x86::CPU& cpu, x86::reg32 car);   // native_skids.cpp
 
 bool collisionEffects(win32::WinApplication* app, x86::CPU& cpu)
 {
     if (!crashHit(app, cpu, cpu.eax))
         return true;  // the game stopped in the port's crash sound
+    if (!skidPedals(app, cpu, cpu.eax))
+        return true;  // the game stopped laying the port's tyre mark
     const float sparks = sparkSetting();
     {
         // The burst's size, once: kind 3's count as the game has it, times NFS_SPARKS.

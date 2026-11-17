@@ -144,6 +144,12 @@ void wetRoad(float wetness)
         s_directRenderer->setWetRoad(wetness);
 }
 
+void wetLightsLit(bool lit)
+{
+    if (s_directRenderer)
+        s_directRenderer->setWetLightsLit(lit);
+}
+
 void headlights(bool on, const float origin[3], const float direction[3], const float up[3], float scaleX, float scaleY,
                 float centreX, float centreY)
 {

@@ -2536,6 +2536,7 @@ void wetRoadTick(win32::WinApplication* app)
     if (nfs3hp::raceIsRunning() && app->getMemory<x86::reg32>(0x6fd4cc) != 0)
         wetness = rainsOn(app->getMemory<x86::reg32>(0x6fd4ac)) ? wetnessSetting() : 0.0f;
     win32::glide2x::wetRoad(wetness);
+    win32::glide2x::wetLightsLit(app->getMemory<x86::reg32>(0x6fd4c8) != 0);  // night
 }
 
 /* Port: each track's own colour grade (thrashrenderer.cpp, NFS_GRADE), by
