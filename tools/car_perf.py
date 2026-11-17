@@ -1390,6 +1390,48 @@ def used_ids(root):
     return found
 
 
+# ------------------------------------------------ what the windows draw again
+# The editor (car_report.py) and the exhaust marker (car_exhausts.py) both draw
+# a part of a window again rather than the whole of it, which takes a third of a
+# second in the editor and the body's thousands of triangles in the marker.
+
+def present(canvas, bbox=None):
+    """Get the pixels just drawn into the canvas' buffer for bbox (None: all of
+    it) onto the screen, without drawing the figure again.  A backend that blits
+    copies that out of the buffer; the GTK4 canvas cannot -- it turns blitting
+    off and paints the whole buffer through cairo -- but a redraw of its window
+    is then a copy of the frame already drawn, not the drawing of everything
+    again."""
+    if getattr(canvas, "supports_blit", False):
+        canvas.blit(bbox)
+    elif not hasattr(canvas, "queue_draw"):
+        canvas.draw_idle()
+    elif not getattr(canvas, "_idle_draw_id", 0):
+        # (_idle_draw_id is the GTK4 canvas' own: with a full draw already
+        # queued there is nothing to ask for, it will draw this too.)
+        canvas.queue_draw()
+
+
+def hovering(fig, button):
+    """A matplotlib Button that paints its own box and nothing else as the
+    pointer comes and goes -- Button draws the whole figure for it on a backend
+    that cannot blit (GTK4), so moving onto Save held the window for a long
+    redraw and the click had to wait for it."""
+    button.drawon = False   # its colour is put up here instead (see _motion)
+    ax, painted = button.ax, [button.color]
+
+    def motion(event):
+        wanted = button.hovercolor if event.inaxes is ax else button.color
+        if wanted != painted[0]:
+            painted[0] = wanted
+            ax.set_facecolor(wanted)
+            ax.draw(fig.canvas.get_renderer())
+            present(fig.canvas, ax.bbox)
+
+    fig.canvas.mpl_connect("motion_notify_event", motion)
+    return button
+
+
 # --------------------------------------------------------------------- cli
 
 def _load_changes(sets, preset):

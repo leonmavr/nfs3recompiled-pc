@@ -15875,14 +15875,21 @@ static float settingOr(const char* name, float fallback, float most)
     return parsed >= 0.0f && parsed <= most ? parsed : fallback;
 }
 
-void particlesFrame(win32::WinApplication* app, x86::reg32 view);  // native_particles.cpp
-void surfaceFrame(win32::WinApplication* app);                    // native_surface.cpp
+void particlesFrame(win32::WinApplication* app, x86::reg32 view);        // native_particles.cpp
+void particlesMirrorFrame(win32::WinApplication* app, x86::reg32 view);  // and the mirror's
+void surfaceFrame(win32::WinApplication* app);                          // native_surface.cpp
 
-static void noteSun(win32::WinApplication* app, x86::reg32 view)
+static x86::reg32 s_mainView = 0;   // the record of the view the particles were put in
+
+/* The frame's first view -- the main one -- notes what the sun and the shadows
+ * need of it, and makes the frame's particles.  False for any later view: the
+ * rear-view mirror, whose own pass has its own camera and projection. */
+static bool noteSun(win32::WinApplication* app, x86::reg32 view)
 {
     if (s_sunNoted || !view)
-        return;
+        return false;
     s_sunNoted = true;
+    s_mainView = view;
     // The port's particles move and are put in this view, the frame's main one.
     if (app->getMemory<x86::reg32>(0x6fd3b0) != 1)
     {
@@ -15926,11 +15933,13 @@ static void noteSun(win32::WinApplication* app, x86::reg32 view)
         sun[0] = 0.15f; sun[1] = 0.25f; sun[2] = 0.956f;
     }
     win32::glide2x::sunShadows(amount, sun, up, f(0x56009c), f(0x5600a0), f(0x5600a4), f(0x5600a8), glare);
+    return true;
 }
 
 bool sky(win32::WinApplication* app, x86::CPU& cpu)
 {
-    noteSun(app, cpu.eax);
+    if (!noteSun(app, cpu.eax) && cpu.eax != s_mainView)
+        particlesMirrorFrame(app, cpu.eax);   // the mirror: the same particles, in its view
     if (nativeOriginalRunning() || !nativesEnabled() || !renderNativeOn(0x47a190))
         return false;
     if (nativeChecking())

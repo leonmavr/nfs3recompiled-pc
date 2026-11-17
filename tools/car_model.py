@@ -259,6 +259,20 @@ def load_model(car, wanted="car.fce"):
 
 # ------------------------------------------------------------------ writing
 
+def page_colours(model):
+    """The colour of each of the model's texture pages -- the car's paint, out
+    of its own palette (a page a colour, hue/saturation/brightness each) -- or
+    None where the file carries no palette.  The rule the OBJ export's materials
+    and the exhaust marker's colour switch both take."""
+    if not model.colours:
+        return None
+    out = []
+    for page in range(model.pages):
+        entry = model.colours[min(page, len(model.colours) - 1)]
+        out.append(_hsb_to_rgb(entry[0], entry[1], entry[2]))
+    return out
+
+
 def _hsb_to_rgb(hue, saturation, bright):
     h = (hue / 255.0) * 6.0
     s = saturation / 255.0
@@ -338,11 +352,8 @@ def export_obj(car, model, parts, out_dir, up="z"):
     obj_path.write_text("\n".join(head + uv_lines + [""] + body) + "\n")
 
     materials = ["# %s" % car.key, ""]
-    for page in range(model.pages):
-        colour = (0.7, 0.7, 0.72)
-        if model.colours:
-            entry = model.colours[min(page, len(model.colours) - 1)]
-            colour = _hsb_to_rgb(entry[0], entry[1], entry[2])
+    paints = page_colours(model) or [(0.7, 0.7, 0.72)] * model.pages
+    for page, colour in enumerate(paints):
         materials += ["newmtl page%d" % page, "Kd %.4f %.4f %.4f" % colour,
                       "Ka 0.1 0.1 0.1", "d 1.0", "illum 2", ""]
     mtl_path.write_text("\n".join(materials))

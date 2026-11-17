@@ -133,7 +133,21 @@ static const char g_fragmentShader[] =
 "        bytes = ivec3(round(t.rgb * 31.0)) * 255 / 31;"
 "    else"
 "        bytes = ivec3(round(t.rgb * 255.0));"
-"    return all(equal(bytes, u_chromaKeyBytes));"
+"    if (all(equal(bytes, u_chromaKeyBytes)))"
+"        return true;"
+/* A 565 texel's byte is either the 5- or 6-bit value shifted up (0 to 248) or
+ * that value scaled to 0 to 255: the game's own keys are given in one of the
+ * two, its pictures being 565 as often as not (the weather's drops are, their
+ * blank green 0x07e0 around them), so both are compared. */
+"    return u_format == 1 && all(equal(ivec3(round(t.rgb * 255.0)), u_chromaKeyBytes));"
+"}"
+/* How much of a quad is inside its circle: 1 well inside, 0 at its rim and
+ * beyond.  A cloud's or a flake's ragged edge is scaled by its noise, which
+ * leaves it out of reach of the edge itself -- and the straight side of the quad
+ * showed, a turned square of dimmed picture over the view. */
+"float inside(vec2 uv)"
+"{"
+"    return 1.0 - smoothstep(0.75, 1.0, length(uv));"
 "}"
 "vec4 texel(vec2 at, float size, int level)"
 "{"
@@ -770,6 +784,95 @@ void ThrashRenderer::clearFrame(x86::reg32 color, x86::reg32 clipMinX, x86::reg3
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
+bool traceFrameInteresting = false;
+x86::reg32 traceFrameNumber = 0;
+
+/* NFS_CAR_SHADOW, beside the other switches (below). */
+static bool carShadowSetting();
+
+/* NFS_TEXTURE_DUMP: the pictures of the sprites drawn over the view, saved
+ * where the trace is -- <dir>/tex-<index>.bmp, and each line appended to
+ * <dir>/trace.txt, so that a run says which picture is the one covering the
+ * view: the alpha laid over a mid grey, so a black picture with a shape in its
+ * alpha shows the shape.  Nothing without the switch. */
+static const char* dumpDirectory()
+{
+    static const char* directory = SDL_getenv("NFS_TEXTURE_DUMP");
+    return directory && *directory ? directory : nullptr;
+}
+
+void appendTraceLine(const char* tag, const char* text)
+{
+    const char* directory = dumpDirectory();
+    if (!directory)
+        return;
+    char path[512];
+    SDL_snprintf(path, sizeof path, "%s/trace.txt", directory);
+    if (SDL_IOStream* io = SDL_IOFromFile(path, "ab"))
+    {
+        char line[400];
+        const int length = SDL_snprintf(line, sizeof line, "[%s] %s\n", tag, text);
+        SDL_WriteIO(io, line, size_t(SDL_max(length, 0)));
+        SDL_CloseIO(io);
+    }
+}
+
+/* One texture, as a BMP: its RGB over mid grey by its alpha, upside down and
+ * bottom up as a BMP has it. */
+void dumpTexture(x86::reg32 index, GLuint name)
+{
+    const char* directory = dumpDirectory();
+    if (!directory || !name)
+        return;
+    static std::vector<x86::reg32> done;
+    if (std::find(done.begin(), done.end(), index) != done.end())
+        return;
+    GLint wide = 0, high = 0;
+    glBindTexture(GL_TEXTURE_2D, name);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &wide);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &high);
+    if (wide <= 0 || high <= 0 || wide > 1024 || high > 1024)
+        return;
+    done.push_back(index);
+    SDL_Log("[SPRITE-QUAD] tex %08x is %dx%d: dumped to %s", unsigned(index), int(wide), int(high), directory);
+    std::vector<unsigned char> texels(size_t(wide) * size_t(high) * 4);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, texels.data());
+    const size_t rowLen = size_t(wide) * 3, padded = (rowLen + 3) & ~size_t(3);
+    std::vector<unsigned char> rows(padded * size_t(high));
+    for (int y = 0; y < high; ++y)
+    {
+        const unsigned char* from = &texels[size_t(y) * size_t(wide) * 4];
+        unsigned char* to = &rows[size_t(high - 1 - y) * padded];
+        for (int x = 0; x < wide; ++x)
+        {
+            const float a = from[x * 4 + 3] / 255.0f;
+            for (int c = 0; c < 3; ++c)
+                to[x * 3 + c] = static_cast<unsigned char>(SDL_min(255.0f, from[x * 4 + c] * a + 128.0f * (1.0f - a)));
+        }
+    }
+    char path[512];
+    SDL_snprintf(path, sizeof path, "%s/tex-%08x.bmp", directory, unsigned(index));
+    if (SDL_IOStream* io = SDL_IOFromFile(path, "wb"))
+    {
+        Uint8 header[54] = {0};
+        header[0] = 'B'; header[1] = 'M';
+        const Uint32 dataSize = Uint32(padded * size_t(high)), fileSize = 54 + dataSize, offset = 54, dibSize = 40;
+        const Sint32 w32 = wide, h32 = high;
+        const Uint16 planes = 1, bpp = 24;
+        SDL_memcpy(header + 2, &fileSize, 4);
+        SDL_memcpy(header + 10, &offset, 4);
+        SDL_memcpy(header + 14, &dibSize, 4);
+        SDL_memcpy(header + 18, &w32, 4);
+        SDL_memcpy(header + 22, &h32, 4);
+        SDL_memcpy(header + 26, &planes, 2);
+        SDL_memcpy(header + 28, &bpp, 2);
+        SDL_memcpy(header + 34, &dataSize, 4);
+        SDL_WriteIO(io, header, sizeof header);
+        SDL_WriteIO(io, rows.data(), rows.size());
+        SDL_CloseIO(io);
+    }
+}
+
 void ThrashRenderer::render(x86::reg32 buffer)
 {
     m_renderer->m_currentBuffer = buffer;
@@ -797,6 +900,8 @@ void ThrashRenderer::flush()
     batch.alphaBlend = m_alphaBlend;
     batch.cull = m_cull;
     batch.chromaKey = m_chromaKey;
+    batch.chromaKeyColor = m_chromaKeyColor;
+    batch.alphaRef = m_alphaTestRef;
     batch.cullMode = m_cullMode;
     batch.clipMinX = m_clipMinX;
     batch.clipMinY = m_clipMinY;
@@ -830,7 +935,154 @@ void ThrashRenderer::flush()
     batch.car = m_carSurface || (!m_textureShadow && (m_textureFormat == TF_ARGB_8888 || m_textureFormat == TF_ARGB_4444));
     batch.decal = m_textureShadow;
     batch.light = m_textureLight;
+    batch.skipDraw = batch.decal && !carShadowSetting();
     m_batches.push_back(batch);
+    /* The batch's own screen box, for the trace: which of a frame's draws a
+     * thing on the screen is. */
+    const x86::reg32 from = m_batches.size() >= 2 ? m_batches[m_batches.size() - 2].end : 0;
+    float boxMinX = 0.0f, boxMinY = 0.0f, boxMaxX = 0.0f, boxMaxY = 0.0f;
+    if (batch.end > from)
+    {
+        boxMinX = m_vertices[from].x;
+        boxMaxX = boxMinX;
+        boxMinY = m_vertices[from].y;
+        boxMaxY = boxMinY;
+        for (x86::reg32 i = from + 1; i < batch.end; ++i)
+        {
+            boxMinX = std::min(boxMinX, m_vertices[i].x);
+            boxMaxX = std::max(boxMaxX, m_vertices[i].x);
+            boxMinY = std::min(boxMinY, m_vertices[i].y);
+            boxMaxY = std::max(boxMaxY, m_vertices[i].y);
+        }
+    }
+    /* NFS_SPRITE_TRACE=1: each kind of batch once -- the texture the game gave
+     * it, its format and levels, whether it is cut out and by what, what it is
+     * blended by, and whether it writes depth: for telling a sprite that is cut
+     * out from one that is not. */
+    if (static const bool traced = SDL_getenv("NFS_SPRITE_TRACE") != nullptr; traced)
+    {
+        static std::vector<std::string> seen;
+        char line[320];
+        SDL_snprintf(line, sizeof line,
+                     "frame %u tex %08x levels %u fmt %d keyed %d key %08x ref %.2f blend %d depth %d/%d cull %d "
+                     "clip %d,%d-%d,%d verts %d box %.0f,%.0f-%.0f,%.0f car %d decal %d light %d detail %d",
+                     unsigned(traceFrameNumber), unsigned(m_texture), unsigned(m_textureLevels), batch.format, int(batch.chromaKey),
+                     unsigned(batch.chromaKeyColor), batch.alphaRef, int(batch.alphaBlend), int(batch.zTest),
+                     int(batch.zBuffer), int(batch.cull), int(batch.clipMinX), int(batch.clipMinY),
+                     int(batch.clipMaxX), int(batch.clipMaxY), int(batch.end - from), double(boxMinX),
+                     double(boxMinY), double(boxMaxX), double(boxMaxY), int(batch.car), int(batch.decal),
+                     int(batch.light), int(batch.detail));
+        bool known = false;
+        for (const std::string& was : seen)
+            known = known || was == line;
+        /* Every kind of batch, however many there are: a race has hundreds,
+         * and the one that is wrong is not among the first forty. */
+        if (!known && seen.size() < 4000)
+        {
+            seen.push_back(line);
+            SDL_Log("[SPRITE] %s", line);
+            appendTraceLine("SPRITE", line);
+        }
+        /* A quad or two that covers a quarter of the view and more: what a
+         * sprite drawn over the view is -- a drop on the lens, a cloud, a
+         * shadow gone wrong -- and never a piece of the track.  Logged apart
+         * and with its first corner's z and 1/w, which tell it apart: a
+         * screen-space sprite hung on the overlay list (the drops on the view,
+         * sub_4cb750) has z 0 and 1/w 0x3f7fff00. */
+        const x86::reg32 start = from;
+        const int corners = int(batch.end - from);
+        if (corners > 0 && corners <= 12)
+        {
+            const float minX = boxMinX, maxX = boxMaxX, minY = boxMinY, maxY = boxMaxY;
+            const float wide = float(batch.clipMaxX - batch.clipMinX), high = float(batch.clipMaxY - batch.clipMinY);
+            /* Big, or a 565/1555 picture cut out by nothing, blended: a sprite
+             * with no alpha of its own to hide its square with. */
+            const bool noAlphaSprite = batch.format != 0 && batch.format != 3 && !batch.chromaKey
+                                       && batch.alphaBlend && corners <= 24;
+            /* A quad that is turned, inside a batch as well as a batch of its
+             * own: the game draws a sprite with the same texture and state as
+             * the surface round it, so a turned square hides in a batch of the
+             * road's and the batch's own box says nothing of it.  Every six
+             * vertices are a quad; one wide enough to see and neither of whose
+             * edges runs level is logged with its own box, and its picture
+             * dumped. */
+            bool turnedQuad = false;
+            for (x86::reg32 i = from; i + 2 < batch.end; i += 3)
+            {
+                float qMinX = m_vertices[i].x, qMaxX = qMinX, qMinY = m_vertices[i].y, qMaxY = qMinY;
+                for (int c = 1; c < 3; ++c)
+                {
+                    qMinX = std::min(qMinX, m_vertices[i + x86::reg32(c)].x);
+                    qMaxX = std::max(qMaxX, m_vertices[i + x86::reg32(c)].x);
+                    qMinY = std::min(qMinY, m_vertices[i + x86::reg32(c)].y);
+                    qMaxY = std::max(qMaxY, m_vertices[i + x86::reg32(c)].y);
+                }
+                const float qw = qMaxX - qMinX, qh = qMaxY - qMinY;
+                if (qw < 0.12f * wide || qh < 0.12f * high)
+                    continue;
+                /* Squarish -- a sprite, not a strip of the road -- and with an
+                 * edge that runs at an angle: a turned square. */
+                const float aspect = qw > qh ? qw / SDL_max(qh, 1.0f) : qh / SDL_max(qw, 1.0f);
+                if (aspect > 1.8f)
+                    continue;
+                bool slanted = false;
+                for (int c = 0; c < 3; ++c)
+                {
+                    const x86::reg32 a = i + x86::reg32(c), b = i + x86::reg32((c + 1) % 3);
+                    const float dx = m_vertices[b].x - m_vertices[a].x, dy = m_vertices[b].y - m_vertices[a].y;
+                    const float level = std::min(std::fabs(dx), std::fabs(dy));
+                    const float slope = std::max(std::fabs(dx), std::fabs(dy));
+                    slanted = slanted || (slope > 0.0f && level > 0.25f * slope);
+                }
+                if (!slanted)
+                    continue;
+                turnedQuad = true;
+                static std::vector<std::string> seenTurns;
+                char turn[300];
+                SDL_snprintf(turn, sizeof turn,
+                             "tex %08x fmt %d keyed %d blend %d depth %d/%d quad %.0f,%.0f-%.0f,%.0f "
+                             "(%.0fx%.0f) z %.4g car %d decal %d light %d detail %d",
+                             unsigned(batch.texture), batch.format, int(batch.chromaKey), int(batch.alphaBlend),
+                             int(batch.zTest), int(batch.zBuffer), double(qMinX), double(qMinY), double(qMaxX),
+                             double(qMaxY), double(qw), double(qh), double(m_vertices[i].z), int(batch.car),
+                             int(batch.decal), int(batch.light), int(batch.detail));
+                if (seenTurns.size() < 400 && std::find(seenTurns.begin(), seenTurns.end(), std::string(turn)) == seenTurns.end())
+                {
+                    seenTurns.push_back(turn);
+                    SDL_Log("[SPRITE-TURN] %s", turn);
+                    appendTraceLine("TURN", turn);
+                    if (batch.textureMean <= 0.35f && qw > 0.18f * wide && qh > 0.18f * high)
+                        traceFrameInteresting = true;
+                }
+            }
+            if (turnedQuad)
+                m_batches.back().suspicious = true;
+            if ((maxX - minX > 0.15f * wide && maxY - minY > 0.15f * high) || noAlphaSprite)
+            {
+                m_batches.back().suspicious = true;
+                static std::vector<x86::reg32> big;
+                if (big.size() < 4000 && std::find(big.begin(), big.end(), batch.texture) == big.end())
+                {
+                    big.push_back(batch.texture);
+                    char quad[300];
+                    SDL_snprintf(quad, sizeof quad,
+                                 "tex %08x fmt %d keyed %d key %08x ref %.2f blend %d depth %d/%d verts %d "
+                                 "box %.0f,%.0f-%.0f,%.0f z %.4g oow %08x car %d decal %d light %d detail %d",
+                                 unsigned(batch.texture), batch.format, int(batch.chromaKey), unsigned(batch.chromaKeyColor),
+                                 double(batch.alphaRef), int(batch.alphaBlend), int(batch.zTest), int(batch.zBuffer), corners,
+                                 double(minX), double(minY), double(maxX), double(maxY),
+                                 double(m_vertices[start].z), unsigned(m_vertices[start].oow), int(batch.car),
+                                 int(batch.decal), int(batch.light), int(batch.detail));
+                    SDL_Log("[SPRITE-QUAD] %s", quad);
+                    appendTraceLine("QUAD", quad);
+                    /* Only a *dark* picture is worth a frame of its own: the
+                     * sky is big and turned too. */
+                    if (batch.textureMean <= 0.35f)
+                        traceFrameInteresting = true;
+                }
+            }
+        }
+    }
 }
 
 void ThrashRenderer::renderPending()
@@ -1206,6 +1458,12 @@ static const char g_particleShader[] =
 "    vec2 u = f * f * (3.0 - 2.0 * f);"
 "    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);"
 "}"
+/* How much of a quad is inside its circle: 1 well inside, 0 at its rim and
+ * beyond (as the world shader's). */
+"float inside(vec2 uv)"
+"{"
+"    return 1.0 - smoothstep(0.75, 1.0, length(uv));"
+"}"
 "vec3 ground(vec3 otherwise)"
 "{"
 "    if (v_from.x < 0.0) return otherwise;"
@@ -1235,6 +1493,64 @@ static const char g_particleShader[] =
 "    float r = length(v_uv);"
 "    if (type == 5) {"   /* a piece of an air trail: thin, even, soft at its sides */
 "        o_color = vec4(v_color.rgb, exp(-v_uv.y * v_uv.y * 4.0) * v_color.a);"
+"        return;"
+"    }"
+/* A raindrop (9): a short dash, soft at its sides and at both ends, so it has
+ * no corner and no square to it however large it comes to be. */
+"    if (type == 9) {"
+"        float a = exp(-v_uv.y * v_uv.y * 4.0) * (1.0 - smoothstep(0.45, 1.0, abs(v_uv.x)));"
+"        o_color = vec4(v_color.rgb, a * v_color.a);"
+"        return;"
+"    }"
+/* An exhaust flame (6): a ball of burning gas, ragged and flickering by its
+ * seed, the car's flame colour at its edge and much lighter -- near white -- in
+ * its core (v_color.rgb is the car's colour, v_params.y its own flicker).  It is
+ * added to what is behind it, so the core reads as light rather than paint. */
+"    if (type == 6) {"
+"        vec2 q = v_uv * 1.8 + vec2(seed * 13.7, seed * 27.1);"
+"        float n = noise(q) * 0.55 + noise(q * 2.3) * 0.3 + noise(q * 4.7) * 0.15;"
+"        float rr = length(v_uv) * (0.72 + 0.5 * n);"
+"        float a = (1.0 - smoothstep(0.35, 1.0, rr)) * inside(v_uv);"
+"        if (a <= 0.002) discard;"
+"        a *= v_color.a;"
+"        float core = 1.0 - smoothstep(0.0, 0.85, rr);"
+"        vec3 c = mix(v_color.rgb, vec3(1.0, 0.96, 0.86), core * core * 0.85 + 0.1);"
+"        o_color = vec4(c * (0.9 + 0.6 * core), a * (0.8 + 0.2 * core));"
+"        return;"
+"    }"
+/* The light a flame throws (7): a soft pool of it on the road under the pipe,
+ * its colour the flame's, squared away to nothing at its edge, squashed
+ * lengthwise -- a disc on the ground seen from behind.  Additive, like the
+ * flame it comes from. */
+"    if (type == 7) {"
+"        float rr = length(vec2(v_uv.x, v_uv.y * 2.6));"
+"        float a = max(1.0 - rr, 0.0);"
+"        a *= a;"
+"        a *= v_color.a;"
+"        if (a <= 0.002) discard;"
+"        o_color = vec4(v_color.rgb * (0.75 + 0.5 * a), a);"
+"        return;"
+"    }"
+/* Tyre smoke (8): a dark cloud off a wheel spinning or locked, ragged by its
+ * own noise, its top catching the sky and its heart almost black, neither of
+ * them the ground's colour.  Blended over the picture, not added to it. */
+"    if (type == 10) {"   /* a snowflake: a small soft speck, ragged by its seed */
+"        float rr = length(v_uv) * (0.85 + 0.35 * noise(v_uv * 3.0 + vec2(seed * 19.0, seed * 7.0)));"
+"        float a = (1.0 - smoothstep(0.35, 1.0, rr)) * inside(v_uv);"
+"        if (a <= 0.002) discard;"
+"        o_color = vec4(v_color.rgb, a * v_color.a * clamp(room / 0.1 + 0.5, 0.0, 1.0));"
+"        return;"
+"    }"
+"    if (type == 8) {"
+"        vec2 q = v_uv * 1.7 + vec2(seed * 21.3, seed * 37.7);"
+"        float n = noise(q) * 0.55 + noise(q * 2.2) * 0.3 + noise(q * 4.6) * 0.15;"
+"        float rr = length(v_uv) * (0.72 + 0.45 * n);"
+"        float a = (1.0 - smoothstep(0.25, 1.0, rr)) * inside(v_uv);"
+"        if (a <= 0.002) discard;"
+"        a *= a * v_color.a;"
+"        float up = clamp(v_uv.y * 0.6 + 0.5, 0.0, 1.0);"
+"        vec3 c = v_color.rgb * (0.7 + 0.7 * up) + vec3(0.045) * up;"
+"        o_color = vec4(c, a * clamp(room / 0.3 + 0.25, 0.0, 1.0));"
 "        return;"
 "    }"
 "    if (type == 2) {"
@@ -1322,6 +1638,21 @@ static GLuint postProgram(GLuint (*compile)(GLenum, const std::string&, const ch
     glDeleteShader(vertex);
     glDeleteShader(fragment);
     return program;
+}
+
+/* The alpha under which a blended batch's fragment writes no depth (u_depthCut). */
+constexpr float kDepthCutCar = 0.08f;
+constexpr float kDepthCutWorld = 0.5f;
+
+/* NFS_CAR_SHADOW: 0 or off leaves the cars' shadows off the road (a car's
+ * shadow is a decal the port has recognised, batch.decal). */
+static bool carShadowSetting()
+{
+    static const bool on = [] {
+        const char* value = SDL_getenv("NFS_CAR_SHADOW");
+        return !(value && (SDL_strcmp(value, "0") == 0 || SDL_strcasecmp(value, "off") == 0));
+    }();
+    return on;
 }
 
 static float lightGlowSetting();
@@ -1494,8 +1825,15 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
     std::size_t blended = 0;
     for (const EffectParticle& p : list)
     {
+        /* A spark or a streak is a quad stretched from where it was to where it
+         * is, white hot at its head; a flame is a quad like a puff's, but added
+         * to what is behind it rather than blended over it -- light, not paint. */
+        const bool streak = p.type == EffectParticle::Spark || p.type == EffectParticle::Streak
+                            || p.type == EffectParticle::Droplet;
+        const bool additive =
+            streak || p.type == EffectParticle::Flame || p.type == EffectParticle::Glow;
         float ax, ay, bx, by;   // the quad's two axes, half its length and width
-        if (p.type == EffectParticle::Spark || p.type == EffectParticle::Streak)
+        if (streak)
         {
             float dx = p.x - p.tx, dy = p.y - p.ty;
             float length = std::sqrt(dx * dx + dy * dy);
@@ -1517,9 +1855,9 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
             ay = 0.0f;
             bx = 0.0f;
             by = p.size;
-            ++blended;
+            if (!additive)
+                ++blended;   // the alpha-blended ones come first in the buffer
         }
-        const bool streak = p.type == EffectParticle::Spark || p.type == EffectParticle::Streak;
         const float cx = streak ? 0.5f * (p.x + p.tx) : p.x;
         const float cy = streak ? 0.5f * (p.y + p.ty) : p.y;
         const float fromX = streak ? -1.0f : p.tx;
@@ -1845,6 +2183,8 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
     }
     for (const Batch& batch : draw.batches)
     {
+        if (batch.skipDraw)
+            continue;
         /* The world drawn, the HUD to come: its first draw is unfogged and
          * writes no depth, after the world's fogged ones.  That is the picture the
          * next frame's wet road reflects, without the HUD in it. */
@@ -1912,6 +2252,8 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
         if (!previous || batch.texture != previous->texture)
         {
             glBindTexture(GL_TEXTURE_2D, batch.texture < m_glTextures.size() ? m_glTextures[batch.texture] : 0);
+            if (batch.suspicious)
+                dumpTexture(batch.texture, batch.texture < m_glTextures.size() ? m_glTextures[batch.texture] : 0);
             glUniform1f(m_locations.levels, float(batch.levels));
             glUniform1i(m_locations.format, batch.format);
         }
@@ -1951,11 +2293,27 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
             else
                 glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE, alphaSource, alphaKept);
         }
+        /* What a blended batch writes into the depth buffer: only where it
+         * shows.  For the world's (not the cars') that is where it is half
+         * opaque or more: a faint square of the world's -- a sprite of the
+         * game's next to nothing in its picture or its vertices' alpha -- left
+         * its whole square in the depth buffer, nearer than what is behind it,
+         * and the port's spray and weather behind it were cut away in its
+         * shape: the turned boxes in the rain and snow (2026-11-17, found by
+         * drawing the particles with no depth test, and then with this cut for
+         * the world's batches alone).  A car's keeps the low cut, its glass
+         * being faint and still the car's. */
         if (!previous || batch.alphaBlend != previous->alphaBlend || batch.zBuffer != previous->zBuffer
-            || batch.decal != previous->decal)
-            glUniform1f(m_locations.depthCut, batch.zBuffer && !batch.decal ? 0.08f : 0.0f);
+            || batch.decal != previous->decal || batch.car != previous->car)
+            glUniform1f(m_locations.depthCut,
+                        batch.zBuffer && !batch.decal ? (batch.car ? kDepthCutCar : kDepthCutWorld) : 0.0f);
         if (!previous || batch.chromaKey != previous->chromaKey)
             glUniform1i(m_locations.chromaKey, batch.chromaKey ? 1 : 0);
+        if (!previous || batch.chromaKeyColor != previous->chromaKeyColor)
+            glUniform3i(m_locations.chromaKeyColor, GLint(batch.chromaKeyColor >> 16 & 0xff),
+                        GLint(batch.chromaKeyColor >> 8 & 0xff), GLint(batch.chromaKeyColor & 0xff));
+        if (!previous || batch.alphaRef != previous->alphaRef)
+            glUniform1f(m_locations.alphaRef, batch.alphaRef);
         if (!previous || batch.gamma != previous->gamma)
             glUniform1f(m_locations.gamma, batch.gamma);
         if (!previous || batch.cull != previous->cull)
@@ -2183,7 +2541,33 @@ void ThrashRenderer::setTexClampMode(bool wrapS, bool wrapT)
 
 void ThrashRenderer::setChromakeyValue(x86::reg32 color)
 {
-    m_chromaKeyColor = color;
+    /* Each of the game's pictures is cut out by its own colour -- the weather's
+     * drops by their green, a cut-out's by black -- and the triangles already
+     * queued were to be cut by the one in force as they came: a change ends the
+     * batch. */
+    if (color != m_chromaKeyColor)
+    {
+        flush();
+        m_chromaKeyColor = color;
+        /* NFS_CHROMA_TRACE: each colour the game's pictures are cut out by, once
+         * -- the weather's drops are 565 with a green key round them, so more
+         * than one is in use in a frame. */
+        static const bool traced = SDL_getenv("NFS_CHROMA_TRACE") != nullptr;
+        static x86::reg32 seen[8] = {};
+        static int count = 0;
+        if (traced)
+        {
+            bool known = false;
+            for (int k = 0; k < count; ++k)
+                known = known || seen[k] == color;
+            if (!known && count < 8)
+            {
+                seen[count++] = color;
+                SDL_Log("[CHROMA] keyed out: 0x%08x (%u,%u,%u)", color, color >> 16 & 0xff, color >> 8 & 0xff,
+                        color & 0xff);
+            }
+        }
+    }
 }
 
 void ThrashRenderer::setClipWindow(x86::reg32 minX, x86::reg32 minY, x86::reg32 maxX, x86::reg32 maxY)
@@ -2431,14 +2815,18 @@ static void soften(std::vector<x86::reg8>& texels, x86::reg32 size, x86::reg32 l
             x86::reg8* t = &texels[(std::size_t(y) * size + x) * 4];
             if (picture == SoftenedPicture::Shadow)
             {
-                // A rounded square's distance from the edge, the alpha
-                // falling over the outer third.
-                const float corner = 0.45f;
-                const float qx = std::max(std::fabs(px) - (1.0f - corner), 0.0f);
-                const float qy = std::max(std::fabs(py) - (1.0f - corner), 0.0f);
-                const float inside = 1.0f - (std::sqrt(qx * qx + qy * qy) + std::min(std::max(std::fabs(px), std::fabs(py)) - (1.0f - corner), 0.0f)) / corner;
-                const float alpha = smoothStep(0.0f, 0.75f, inside);
-                t[3] = x86::reg8(std::lround(255.0f * 0.9f * alpha));
+                /* A car's shadow: a soft **ellipse** in the middle of the
+                 * picture, gone before the square's edge.  It was a rounded
+                 * square until 2026-11-17 -- the picture is opaque to within
+                 * three texels of its edge, and a squircle of it, however soft
+                 * the rim, is still a square on the road: a turned, dark,
+                 * translucent square the size of a car, which on a bright road
+                 * reads as a rectangle of opaque paint rather than a shadow
+                 * (TODOs.md).  The corners of the picture are cut away by the
+                 * radius, so no angle of the quad can show one. */
+                const float r = std::sqrt(px * px + py * py);
+                const float alpha = 1.0f - smoothStep(0.55f, 1.0f, r);
+                t[3] = x86::reg8(std::lround(255.0f * 0.85f * alpha));
                 continue;
             }
             // The pool and the streak: dimmed to nothing at the edge, the

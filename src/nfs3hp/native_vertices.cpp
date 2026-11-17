@@ -53,6 +53,11 @@
 namespace nfs3hp
 {
 
+// native_particles.cpp: whether the port draws the weather's flakes and drops.
+bool ownWeather();
+// native_particles.cpp: whether the game's own sprite quads are drawn at all.
+bool gameSprites(win32::WinApplication* app);
+
 // Stand-ins further down that the clipper's callers call straight.
 bool clipPolygon(win32::WinApplication* app, x86::CPU& cpu);
 bool clipTriangle(win32::WinApplication* app, x86::CPU& cpu);
@@ -308,12 +313,13 @@ inline bool singlePrecision(const x86::CPU& cpu)
 }
 
 /* The stand-ins that only draw -- vertices, colours, polygons, the clipper,
- * the lights -- stay on in a race at extended precision (extendedRaces, as
- * the Modern Patch runs one): what they work out in float reaches the picture
- * and nothing else, a last bit of a pixel at most, while every stand-in the
- * physics and the opponents' driving can reach (the vector helpers, the
- * nearest block, the ground's height, the particles with their share of the
- * random numbers) steps aside for the generated code and its extended
+ * the lights, the particles' and the drops' drawing and what is drawn over the
+ * view -- stay on in a race at extended precision (extendedRaces, as the
+ * Modern Patch runs one): what they work out in float reaches the picture and
+ * nothing else, a last bit of a pixel at most, while every stand-in the physics
+ * and the opponents' driving can reach (the vector helpers, the nearest block,
+ * the ground's height, the particles with their share of the random numbers,
+ * moveParticles) steps aside for the generated code and its extended
  * arithmetic. */
 inline bool drawingPrecision(const x86::CPU& cpu)
 {
@@ -3634,6 +3640,19 @@ void particlesNative(win32::WinApplication* app, x86::CPU& cpu)
         finish(cpu.edx);
         return;
     }
+    if (!gameSprites(app))
+    {
+        /* The game's own sprites are not drawn (NFS_GAME_SPRITES, off): nothing
+         * this loop would have built, the list left empty exactly as the loop
+         * leaves it with no particle drawn.  See gameSprites(). */
+        IntegerFlags flags;
+        flags.logic(0);  // test eax, eax
+        flags.store(cpu);
+        word(ebp - 0x1e) = 0;
+        word(ebp - 0x1a) = 0;
+        finish(cpu.edx);
+        return;
+    }
     const x86::reg32 first = word(ebp + 0x22);
     x86::reg32 cursor = first;
     x86::reg32 count = 0;
@@ -3694,7 +3713,17 @@ void particlesNative(win32::WinApplication* app, x86::CPU& cpu)
         byte(centre + 0x14) = screenCode(app, centre, edx);
         if (x86::sreg32(asBits(z)) < 0x40400000 && pass == 0)
         {
-            // a particle on the camera: sub_4ca500 may splash it over the view
+            /* A particle on the camera: sub_4ca500 may splash it over the view.
+             * The splash is a square of the kind's picture -- none of them is
+             * cut out by anything, a 565 texel with no alpha and no key -- so
+             * when the port draws the weather itself (native_particles.cpp,
+             * NFS_WEATHER_PARTICLES) the particle is simply left out here, as
+             * the port's own are within 1.5 m of the camera. */
+            if (ownWeather())
+            {
+                byte(flag) = 0;
+                continue;
+            }
             compared.replay(cpu);
             compared.any = false;
             word(cpu.esp - 4) = kind;
@@ -3903,6 +3932,19 @@ void dropsNative(win32::WinApplication* app, x86::CPU& cpu)
         }
     }
     LastWideCompare compared;
+    if (!gameSprites(app))
+    {
+        /* The drops on the view are not drawn either (NFS_GAME_SPRITES, off):
+         * their pictures are squares of the drop with nothing cutting them out,
+         * so each was a turned rectangle of view over the view -- blurred, half
+         * transparent -- wherever a drop landed on the camera (TODOs.md).  The
+         * port's weather draws the flakes and the drops that come close
+         * (native_particles.cpp, throwWeather). */
+        flags.compare(0xc8, 0xc8);
+        flags.store(cpu);
+        finish(0);
+        return;
+    }
     const double k1 = floatAt(0x56009c), k2 = floatAt(0x5600a0), c1 = floatAt(0x5600a4), c2 = floatAt(0x5600a8);
     const x86::reg32 drops = 0x7f0bd0 + player * 0x3200;
     x86::reg32 eax = 0;
@@ -6492,7 +6534,9 @@ bool smallNative(win32::WinApplication* app, x86::CPU& cpu, int precise, const c
 }
 
 /* The particles' drawing, the drops on the view, the particles' moving: each
- * checked whole against the generated code under NFS_NATIVE_CHECK=clip. */
+ * checked whole against the generated code under NFS_NATIVE_CHECK=clip.  The
+ * two drawing ones only while the game's sprites are drawn at all: with
+ * NFS_GAME_SPRITES off the point is that they draw nothing (gameSprites). */
 Ranges particleRanges(win32::WinApplication* app)
 {
     Ranges ranges = { { 0x55fe34, 8 }, { 0x7a3d08, 8 }, { 0x7ddfd0, 0x258 * 0x80 }, { 0x5644e0, 0x18 },
@@ -6504,11 +6548,51 @@ Ranges particleRanges(win32::WinApplication* app)
     return ranges;
 }
 
+/* NFS_SPRITE_TRACE: which of them drew, the port's stand-in or the game's
+ * generated code, and with what FPU -- once per answer, so that a log says
+ * whether switching the game's sprites off takes effect at all. */
+void traceDrawing(const char* what, bool native, const x86::CPU& cpu)
+{
+    static const bool traced = SDL_getenv("NFS_SPRITE_TRACE") != nullptr;
+    if (!traced)
+        return;
+    char line[160];
+    SDL_snprintf(line, sizeof line, "sub_%s: %s (pc %d rc %d, natives %d)", what, native ? "the port's" : "the game's",
+                 int(cpu.fpu.control.pc), int(cpu.fpu.control.rc), int(nativesOn()));
+    static std::vector<std::string> seen;
+    for (const std::string& was : seen)
+        if (was == line)
+            return;
+    if (seen.size() > 12)
+        return;
+    seen.push_back(line);
+    SDL_Log("[SPRITE] %s", line);
+}
+
+/* The two that only draw -- the pool's quads (sub_4cbc90) and the drops on the
+ * view (sub_4cb750) -- draw under the stand-ins that draw (drawingPrecision),
+ * not under the race's own precision: their list is a picture's and never the
+ * simulation's.  That is what makes NFS_GAME_SPRITES work: a race's FPU is
+ * extended by default (NFS_FPU_EXTENDED), so while these needed single
+ * precision the generated code drew in every race and the game's turned
+ * squares stayed on the screen however it was switched off.
+ *
+ * With the game's sprites drawn (NFS_GAME_SPRITES=1) they take the race's own
+ * single precision as before: the game's splash (sub_4ca500) then kills a
+ * particle as the generated code would, an effect the simulation sees. */
 bool particles(win32::WinApplication* app, x86::CPU& cpu)
 {
-    if (originalRunning() || !singlePrecision(cpu) || !polygonNativesOn())
+    if (originalRunning() || !polygonNativesOn() || !drawingPrecision(cpu))
+    {
+        traceDrawing("4cbc90", false, cpu);
         return false;
-    if (targetedCheck() && !win32::glide2x::tracingTriangles())
+    }
+    if (gameSprites(app) && !singlePrecision(cpu))
+    {
+        traceDrawing("4cbc90 (sprites on)", false, cpu);
+        return false;
+    }
+    if (targetedCheck() && !win32::glide2x::tracingTriangles() && gameSprites(app) && singlePrecision(cpu))
     {
         static CheckCounts counts;
         Ranges ranges = particleRanges(app);
@@ -6516,15 +6600,24 @@ bool particles(win32::WinApplication* app, x86::CPU& cpu)
         checkClip(app, cpu, counts, "sub_4cbc90", 0x4cbc90, particlesNative, ranges);
         return true;
     }
+    traceDrawing("4cbc90", true, cpu);
     particlesNative(app, cpu);
     return true;
 }
 
 bool drops(win32::WinApplication* app, x86::CPU& cpu)
 {
-    if (originalRunning() || !singlePrecision(cpu) || !polygonNativesOn())
+    if (originalRunning() || !polygonNativesOn() || !drawingPrecision(cpu))
+    {
+        traceDrawing("4cb750", false, cpu);
         return false;
-    if (targetedCheck() && !win32::glide2x::tracingTriangles())
+    }
+    if (gameSprites(app) && !singlePrecision(cpu))
+    {
+        traceDrawing("4cb750 (sprites on)", false, cpu);
+        return false;
+    }
+    if (targetedCheck() && !win32::glide2x::tracingTriangles() && gameSprites(app) && singlePrecision(cpu))
     {
         static CheckCounts counts;
         Ranges ranges = particleRanges(app);
@@ -6532,6 +6625,7 @@ bool drops(win32::WinApplication* app, x86::CPU& cpu)
         checkClip(app, cpu, counts, "sub_4cb750", 0x4cb750, dropsNative, ranges);
         return true;
     }
+    traceDrawing("4cb750", true, cpu);
     dropsNative(app, cpu);
     return true;
 }

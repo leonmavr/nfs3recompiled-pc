@@ -208,6 +208,18 @@ trilinear with 8x anisotropic filtering (`NFS_ANISOTROPY`, at most what the
 GPU offers). Chroma-keyed draws still filter by hand from the game's own
 level. `NFS_TEXTURE_FILTER=0` is the Voodoo's sampling again.
 
+**The key colour is per picture, not per frame.** Glide's chroma key is state
+the game sets as it changes material, and its pictures do not agree on one
+colour: the cut-outs are keyed by black, the weather's drops
+(`gamedata/render/pc/weather.fsh`, 565 texels with a blank 0x07e0 green round
+them) by green. The port used to key a whole frame by the last value set, so
+every picture but that one drew its blank background as a rectangle over the
+view. Each batch now carries the key in force as its triangles were queued
+(`Batch::chromaKeyColor`, `setChromakeyValue`), and the shader is given it per
+batch. A 565 texel's byte is compared both as its 5 or 6 bits shifted up (0 to
+248) and scaled to 0 to 255, since the game's keys come in one of the two
+(`keyed()`). `NFS_CHROMA_TRACE=1` prints each colour the game keys out, once.
+
 Over that, the road and the ground get a fine grain (`NFS_ROAD_DETAIL`, 0.35):
 a tiling 256 x 256 noise made at start, read in each surface's own texture
 coordinates at eight to a texture, and lightening or darkening it by up to
@@ -358,6 +370,106 @@ it, the picture's alpha left as it was. Not in split screen, nor without the
 native THRASH renderer: the game's own then. `NFS_PARTICLES` (1; a number up
 to 3 for more, `0`/`off` for the game's).
 
+**No particle ever shows the edge of its quad.** A cloud's or a flake's ragged
+rim is its noise's, scaled by it -- so where the noise came out small the rim
+withdrew further than the quad's own side, and the straight side showed as a
+turned square of dimmed picture over the view (tyre smoke crossing the camera
+was the worst of it). Every shape whose edge is noise's is multiplied by
+`inside()`, which is 1 well inside the quad's circle and 0 at its rim, and a
+raindrop's dash fades at its ends as well as its sides: whatever a particle's
+size and seed, nothing of it reaches its quad's edge. (Checked by rendering one
+quad of each type offscreen and reading the alpha back: at a quad's mid-sides
+every one of them is 0 but the streaks', whose sides are 1 to 5 of 255 and whose
+ends are the dash's own.)
+
+**In the rear-view mirror too.** A single-screen race draws two views: the main
+one, then the mirror's (`sub_41d960`). They are moved and made once a frame, for
+the main view (`particlesFrame`), and then -- as each later view's sky is drawn,
+which is where a view's camera and projection are known -- turned into that
+view again (`particlesMirrorFrame`): the mirror's own record carries its camera
+and matrix, and the projection the game set for its pass puts the result inside
+the mirror's rectangle, so a flame or a puff of smoke behind the car is behind it
+in the mirror at the right place and size, the blended ones first and the added
+ones after them, both views' in one buffer. Smoke in the mirror fades against
+the mirror's own pixels, as it does against the main view's.
+
+### The weather's flakes and drops, the port's own
+
+What falls out of the sky is the game's particle kinds 7 and 8, and its pictures
+of them are **squares with nothing cutting them out**: 565 texels, no alpha at
+all, and (so far as the port's Glide state says) no colour key either -- so
+every flake carried a box of dimmed picture over the view, and one that came
+near the lens was a large one. The port now makes those itself
+(`throwWeather`, `native_particles.cpp`), as it makes the dust and the spray:
+the game still decides where and when, and how fast and how big
+(`argument(3)`), and the port draws
+
+- **a raindrop** as a short bright streak from where it was a frame ago
+  (`EffectParticle::Droplet`, added to the picture like a spark),
+- **a snowflake** as a small soft speck, ragged by its seed
+  (`EffectParticle::Flake`, blended like a puff),
+
+in a pale colour of its own, falling as the game threw it -- the rain hardly
+slowed, the flake drifting. Which it is comes from the track's weather (its
+`type` in `3trNNw.hrz`, 1 rain and 2 snow, `trackRains` of `nfs3hp_main.cpp`).
+A storm makes a great many of them, so they are kept to 900 at once and never
+crowd the dust and the sparks out of the pool. `NFS_WEATHER_PARTICLES`
+(`0`/`off` for the game's own squares).
+
+**A particle that comes onto the camera is left out**, not splashed: the game's
+own particle drawing hands one within 3 of the camera to `sub_4ca500`, which
+lays a splash of the kind's picture over the view and kills the particle -- and
+that splash is a square of the same uncut picture, the box that showed for a
+flake right on the lens. With the port's weather on, `particlesNative`
+(`native_vertices.cpp`) drops such a particle instead and never calls
+`sub_4ca500` (`ownWeather`), as the port's own are culled within 1.5 m of the
+camera. With `NFS_WEATHER_PARTICLES=0` the game's splash is the game's again.
+
+The same suspicion hung over every sprite the game draws with those pictures
+(the "turned dark squares" of the port's wheel spray, TODOs.md) -- and it was
+so: none of them is cut out. `NFS_SPRITE_TRACE=1` prints each kind of draw
+once, with the texture the game gave it, its format, whether it is cut out and
+by what colour, and what it is blended by.
+
+### The game's own sprites are not drawn
+
+Every picture in the game's particle set is a 565 texel with no alpha and
+nothing cutting it out, and the pool turns each quad to its particle's own spin
+(`+0x38`, `+0x3c`), so **each of them was a turned square of picture over the
+view**, brighter or dimmer than what stood behind it -- and the drops that land
+on the camera (`dropsNative`, `sub_4cb750`) were turned rectangles of blurred
+view over the view, in the rain the worst of it. So neither the pool's quads
+(`particlesNative`) nor the drops on the view (`dropsNative`) are drawn at all:
+`NFS_GAME_SPRITES` (`1`/`on` for them back, for a comparison).
+
+Those two stand-ins draw under `drawingPrecision`, not under the race's own
+single precision, and that was the whole bug: a race's FPU is extended by
+default (`NFS_FPU_EXTENDED`, `raceControl`), so while they asked for single
+precision the generated code drew instead, in **every** race -- and it drew the
+game's squares, and splashed the particles that came onto the camera into the
+drops on the view, however the port's own drawing was switched off. They build
+a picture's polygon list and touch nothing the simulation reads; only with
+`NFS_GAME_SPRITES=1` do they still ask for the race's single precision, since
+the game's splash (`sub_4ca500`) then kills a particle as the generated code
+would.
+
+Nothing the port draws goes through that path, so nothing else is lost: the
+dust, the grass, the spray, the smoke, the exhaust flames and the weather are
+all made and drawn by `native_particles.cpp`, and with the game's kinds taken
+over (`particleTakeOver`) the game makes none of its own for the pool to draw
+anyway. The tyre marks, the skid polygons, the car bodies and the tracks are
+drawn as they always were.
+
+The game's sprites are still drawn wherever the port leaves a kind to the game
+-- `NFS_PARTICLES=0`, or one of the switches that hands a kind back
+(`NFS_TYRE_SMOKE=0`, `NFS_WEATHER_PARTICLES=0`, `NFS_WHEEL_SPRAY=0`), or split
+screen, where every kind is the game's: something rather than nothing, the
+squares and all. `NFS_GAME_SPRITES=1`/`on` draws them everywhere, for a
+comparison.
+
+With the squares gone the port's spray is what a wet road throws, so
+`NFS_WHEEL_SPRAY` is on by default now.
+
 ### Grass, and spray off a wet road
 
 What comes off grass is the game's particle kind 5 and the spray off a wet
@@ -378,7 +490,36 @@ only the game's dark smoke (kind 6). So each frame every wheel on grass
 up to three blades, more often the faster (`grassFromWheels`), and the game's
 smoke off a wheel on grass (the nearest wheel to where it starts,
 `groundAt`) is taken over as grass instead.
-`NFS_WHEEL_SPRAY` (off for now: with it the weather's flakes and drops still show as small turned squares -- a known bug, TODOs.md; `1`/`on` for the port's spray).
+`NFS_WHEEL_SPRAY` (on; `0`/`off` for none).
+
+### Tyre smoke
+
+Smoke comes off a tyre whenever it is being scrubbed -- **whenever the game
+lays a tyre mark**: cornering at the limit or sliding, a wheel spun up out of a
+standstill, a wheel locked under braking. The port asks that of the car itself
+each frame (`tyreSmoke`, `native_particles.cpp`) rather than waiting for the
+game's own smoke: how much of the velocity is across the car (`+0xc0` is its
+right -- over 1.2 m/s the tyres are being dragged over a road they no longer
+roll along, full smoke at 4), and for the player's car the pedals -- throttle
+`0x79c339` with the revs over half the redline and the car under 12 m/s (spun
+up), brake `0x79c33a` above five eighths over 8 m/s (locked). It comes off one
+of the wheels that is scrubbing, on **pavement only** (`groundUnder`; grass,
+dirt and snow throw their own dust) and at the driven end when it is a wheel
+spinning -- the end found by where the contact point lies along the car's
+forward axis, not by the wheels' order. The game's own particle kind 6 is taken
+over as well (`throwSmoke`), for the wheel it names with the speed it names.
+
+What comes off is `EffectParticle::Smoke`, blended over the picture like a puff
+rather than added to it: a dark cloud of its own colour (`noGround`), almost
+black at its heart and grey as the sky catches its top, ragged by its own noise
+-- more of it and thicker the faster the wheel was going, one to four clouds a
+call. Each rises: it has **no gravity and no ground to settle on** (a small
+upward pull instead), slowing and spreading as it grows, and is gone in one to
+two seconds. `NFS_TYRE_SMOKE` (on; a number up to 3 for more and thicker, `0`/
+`off` for none).
+
+On grass the same kind is grass thrown up instead -- see above -- so a wheel
+sliding on grass throws blades and no smoke.
 
 The game's own particle is still made for each kind taken over (the hook
 calls `sub_4ca850` itself, then marks the particle free at once): skipping it
@@ -387,7 +528,104 @@ particles were in the renderer: a puff's noise alone did not bring its alpha
 to 0 at its quad's edge (now faded out from 0.6 of its radius), and the game's
 flake and spray sprites write depth over their whole square, so the port's
 particles behind one were cut away in its shape. A batch that writes depth now
-writes it only where its alpha is at least 0.08 (`u_depthCut`).
+writes it only where its alpha is at least 0.08 (`u_depthCut`) -- and for the
+world's batches (not the cars') at least 0.5 (`kDepthCutWorld`): a faint square
+of the world's still left its whole square in the depth buffer at 0.08, and the
+spray and the weather behind it showed as turned boxes cut out of them, in
+the rain and snow (TODOs.md, 2026-11-17).
+
+### Exhaust flames when gearing up
+
+A car shifting up under power spits a flame out of each of the exhausts its
+folder marks (`tools/car_model.py exhausts`, Marking a car's exhausts): one per
+tip, a hand's width out of the pipe. A car with no `exhausts.json` throws
+nothing at all, and neither does one that is coasting or is shifted through a
+gear the byte at `+0x50b` does not record as one -- `engineFlames`
+(`native_particles.cpp`) watches that byte of each of the sixteen cars, 1 being
+neutral, 2 the first forward gear and 0x64 "none yet", and fires when it has
+gone up. **Every car of the race does it, the opponents' as much as the
+player's**: the loop is over the sixteen slots, each car owning a race record,
+and a car finds its exhausts by the body name the race gave it (`[car+0x1e4]`,
+The car's own structure) before the game's id-to-folder road is tried
+(`carExhausts`, `native_exhausts.cpp`). That name is the whole answer the game
+itself makes of the car's id -- the folder a racer's model, textures and spec
+came out of -- so the lookup is exact, not a guess: a car marked with four
+exhausts gets all four (the trace prints every tip: `cout` and `32ac` four each,
+`j220` two). Traffic and cops carry a body code instead -- `0005`, `vett` -- so
+a body marked once serves both a racer and the traffic built on it.
+
+Standing still at the line with the engine revved, a car pops them instead, one
+exhaust at a time, every 0.15 to 0.35 s -- a limiter's backfire rather than a
+jet. Any of three things says it is being revved, because a car standing still
+does not keep a throttle of its own and what the game does with its revs there
+is the game's to decide:
+
+- **the throttle**: the first player's byte at `0x79c339`, 0 to 255, above five
+  eighths -- the same byte the camera's pull is off. Asked only of the player's
+  car, the one the first view follows (`[[0x5e10b0]+8]`).
+- **at the redline**: revs (`+0x590`) in the top seventh of the car's own
+  redline, `[car+0x528]+0x1c4` (the rpm the drivetrain drives to, redline less
+  200 at full demand, next to the minimum rpm at `+0x1c0`, and the rev counter's
+  full scale) -- near enough the peak of its torque.
+- **rising**: revs up by 60 in a frame, a blip of the throttle, which no car over
+  a walking pace can be doing without the speed to go with it.
+
+Under 3 m/s (off the velocity at `+0xa4`, which every car keeps) is the start
+line; the same test catches a launch, wheels still spinning. The timer only runs
+while the engine is held there, so the limiter's bounce cannot turn into a
+stream of flames. An opponent cannot be at any of the three at a standstill --
+its revs are the game's own working out of the speed it is driven to
+(`sub_4061b0`), nothing while it waits -- so the flames at the line are the
+player's.
+
+They are the port's particles, `EffectParticle::Flame`, drawn in the additive
+pass of `drawParticles` and shaped in the shader: a ball of noise, ragged at its
+edge, hotter towards its heart, white there -- the file's colour (or `#f2380a`
+where it names none) out at the edge, near white in the middle. Each grows out
+of nothing over 0.18 s (the square root of its age, so fast at first and then
+slowing), holds its size for 0.8 s, trembles all the while on the screen -- a
+dozenth of its size either way, from sines of its age and a seed of its own --
+and fades and stops by its one second, no more. **They stay at the pipe they
+came out of**, on the car: a flame remembers the car and where on it it burns,
+in that car's own space, and is turned into the world afresh each frame from the
+car's centre and axes, so it goes round corners and down the road with it
+instead of hanging over the road behind. `NFS_EXHAUST_FLAMES` (`0`/`off`) takes
+them away. `NFS_EXHAUST_DEFAULTS` (off; `1`) gives every car with nothing marked
+a pair of default pipes instead of none -- at the rear corners, `x` ±0.42 m,
+`y` -0.27, `z` -2.05, 0.05 m across, which is where the game's own marked cars
+have theirs -- so that every car on the grid can be seen to throw flames before
+it has been marked; a car with a file keeps its own, four where it names four.
+`NFS_EXHAUSTS_TRACE` (`1`) prints the table of what was read at startup, every
+tip's place among it, and then a line the first time each car of a race shifts up
+or revs at a standstill -- the folder it was found under, its revs against its
+redline, how many flames, and which of the three said it was being revved --
+which is how to tell that the opponents' are working, and what to tune the revs
+to: a car at rest says what it climbs to, a line every 1000 rpm (`[EXHAUST] slot
+0 "cout": at rest, 6820 rpm (redline 7500), 0.02 m/s`), and one the first time a
+car pops on a downshift or crackles on the overrun.
+
+**A hard downshift pops them too**, and so does lifting off at the top of the
+revs: a real racing car's overrun, the unburnt charge catching in the exhaust
+when the engine is dragged up to the lower gear's revs or down by the car.
+A downshift from a gear into a lower one at over 4 m/s pops one exhaust or two
+at once; lifted throttle at over 12 m/s with the revs in the top third pops one
+every 0.1 to 0.35 s for as long as it lasts (`popFlame`). Each is **half a
+flame** -- half the size and half the light of a gear change's, a crackle
+rather than a jet. Only the player's throttle is a byte the port can read
+(`0x79c339`), so only the player's car crackles on the overrun; every car of the
+race pops on its downshifts, opponents included.
+
+**They throw light on the road.** Each flame pools a soft disc of its own colour
+under the car (`EffectParticle::Glow`, added to the picture as the flame is),
+placed where the pipe is but at the height the car's wheels stand at -- a
+wheel's contact point is at `+0x304`, 0x78 bytes each, and the lowest of the
+four is the ground, worked out once a frame for each car that lights something.
+The disc is as wide as the ball is big (a metre or so), squashed lengthwise as a
+disc on the ground is seen from behind, and **faint** -- a third of the light the
+flame itself is worth, so it reads as a tint spilling onto the road under the car
+rather than a puddle of paint. It comes up with the flame, throbs with it and
+goes out with it, and a pop throws half as much. `NFS_FLAME_LIGHT` (`0`/`off`)
+takes the pools away; a number up to 3 makes them stronger (0.5 for half).
 
 ### Sun glare
 
@@ -591,8 +829,12 @@ faded to nothing towards their sides and far end (`soften`,
 ### Car shadows
 
 A car's shadow (`shad`, same file) was one hard-edged dark square under every
-car whatever the light. Its alpha now falls off over the outer third, round at
-the corners, and the quad is stretched away from the sun: the sun the game
+car whatever the light. Its alpha is now a soft ellipse inscribed in that square
+-- gone before the picture's edge, so that no angle the quad takes can show a
+corner or a side of it: it was a rounded *square* until 2026-11-17, and a turned,
+dark, translucent square the size of a car on a bright road reads as a rectangle
+of paint, which is what it was reported as (`NFS_CAR_SHADOW=0` leaves the cars
+with no shadow at all). The quad is stretched away from the sun: the sun the game
 lights the cars with (`0x55e6a0`) is turned into each car's own axes as
 `sub_49da30` lights it (`native_vertices.cpp`), and when THRASH draws the
 shadow quad (`stretchShadow`, `native_thrash.cpp`) the corners on the side away
@@ -885,6 +1127,63 @@ on — memory, registers, flags, the FPU and the triangles drawn
 (`NFS_NATIVE_CHECK`) — and keeps the x87's single-precision rounding. In a race
 this is about three quarters of the game thread's time. `NFS_NATIVES=0` goes
 back to the generated code, `NFS_THRASH_GL=0` to the old renderer.
+
+### The car's own structure
+
+The race's cars are sixteen structures of 0x9ac bytes from `0x5e1120`, in the
+order the race made them (`car = 0x5e1120 + slot * 0x9ac`, slot 0 the first
+player's). Everything about one -- where it is, what it is doing, how it is
+dressed -- is in there, and most of the port's hooks read it directly. The
+fields it reads, and what each is:
+
+| at | what | how it is known |
+| --- | --- | --- |
+| `+0x98` | its centre, three floats: x, y (up), z | every world-to-screen of a car's own features starts here (`noteSun`, `native_particles.cpp`) |
+| `+0xa4` | its velocity, three floats, m/s | Slipstreaming's, and the dust the wheels throw |
+| `+0xb0`, `+0xb4` | its mass, and 1 over it | Traffic lighter, cops heavier and faster |
+| `+0xb8` | its speed, m/s (kept up for the player's car alone) | Motion blur |
+| `+0xc0`, `+0xcc`, `+0xd8` | its axes, three floats each: right, up, forward | a place in its own space is `centre + right*x + up*y + forward*z` (the exhaust flames are placed that way) |
+| `+0xf0..+0xf8`, `+0xfc..+0x104` | its three moments of inertia, and 1 over each | Traffic lighter, cops heavier and faster |
+| `+0x15c` | how far it is sliding, m/s | Collisions' effects |
+| `+0x164` | held (a word, nonzero when it is not on its wheels) | `steeringAmount`, and lead-footed cornering |
+| `+0x168` | the speed it lost into what it hit, m/s | A crash's note, its sparks |
+| `+0x1e4` | **its body name**, a C string | `strcpy` of `sub_4392b0(id)` at `0x42876d`, once, when the car is set up -- see below |
+| `+0x200` | flags: bit 3 (`8`) a racer, `0x10` traffic, `0x20` a cop | `sub_428700`, read by the AI and the cops' pace |
+| `+0x220` | its race record (`0x6fd52c` + `0x6c` a car), or 0 when it is not in the race | The grid |
+| `+0x4f4` | its speed as the game shows it, m/s, signed (set from `+0x7c0` when a race is made) | `carSpeedMph` (`0x472110`) makes it positive and times it by 2.24, mph |
+| `+0x50b` | its gear, a byte: 1 neutral, 2 first forward, 0x64 "none yet" | The gearbox's kick, and the exhaust flames |
+| `+0x528` | **its data table**, the car's spec as loaded: the redline in rpm at `+0x1c4`, the engine's minimum rpm at `+0x1c0`, its pull by speed from `+0x2ec` | the drivetrain (`sub_4061b0`) and the AI's pull (`sub_4064f0`) |
+| `+0x590` | its engine's revs, rpm | The rev counter, the gearbox's jolt, its rumble, and the exhaust flames at a standstill |
+| `+0x5c4` | something worked out of `+0x4f4`, per tick | not identified |
+| `+0x7b0` | the speed it is driven to, m/s (an opponent's aim) | The cops' pace |
+| `+0x7c4` | its own speed, m/s, as the drivetrain uses it | the AI's pull table's index |
+| `+0x300` | **four suspension records**, 0x78 bytes each | `sub_429b40` (`wheelSurface`), the grass the wheels throw and the light the exhaust flames pool on the road |
+| `+0x920` | its wheel's steering | `steeringAmount` |
+
+**A wheel's record** (`car+0x300`, 0x78 bytes each, `car+0x300+n*0x78`) keeps
+where that wheel touches the road at `+4`: **three 16.16 fixed-point ints**, x, y
+(up), z -- whole units of 1/65536, which the game itself `fild`s and multiplies
+by 1/65536 (`sub_4ca160`, the dust its own wheels throw, at `0x540380`). Read as
+floats they are denormals, and anything placed by them lands at the world's
+origin, so the port converts them (`wheelContact`, `native_particles.cpp`). The
+surface the wheel stands on is a word at `+0x14` (nonzero when it has one) and a
+pointer at `+0x18` whose byte at `+1` holds the surface's number, `& 0x3f`
+(`sub_429b40`). The grass the wheels throw, the smoke's test for whether a wheel
+is on grass, and the pool of light under an exhaust flame are all placed
+off them.
+
+**Its body name.** A car does not know its own folder: `sub_4392b0(id)` answers
+that for whatever its race record's id (`[record+0x14]`) is, and what it
+answers is the name the game builds the car's file names from (`%s\car.fce` and
+the rest, `0x43b2e0`). A car whose id has a record in the game's own table
+(`sub_439a50`, `car_slots.h`) gets that record's name at `+0x110` -- for a racer
+its folder, `diab`; one with no record of its own, traffic and the cops, gets a
+body code out of the game's tables instead (`0x55cfb0` for traffic, `0x55c92c`
+for the pursuit cars: `0005`, `vett`, `cagli` -- the same bodies the racers are
+made of). The car keeps a copy of that answer at `+0x1e4`, so it is there for
+the asking without the id being looked up again, and every car of the race has
+one. The exhaust flames find a car's exhausts by it (Exhaust flames when
+gearing up); the AI's trace prints it; the cops' pace is tuned by it.
 
 ### The opponents' driving, tuned
 
@@ -1211,6 +1510,42 @@ and timings are named constants at the top of the file. `NFS_KNOCK_TRACE=1`
 logs every touch; `NFS_KNOCK_TEST=1` (or `lamp`, `sign`) puts the player's
 car 12 m short of one, 4 s in, at 30 m/s.
 
+### Crashes you feel
+
+How hard a car was hit is the game's own number: `sub_42ac40`, each car's
+collision effects, finds it at `[car+0x168]` (m/s) and what it hit at
+`[car+0x170]` (0x4xxxx a wall, its material in the low byte; 0x6xxxx a track
+object; the rest another car). `collisionEffects` hands every car's to
+`crashHit` (`native_crash.cpp`).
+
+**The shake.** For the first player's car a hit over 3 m/s knocks the camera
+aside and up -- swinging back once or twice and dying in a few tenths of a
+second -- with a fast, small vibration under it, both as strong as the hit
+(full at 20 m/s): a wall's whole, another car's 0.7 of it, a sign's or a
+tree's 0.45. Scraping along a wall keeps a light buzz going by the speed; a
+landing after 8 ticks in the air, falling at 4 m/s or more, jolts it down.
+`cameraToView` moves the camera by it in any of the player's own views
+(chase, bumper, cockpit; not the replay's television cameras), after the
+throttle's pull. By the race's clock, so a pause holds it still.
+`NFS_CRASH_SHAKE` (2; up to 3; `0`/`off`).
+
+**The sound.** The game's sounds are started by `sub_4182b0`: the bank's
+handle in eax, the patch in edx, the volume (0-127, times the effects
+volume) in ecx, the direction in ebx and one more byte as its argument; it
+fills SND's play block (`sub_4e9b20`'s defaults: +5 the note, 60; +8 the
+volume) and plays it. A crash is bank 2's patch 46 and a wall scrape its
+patch 41, and the game starts its crash at a volume of 0, the 3D sound's to
+set -- quiet for all but the biggest hits. So each hit of the player's car
+over 3 m/s also plays that crash itself, in front, as loud as the hit (35 to
+127, by its share as above, at most one every 8 ticks); and every crash, the
+game's and the port's, is pitched by the latest hit -- up to 4 semitones lower
+for a big one, 3 higher for a tap -- and a scrape up to 5 higher the faster it
+scrapes (`crashNote`, in `sub_4182b0` at 0x4182dd, `tools/apply_crash_feel.py`).
+`NFS_CRASH_SOUND` (on; `0`/`off` leaves the game's). The port's crash was
+heard in a recording of the mix (`SDL_AUDIO_DRIVER=disk`); that the note is
+the pitch is SND's default of 60 and not yet heard. `NFS_CRASH_TRACE=1` logs
+it all. A pad already rumbles on every hit with the game's own jolts.
+
 ### Cars roll less in the air
 
 Off a ramp the game keeps whatever spin a car took off with until it lands:
@@ -1225,6 +1560,17 @@ race. Tested with a throw (`NFS_AIR_TEST=1`: 5 s on the clock the player's
 car goes up 3 m, rolling): the game's own rolled it past its roof and round;
 damped it tips about 40 degrees and lands on its wheels.
 `NFS_AIR_ROLL_DAMP` (1; up to 3 for more, `0`/`off` for the game's).
+
+### Cars keep their speed in the air
+
+The game drags a car down off its wheels as well: a jump costs speed the ramp
+never took, and a long one lands well short of what it left at. Each tick, for
+every car whose word at `+0x164` says it is in the air, the port holds the speed
+it took off with (`airSpeed`, `native_surface.cpp`): its sideways and forward
+velocity scaled back up to that speed, the fall left to gravity. A sudden loss
+is left alone and becomes the speed held from then on -- a wall in the air is a
+hit, and a hit is meant -- and a car back on its wheels holds nothing.
+`NFS_AIR_SPEED` (`0`/`off` for the game's).
 
 ### A race loads in a moment
 
@@ -1390,6 +1736,22 @@ nothing is there yet, and files every car shares — the add-ons' own copy of
 `compare.fsh` — are never written. `--dry-run` says what it would do. Fake
 downloads (a `.viv` that is not an archive) and archives that are not cars (an
 NFS4 traffic body) are named and skipped.
+
+**Taking a car out, and finding one that is there twice.** The same tool lists
+what is installed and takes cars out:
+
+    python3 tools/import_car.py build/game --list
+    python3 tools/import_car.py build/game --remove clk2 clk3 --backup /tmp
+
+`--list` prints every folder with its four-letter code, its ID and its make and
+model, and marks the folders that are another's duplicate — two imports of the
+same car, which the menus show as two identical entries.
+`--remove` zips each folder whole into `--backup` (the system's temporary
+folder by default) before deleting it, and takes its line out of
+`gamedata/carorder.txt` with it, so nothing is lost and the order of the rest is
+kept. The cars it was used on: `clk2` (the plain CLK-GTR) and `clk3` (a second
+copy of the liveried one, `clkg` kept), `chev` (the Camaro, `cama` kept), `d24z`
+(the Datsun, `dats` kept) and `lstm` (the Lister Storm, `lst2` kept).
 
 **Where a new car goes in the list.** The game numbers its cars by the order
 it finds their folders, and that number is what the settings keep: the
@@ -1585,12 +1947,16 @@ torque curve scaled, redline, idle, the forward gear ratios, the final drive,
 top speed and cap, front drive, brakes and their bias, grip, front grip and
 downforce. Change one and press Enter (or click elsewhere) and the charts and
 the worked-out figures follow at once; a car with changes is marked `*` in the
-list. Save writes the car through `car_perf.py` (car.viv and the loose
-carp.txt, the gearbox's rpm per m/s kept in step with the ratios and the final
-drive, the automatic gearbox's the same where they were the same); Cancel puts
-it back as it is on disk. The acceleration table is the game's own and does
-not follow these edits (`car_perf.py derive` rebuilds it). It needs a window
-for matplotlib (Tk or Qt).
+list. Pointing at a box brings up a note on what that value does to the car,
+over the charts beside it and semi-transparent, so the curves stay readable
+under it; a value wider than its box (the gear ratios) is cut at the box and
+scrolls with the arrow keys or the wheel. Save writes the car through
+`car_perf.py` (car.viv and the loose carp.txt, the gearbox's rpm per m/s kept
+in step with the ratios and the final drive, the automatic gearbox's the same
+where they were the same); Cancel puts it back as it is on disk. The
+acceleration table is the game's own and does not follow these edits
+(`car_perf.py derive` rebuilds it). It needs a window for matplotlib (Tk or
+Qt).
 
 All of these find the cars on their own: `gamedata/carmodel` where they are run,
 or else the repository's (the folder above `tools/`), so they run from
@@ -1608,13 +1974,41 @@ click on the body puts an exhaust there -- on its surface, the nearest point
 seen from behind -- and holding the button grows it; a left click on a mark
 grows it, a right click shrinks it while held; a middle click or `d` takes it
 away; `m` mirrors (on by default: a mark made, grown or shrunk on one side is
-on the other too); `s` or Save writes them, `r` or Revert goes back. They are
+on the other too); The strip under the views is the colour the flames burn: hue across it,
+brightness up, full saturation -- the game's own reader adds the near-white core
+itself, so only the outer colour needs picking -- a click on it picks one, the
+swatch beside it shows it and its hex, and a click there puts back the game's
+own `#f2380a` (the file then naming none, as most do). What the file has is
+shown when the car opens and written back untouched unless it is picked again,
+so a hand-written `"flame"` -- in any of the forms the game reads -- survives a
+visit to the tool. `c` colours the body in the game's own picture of
+it -- `car00.tga` out of its `car.viv`, the paint and the details its triangles
+are mapped into (`textured_view`, `car_exhausts.py`) -- instead of the grey
+shading, and off by default (the grey is quicker to browse cars with); `s` or
+Save writes them, `r` or Revert goes back.
+
+Colouring is a small texture-mapper of the tool's own: each triangle's three
+corners are its (u, v) into the 256×256 picture, so the face is filled with the
+part of the picture they enclose, sampled a pixel at a time, its whole area lit
+as one face the way the game lights a body (`lit`, the light turned to suit each
+view). Faces turned away are left out, their normals first turned to point out
+of the car -- a body's parts are not all wound alike -- and farther faces are
+drawn first, so the near ones cover them. The rear view, the big one, is drawn
+at 340 pixels a metre, the two small ones beside it at 190; the heaviest car's
+4,800 triangles take about a second and a half, the rest a good deal less. A
+car with no `car00.tga` (or no PIL to read the TGA) falls back to its paint, out
+of `car.fce`'s palette by the page each triangle names (`car_model.page_colours`,
+the rule the OBJ export paints its materials by), its wheels black. They are
 kept in the car's folder as `exhausts.json`:
 
-    {"exhausts": [{"x": 0.45, "y": -0.32, "z": -1.98, "radius": 0.056}, ...]}
+    {"flame": "#f2380a",
+     "exhausts": [{"x": 0.45, "y": -0.32, "z": -1.98, "radius": 0.056}, ...]}
 
 in the model's own space (car.fce), metres: x to the car's right, y up, z
-forward. A car with no file has no exhausts -- what the flames will read.
+forward. A car with no file has no exhausts, and so no flames (Exhaust flames
+when gearing up). `flame` is the colour they burn, left out of most files: the
+game's own `#f2380a` then. The tool does not edit it and writes it back as it
+found it, so a car's colour is set by hand.
 
 Three things are worth knowing before tuning:
 
@@ -1792,6 +2186,30 @@ Read once at startup. On Android the launcher sets `NFS_ORIENTATION`,
 keys and one variable per pad button from its own screens, and `NFS_AUDIO_RATE`
 from the phone; the rest matter for a desktop run.
 
+### The switches as a file: `nfs3hp.ini`
+
+Every switch below can also live in `nfs3hp.ini`, beside the game data --
+`build/game/` for a desktop run, the app's external files directory on Android.
+It is read once, at the very start of `main`, before anything asks the
+environment for a switch (`settingsLoad`, `native_settings.cpp`), and each line
+it has *uncommented* is put into SDL's environment; a switch that is already
+there wins over the file, so a launch script and `adb shell am start --ez ...`
+keep the last word.
+
+```ini
+# NFS_PARTICLES = 1
+NFS_PARTICLES = 2
+NFS_FLAME_LIGHT = 1.5
+```
+
+The file is written out on the first run with every switch the port reads, in
+groups, **commented out at the value the port gives it** -- so the defaults have
+one place to look at, and a line is changed by removing its `#`. `[Groups]` and
+`#` remarks are carried over untouched. The port's own menus change a switch
+with `settingsSet` (which also uncomments its line where it stands) and write
+the file back with `settingsSave`, so a setting made in a menu is still there
+the next time the game starts.
+
 | Variable | Default | Description |
 |---|---|---|
 | `NFS_FPS_CAP` | `30` | Frame rate the renderer paces presents to. The game's logic is tuned for 30 Hz. |
@@ -1848,7 +2266,16 @@ from the phone; the rest matter for a desktop run.
 | `NFS_LIGHT_TRAILS` | on (`1`) | `0`/`off`: no streak. A number up to 3: how long the short streak under each lamp at speed, on the screen. |
 | `NFS_TAILLIGHT_TRAILS` | on (`1`) | `0`/`off`: no trails behind the cars' tail lights. A number up to 3: how long they grow with speed, from 80 km/h (The lamps' glow, and their trails). |
 | `NFS_PARTICLES` | on (`1`) | `0`/`off`: the game's own dust and sparks. A number up to 3: how much dirt is thrown (Dust, grit and sparks of the port's own). |
-| `NFS_WHEEL_SPRAY` | off (`0`) | `1`/`on`: the port's spray off a wet road instead of the game's; known bug: the weather's particles then show as small turned squares (Grass, and spray off a wet road). |
+| `NFS_EXHAUST_FLAMES` | on (`1`) | `0`/`off`: no flames out of the cars' exhausts when they gear up (Exhaust flames when gearing up). |
+| `NFS_EXHAUST_DEFAULTS` | off (`0`) | `1`/`on`: a car with no exhausts marked gets two default pipes at its rear corners, and so flames too (Exhaust flames when gearing up). A marked car keeps its own. |
+| `NFS_FLAME_LIGHT` | on (`1`) | `0`/`off`: no pool of light on the road under each exhaust flame. A number up to 3: how strong (Exhaust flames when gearing up). |
+| `NFS_WEATHER_PARTICLES` | on | `0`/`off`: the game's own flakes and drops, drawn as squares cut out of nothing, instead of the port's (The weather's flakes and drops, the port's own). |
+| `NFS_SPRITE_TRACE` | unset | `1`: one line for each kind of draw in the frame -- the texture the game gave it, its format and levels, whether and by what colour it is cut out, what it is blended by, its depth and clip. For finding a sprite that is cut out by nothing. |
+| `NFS_CHROMA_TRACE` | unset | `1`: print each colour the game cuts its pictures out by, once each (`[CHROMA] keyed out: 0x0000f800 (0,248,0)`), for telling one picture's key from another's. |
+| `NFS_TYRE_SMOKE` | on (`1`) | `0`/`off`: the game's own pictures for the smoke off a wheel spinning or locked. A number up to 3: how much more of the port's, and thicker (Tyre smoke). |
+| `NFS_EXHAUSTS_TRACE` | unset | `1`: print each car's exhausts, every tip's place and the flame colour, as the loader read them, before the game starts, and during a race a line for each car the first time it shifts up, pops on a downshift, crackles on the overrun, revs at a standstill, or is given the defaults -- and the revs a car at rest climbs to, every 1000 rpm. |
+| `NFS_WHEEL_SPRAY` | on | `0`/`off`: the game's own spray off a wet road instead of the port's (Grass, and spray off a wet road). |
+| `NFS_GAME_SPRITES` | off | `1`/`on`: the game's own particle sprites drawn again -- the pool's turned squares and the drops that land on the camera, none of them cut out by anything. Off, they are drawn only where the port leaves a kind to the game: its particles or one of their switches off, or split screen (The game's own sprites are not drawn). |
 | `NFS_SUN_GLARE` | on (`1`) | `0`/`off`: no glare from the sun. A number up to 3: how strong (Sun glare); by day with no weather only. |
 | `NFS_GRIP_ON_OPPONENTS` | on (`1`) | `0`/`off`: grip by terrain for the player's car only, not every car (Grip by terrain). |
 | `NFS_SLIPSTREAM` | on (`1`) | `0`/`off`: no slipstream. A number up to 3: how strong the push behind another car (Slipstreaming). |
@@ -1857,7 +2284,10 @@ from the phone; the rest matter for a desktop run.
 | `NFS_TREE_MASS` | `1` | Times 150 kg: how much a tree slows the car that knocks it down; `0` for none. |
 | `NFS_LAMP_MASS` | `1` | Times 70 kg: the same for a lamp post. |
 | `NFS_KNOCK_RESPAWN` | `10` | Seconds before a knocked-down tree or lamp post stands again. |
+| `NFS_CRASH_SHAKE` | `2` | How hard the camera shakes and vibrates on a hit, a scrape or a hard landing; up to `3`, `0`/`off` for none (Crashes you feel). |
+| `NFS_CRASH_SOUND` | on | `0`/`off`: the game's crash and scrape sounds as they were, none of the port's crash, no pitch by the hit. |
 | `NFS_AIR_ROLL_DAMP` | on (`1`) | `0`/`off`: cars keep their roll in the air, as the game has it. A number up to 3: how fast it dies away (Cars roll less in the air). |
+| `NFS_AIR_SPEED` | on | `0`/`off`: a car off its wheels is dragged down by the game, as it has it, so a jump costs speed the ramp never took. On, the speed it took off with is put back each tick, its fall left to gravity; a hit in the air still loses what a hit loses (Cars keep their speed in the air). |
 | `NFS_FAST_LOAD` | on (`1`) | `0`/`off`: the loading picture's frames paced and all shown, as before (A race loads in a moment). |
 | `NFS_SURFACE_GRIP` | on (`1`) | `0`/`off`: every surface as the game has it. A number up to 3: how much the player's car feels grass, dirt, snow and mud (Grip by terrain). |
 | `NFS_TRAFFIC_WEIGHT` | `0.5` | How heavy the traffic is against the game's, 0.1 to 2; `0`/`off` for the game's (Traffic lighter). |
@@ -1866,6 +2296,7 @@ from the phone; the rest matter for a desktop run.
 | `NFS_SPIKE_STRIPS` | off | `1`: cops lay spike strips (in the making; Spike strips). |
 | `NFS_CAMERA_PULL` | `1.2` | How far back, in metres, the chase camera eases under full throttle; `0`/`off` for none. |
 | `NFS_SPARKS` | `2` | How many times the sparks of a burst, and whether walls throw them on hits and scrapes; `0`/`off`: the game's own (Sparks off walls). |
+| `NFS_CAR_SHADOW` | on | `0`/`off`: no shadow under the cars (Car shadows). |
 | `NFS_OBJECT_SHADOWS` | on (`0.45`) | `0`/`off`: no shadows from what stands by the road. A number: how dark (Shadows of what stands by the road); fainter in the rain and at night by `NFS_SHADOW_RAIN` and `NFS_SHADOW_NIGHT`. |
 | `NFS_SND_MIX` | on | `0` leaves the game's sound mixer (`sub_500864` and everything under it) to its generated code instead of `src/nfs3hp/native_mixer.cpp`. `NFS_SND_CHECK=1` (debug) mixes each block natively and with the generated code and logs any byte that differs (`[SNDCHK]`); a block that calls the game, to refill a stream or end a sound, is left to the generated code. |
 | `NFS_TOUCH_STEER_LEFT` etc. | unset | Keys the touch overlay sends for steering and the pedals, so that endpoint can report them as axes. |

@@ -3,6 +3,8 @@
 
 namespace nfs3hp
 {
+// Port (tools/apply_crash_feel.py): defined in native_crash.cpp.
+void crashNote(win32::WinApplication* app, x86::reg32 patch, x86::reg32 frame);
 // Port (tools/apply_native_frontend.py): defined in native_frontend_cars.cpp.
 bool carMenuMusicBack(win32::WinApplication* app, x86::CPU& cpu);
 // Port (tools/apply_music_stream.py): defined in nfs3hp_main.cpp.
@@ -40089,6 +40091,7 @@ L_0x004182d2:
     cpu.reload();
     if (cpu.terminate) return;
     // 004182dd  8a45fc                 -mov al, byte ptr [ebp - 4]
+    crashNote(app, cpu.esi, cpu.ebp); /* port: a crash's note by the hit (tools/apply_crash_feel.py) */
     cpu.al = app->getMemory<x86::reg8>(cpu.ebp + x86::reg32(-4) /* -0x4 */);
     // 004182e0  8975ec                 -mov dword ptr [ebp - 0x14], esi
     app->getMemory<x86::reg32>(cpu.ebp + x86::reg32(-20) /* -0x14 */) = cpu.esi;

@@ -10,6 +10,8 @@
 #include <lib/gliderenderer.h>
 #include "native_thrash.h"
 #include "car_arrays.h"
+#include "native_exhausts.h"
+#include "native_settings.h"
 #include "dynamic_fullscreen.h"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -2502,7 +2504,9 @@ float wetnessSetting()
     return setting;
 }
 
-bool trackRains(x86::reg32 track)
+/* The file's own: the port's own weather, which native_particles.cpp asks for
+ * through trackRains() below. */
+bool rainsOn(x86::reg32 track)
 {
     static x86::reg32 known = 0xffffffff;
     static bool rains = false;
@@ -2530,7 +2534,7 @@ void wetRoadTick(win32::WinApplication* app)
 {
     float wetness = 0.0f;
     if (nfs3hp::raceIsRunning() && app->getMemory<x86::reg32>(0x6fd4cc) != 0)
-        wetness = trackRains(app->getMemory<x86::reg32>(0x6fd4ac)) ? wetnessSetting() : 0.0f;
+        wetness = rainsOn(app->getMemory<x86::reg32>(0x6fd4ac)) ? wetnessSetting() : 0.0f;
     win32::glide2x::wetRoad(wetness);
 }
 
@@ -3163,6 +3167,7 @@ static void patchCarListDescriptors(win32::WinApplication& app)
 
 int main(int argc, char* argv[])
 {
+    std::string dataRoot;
 #ifdef __ANDROID__
     /* There is no argv[1]/argv[2] on Android and argv[0] carries no directory
      * (SDL synthesizes it), so getExeDirectory()'s fallback would resolve to
@@ -3176,8 +3181,8 @@ int main(int argc, char* argv[])
     NFS2_ASSERT(dataPath);
     win32::File::setDataDirectory(dataPath);
     win32::File::setCdDirectory(dataPath);
+    dataRoot = dataPath;
 #else
-    std::string dataRoot;
     if (argc >= 3)
     {
         win32::File::setDataDirectory(argv[1]);
@@ -3203,7 +3208,15 @@ int main(int argc, char* argv[])
     if (dataRoot.empty() || dataRoot.back() != '/')
         dataRoot += '/';
 #endif
+    /* The switches: `nfs3hp.ini` beside the game data, set one and all, before
+     * anything asks the environment for one (native_settings.cpp). */
+    nfs3hp::settingsLoad(dataRoot);
     win32::FileEnumerator::setListingOrder(carFolderOrder);
+    /* NFS_EXHAUSTS_TRACE: every car's exhausts, and the colour its flames burn,
+     * read and said before the game starts (native_exhausts.cpp) -- so a file
+     * the marking tool wrote can be checked without driving a lap. */
+    if (SDL_getenv("NFS_EXHAUSTS_TRACE"))
+        nfs3hp::loadCarExhausts();
     nfs3hp::installMenuData();
     /* The game pumps its message queue from a guest thread, which is not
      * the thread SDL considers "main" on Android.  SDL only warns about
@@ -3536,3 +3549,13 @@ Java_dev_nfs3hp_port_NFS3Activity_nativeSetGamepadSlots(JNIEnv* env, jclass, jst
         env->ReleaseStringUTFChars(second, b);
 }
 #endif
+
+namespace nfs3hp
+{
+/* Whether the track it names rains or snows, for what the port drops out of the
+ * sky as its own (native_particles.cpp's throwWeather). */
+bool trackRains(x86::reg32 track)
+{
+    return rainsOn(track);
+}
+}  // namespace nfs3hp

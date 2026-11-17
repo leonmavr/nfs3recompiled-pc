@@ -17,18 +17,68 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 - [ ] Rain on the windscreen/camera: drops and streaks that clear at speed.
 - [x] Sun glare by day with no weather: a haze and lens ghosts round the sun,
   dimmed behind what stands in front of it (`NFS_SUN_GLARE`).
+- [x] The weather's own flakes and drops drawn as blocky, translucent squares.
+  - Done (`NFS_WEATHER_PARTICLES`, on): kinds 7 and 8 are the port's own now --
+    a raindrop a short bright streak, a snowflake a small soft speck, falling as
+    the game threw them, rain or snow by the track's weather. The game's
+    pictures had no alpha and were cut out by nothing, so a flake near the lens
+    was a box of dimmed picture over the view. `NFS_SPRITE_TRACE=1` prints what
+    every kind of draw is cut out by, for the other squares.
 - [x] Wheel spray in the rain: mist behind every car on wet roads.
-  - BUG (why `NFS_WHEEL_SPRAY` is off by default): with the port's spray on,
-    the weather's particles (snowflakes, raindrops) still draw as small,
-    turned dark squares -- smaller since the depth and puff-edge fixes, but
-    there. Next time: replace the weather's own on-screen particles with the
-    port's -- small droplets that refract the picture behind them (rain) or
-    small organic frost specks (snow) -- rather than chase the game's sprites.
+  - Done (`NFS_WHEEL_SPRAY`, on): a pale mist that billows out behind the
+    wheel and hangs a moment, and fine drops thrown up, both more the faster.
+    It was off while the game's own sprites still showed as turned squares;
+    the game's particle sprites are not drawn any more, so the port's spray is
+    what a wet road throws.
+- [x] The turned squares over the view in the rain and snow (the game's own
+  particle sprites).
+  - Done (`NFS_GAME_SPRITES`, off): nothing the game draws of its particle set
+    is drawn any more -- neither the pool's quads, which its pictures (565,
+    no alpha) and the pool's own spin turned into squares of dimmed picture,
+    nor the drops that land on the camera, which were turned rectangles of
+    blurred view (the dark rectangles in the screenshot of 2026-11-17).
+    Everything the port draws itself (dust, grass, spray, smoke, exhaust
+    flames, weather) is unaffected; the game's are still drawn where it leaves
+    a kind to the game (its particles off, a switch off, split screen), and
+    `1`/`on` brings them back everywhere for a comparison.
+  - Why it took four tries: `particlesNative` and `dropsNative` asked for the
+    race's own single precision (`singlePrecision`), and a race's FPU is
+    extended by default, so the generated code did the drawing in every race
+    and none of the fixes in the native versions ever ran. They now draw under
+    `drawingPrecision` (drawing only, no simulation state) -- worth remembering
+    for anything else that only draws.
+- [x] Turned boxes round the spray and the snowflakes/drops, moving, in rain
+  and snow (2026-11-17, after the fixes above).
+  - Found: not a picture at all but a hole. A faint blended square of the
+    world's wrote its whole square into the depth buffer (only fragments under
+    alpha 0.08 were kept out), nearer than what was behind it, and the port's
+    spray and weather -- depth-tested against that buffer -- were cut away in
+    its shape. With the particles drawn untested the boxes went; with a higher
+    cut for the world's batches alone they went too, and not with it for the
+    cars' alone. A world batch now writes depth only where it is at least half
+    opaque (`kDepthCutWorld`, `thrashrenderer.cpp`); the cars' keep 0.08.
+- [x] A turned black rectangle over the road in some races (2026-11-17).
+  - Found: the port's own car-shadow mask, a **rounded square** -- `shad`'s
+    picture is opaque to within three texels of its edge, and a squircle of it
+    is still a square the size of a car, so a car near the camera cast a turned
+    translucent rectangle on the road instead of a shadow. Its alpha is a soft
+    ellipse now, and `NFS_CAR_SHADOW=0` leaves the cars with no shadow at all.
+    (`NFS_SPRITE_TRACE` + `NFS_TEXTURE_DUMP=/tmp/tex` trace every sprite the
+    game draws, with its box and its picture -- the tools that found it.)
 - [ ] Tyre marks that last the lap, darker and softer than the game's.
+- [x] Tyre smoke on wheelspin and lock-up, taken over from the game's kind 6
+  and made procedural.
+  - Done (`NFS_TYRE_SMOKE`, on): dark clouds of its own, ragged by noise, more
+    and thicker the faster the wheel was going -- no gravity and no ground,
+    rising and spreading, gone in one to two seconds. On grass the same kind is
+    still grass thrown up. It comes whenever a tyre is scrubbed, which is
+    whenever the game lays a tyre mark: sliding sideways, a wheel spun up from a
+    standstill, a wheel locked under braking.
 - [ ] Heat haze over the road on desert tracks by day.
 - [ ] Brake discs glowing faintly orange after hard braking at night.
 - [x] Wider, sharper reflections on the cars from the sky already captured.
-- [ ] Camera shake on big impacts and hard landings, by the hit's speed.
+- [x] Camera shake on big impacts and hard landings, by the hit's speed.
+  - Done: `NFS_CRASH_SHAKE` (Crashes you feel).
 - [x] Grass particles: off the road on grass, slightly elongated flying blades,
   more with speed, beside the dirt grains.
 - [ ] 3D background objects, such as trees. 
@@ -99,7 +149,7 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   - Done: the world smeared away from the screen's centre by speed over its
     distance (from the depth buffer), from 10 m/s, whole from 35; the cars
     stay sharp (`NFS_MOTION_BLUR`, 2).
-- [ ] Exhaust flames; when gearing up transmission, eject exhaust flames behind
+- [x] Exhaust flames; when gearing up transmission, eject exhaust flames behind
   each exhaust of each cars. However before doing that, exhaust positions
   (notice that exhausts are symmetrical in terms of width axis) will need to be
   marked by a human; number and size of each and flame color. We will need a car
@@ -108,10 +158,29 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   Then you can work out the flames and light emission.
   Flames can also appear at the beginning of race when revving and torque is at
   the top 20% or 15% highest.
-  - Partly done: the marking tool (`tools/car_model.py exhausts`, or "Mark
+  - Done: the marking tool (`tools/car_model.py exhausts`, or "Mark
     exhausts..." in `car_perf.py edit`) keeps each car's exhausts -- place
-    and radius in the model -- as `exhausts.json` in its folder. The flames
-    themselves are still to do.
+    and radius in the model -- as `exhausts.json` in its folder, with an
+    optional `flame` colour (else `#f2380a`, lighter to near white in the
+    middle). Shifting up throws one flame per tip, out of a ball of noise that
+    grows for 0.18 s, holds and trembles for 0.8, and is gone by its one
+    second; it stays at the pipe, going with the car (`NFS_EXHAUST_FLAMES`).
+    A car with no file throws none. Every car of the race throws them, the
+    opponents' too. Revving at a standstill with the engine in the top
+    seventh of its revs (the start line) pops one out of an exhaust every
+    0.15-0.35 s instead, a limiter's backfire.
+    A car with nothing marked gets two default pipes with
+    `NFS_EXHAUST_DEFAULTS=1`, so every car can be seen throwing them before it
+    is marked.
+  - Done: each flame pools a soft disc of its light on the road under the car,
+    as wide as the ball is big, coming up, flickering and going out with it
+    (`NFS_FLAME_LIGHT`).
+  - Done: a hard downshift, and lifting off at the top of the revs, pop half a
+    flame out of one exhaust at a time -- a real car's overrun crackle.
+- [ ] The headlights light up in front of the car well but show some explicit
+  narrow beam brighter cones. These narrow cones shouldn't show up. The tail
+  lights are also draw as 'wet trailing spots' on the road when they're turned
+  off - disable this.
 
 ### Races/locations
 
@@ -127,6 +196,16 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   is partially implementned by the original game but check if it can improved
 - [ ] Track editor. Tool to copy, edit, add new tracks with custom terrain and
   environemtn too.
+- [ ] Replace the 3,2,1,GO spinning text when race is beginning with a move race-relaced UI,
+  such as a LED panel with circular lamps lighting 3,2,1,GO.
+- [ ] When race is beginning, instead of directly panning/zooming into player's
+  car, camera moves along the opponents car's, reaching player's car and
+  adjusting behing it, in the same duration as before.
+- [ ] More and moving sky effects. For example  in summit, there are already
+  northern lights at night which nicely glow on track. Make them more
+  pronounced, higher quality and smoothly and proceduraly slowly move and glow.
+  At day time in hometown and rocky pass u can add moving clouds which occlude 
+  sun and reduce glare when in front of it.
 
 ### Oppponents and AI
 - [x] Bug: a quick race against Class A opponents had police cars (and cars
@@ -242,6 +321,11 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   without however stetching/scaling things sideways.
 - [ ] Add those added graphics enhancements in graphics menu in game (e.g. as
   toggleable)
+  - Done, the first half: every `NFS_*` switch the port reads now lives in
+    `nfs3hp.ini` beside the game data, written out on the first run at its
+    default and read once before the game starts (`settingsLoad`,
+    `native_settings.cpp`). What is left is the menu: `settingsSet` and
+    `settingsSave` are there for it to call.
 - [ ] Add difficulty slider instead of just normal and agressive (presets in
   slider will still be normal and agressive but we can slide in between to
   adjust opponent AI). You already have some slider asset in volume control.
@@ -278,9 +362,10 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   stars, checkflag flags, tribals)
 - [ ] Car visual customization; bodykits and spoiler and side vents, rims etc - these
   also change the performance/weight distribution/traction.
-- [ ] More immersive crashes: small vibration on crash with other drivers, even biger
+- [x] More immersive crashes: small vibration on crash with other drivers, even biger
   vibration on wall. Vibration depends on speed.
-- [ ] More immersive crashes: different sounds, sound depending on crash speed. 
+- [x] More immersive crashes: different sounds, sound depending on crash speed. 
+  - Done: the crash as loud as the hit and pitched by it (`NFS_CRASH_SOUND`).
 - [x] Make speeding more immersive, i.e. gently pull camera back on pressing
   acceleration button up to some small distance , pull back in when releasing
   it.
@@ -330,6 +415,40 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     trees and lamp posts is guessed from their models' size.
 - [ ] More paint types; iridescent, glossy, chrome, matte. However when
   selecting paint > custom, you will need a UI arrow and list to choose it.
+- [x] BUG: some cars like CLK-GTR have 3 entries or duplicates, remove
+  duplicates. zip them and move them to /tmp first just in case i wanna
+  re-import them. also modify the car import script to list /remove model(s)
+  (for art files and gamedata). Particularly for CLK-GTR, one is plain (no
+  decals etc) and 2 have racing vinyls, i wanna keep only of the vilyn ones and
+  remov the plain. Datsun and Camaro are also duplicated and I think Lister too.
+  - Done: `tools/import_car.py --list` prints every car with its code, ID and
+    make/model and marks duplicates; `--remove` zips each folder to `--backup`
+    (the temporary folder by default) and takes it and its `carorder.txt` line
+    away. Removed: the plain CLK-GTR (`clk2`) and a second copy of the liveried
+    one (`clk3`, `clkg` kept), the Camaro `chev` (`cama` kept), the Datsun
+    `d24z` (`dats` kept) and the Lister Storm `lstm` (`lst2` kept) -- 49 cars
+    down to 44. `merc`, also a CLK-GTR by name, is a different car and stayed.
+    The removed folders' showcase art and slides are still in `fedata/art`.
+- [ ] S-class: some cars are way too fast for A-class, such as murcielago and
+  ferrari f40. create a new S-class and be able to select S class as opponents
+  as A+S class. I know these need a slide for the menu but don't worry - i'll
+  create it later and just use a placeholder for it.
+- [ ] Lift the limit of 50 cars for usable cars.
+- [x] Remove airborne slowdown
+  - Done (`NFS_AIR_SPEED`, on): off its wheels a car is dragged down by the
+    game -- a jump costs speed the ramp never took. Each tick the speed it left
+    the ground at is put back on its velocity (sideways and forward, the fall
+    left to gravity), from `airSpeed` in `native_surface.cpp`; a hit in the air
+    still loses what a hit loses, and on its wheels nothing is put back.
+- [ ] Police mod: call police backup when pressing H on a player - other cops
+  spawn near u and chase him.
+- [ ] Better weight distribution consideration in collision: most cars have the
+  engine on the front so most of the weight (consider 3/4?) is distributed on the
+  front. Some higher-class cars like ferraris and lambos and the A-class jaguar,
+  the clk gtr etc have the engine on theback so it's the opposite. Traffic cars
+  also have engine on the front.
+- [ ] Better control in the air - at least be able to turn left right slightly
+  (not with as much control as the ground, with some damping)
 
 ### Music/Sound
 - [x] Sound quality is great and sound works well but volume is still too
@@ -341,7 +460,7 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   cyrretnly plating song when it starts and then slide the popup away.
 - [ ] Music control: what tracks play in game, skip current track button.
 - [ ] Radio: be able to add your own tracks.
-- [ ] Crash sounds by how hard the hit was; metal scraping rising with speed.
+- [x] Crash sounds by how hard the hit was; metal scraping rising with speed.
 - [ ] Doppler Effect: Passing rival cars, tunnel walls, and roadside barriers 
 creates rapid whooshing sounds that rise and fall in pitch as you fly past them. 
 Obviously this effect depends on speed.
@@ -363,6 +482,8 @@ Obviously this effect depends on speed.
 - [ ] Asset extractor (roads, signposts, lamps including emmission, buildings, etc) and re-injecter. Figure
   out a way to export assets and view/edit them in a tool, or add custom assets
   and place them in locations in games. 3D model (such as for cops etc) extractor.
+- [ ] Create a track editor tool which can: edit/remove track blocks to design
+  the road, add textures, objects, etc with live preview.
 - [ ]  Make a way to convert 3d models .obj files into game environment ones OR 
   directly proceduraly make models and insert them.
 - [x] Peformance curve and other stuff like transmission visualizer based on the data of each car model

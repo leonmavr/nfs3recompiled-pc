@@ -56,8 +56,12 @@ x86::reg32 asBits(float value)
 
 }  // namespace
 
+bool crashHit(win32::WinApplication* app, x86::CPU& cpu, x86::reg32 car);   // native_crash.cpp
+
 bool collisionEffects(win32::WinApplication* app, x86::CPU& cpu)
 {
+    if (!crashHit(app, cpu, cpu.eax))
+        return true;  // the game stopped in the port's crash sound
     const float sparks = sparkSetting();
     {
         // The burst's size, once: kind 3's count as the game has it, times NFS_SPARKS.
@@ -163,11 +167,11 @@ float pullSetting()
     return setting;
 }
 
+void crashShake(win32::WinApplication* app, float place[3], const float right[3], const float up[3]);   // native_crash.cpp
+
 bool cameraToView(win32::WinApplication* app, x86::CPU& cpu)
 {
     const float most = pullSetting();
-    if (most <= 0.0f)
-        return false;
     const x86::reg32 camera = cpu.eax;
     const x86::reg32 view = camera - 8;
     auto word = [&](x86::reg32 a) { return x86::reg32(app->getMemory<x86::reg32>(a)); };
@@ -192,22 +196,27 @@ bool cameraToView(win32::WinApplication* app, x86::CPU& cpu)
         const float step = 1.0f - SDL_expf(-float(passed) / (64.0f * seconds));
         s_pull += (wanted - s_pull) * step;
     }
-    if (s_pull < 0.001f)
-        return false;
-    float place[3], forward[3], up[3], toCar[3];
+    float place[3], right[3], forward[3], up[3], toCar[3];
     for (int k = 0; k < 3; ++k)
     {
         place[k] = value(camera + 4 * k);
+        right[k] = value(camera + 0xc + 4 * k);
         up[k] = value(camera + 0xc + 0xc + 4 * k);
         forward[k] = value(camera + 0xc + 0x18 + 4 * k);
         toCar[k] = value(car + 0x98 + 4 * k) - place[k];
     }
     const float distance = SDL_sqrtf(toCar[0] * toCar[0] + toCar[1] * toCar[1] + toCar[2] * toCar[2]);
     const float ahead = toCar[0] * forward[0] + toCar[1] * forward[1] + toCar[2] * forward[2];
-    if (distance < 3.0f || distance > 15.0f || ahead < 0.7f * distance)
-        return false;  // in the car, on the bumper, or a television camera of the replay
+    if (distance > 15.0f || (distance >= 3.0f && ahead < 0.7f * distance))
+        return false;  // a television camera of the replay
+    const bool chase = distance >= 3.0f;   // not in the car or on its bumper
+    if (chase && s_pull >= 0.001f)
+        for (int k = 0; k < 3; ++k)
+            place[k] = place[k] - forward[k] * s_pull + up[k] * s_pull * 0.25f;
+    // A crash's shake, in any of the player's own views (native_crash.cpp).
+    crashShake(app, place, right, up);
     for (int k = 0; k < 3; ++k)
-        app->getMemory<float>(camera + 4 * k) = place[k] - forward[k] * s_pull + up[k] * s_pull * 0.25f;
+        app->getMemory<float>(camera + 4 * k) = place[k];
     return false;
 }
 

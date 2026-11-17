@@ -1,5 +1,6 @@
 #include <nfs3hp.h>
 #include "native_guest.h"
+#include "native_exhausts.h"
 #include <winapi/glide2x.h>
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -32,6 +33,10 @@
  *   ground -- and grains after all where that ground is not green.
  * - Spray off a wet road (kind 10) becomes a pale mist billowing out behind
  *   the wheels and fine drops thrown up, both more the faster (throwSpray).
+ * - The smoke off a wheel spinning or locked (kind 6) becomes the port's own
+ *   (throwSmoke, NFS_TYRE_SMOKE): dark clouds of its own colour that rise and
+ *   spread -- no gravity, no ground to settle on -- and are gone in a second or
+ *   two.  Off a wheel on grass that kind is still grass thrown up instead.
  * - A spark is a short white-hot streak that cools through yellow and orange
  *   to red as it falls, thrown at the game's speed with a little scatter.
  *
@@ -41,9 +46,25 @@
  * over the world before its whole-picture pass (ThrashRenderer::drawParticles),
  * each one's shape made from its seed rather than a picture.  Not in split
  * screen, where there is more than one view, nor without that renderer: the
- * game's own then. */
+ * game's own then.
+ *
+ * And the exhaust flames (NFS_EXHAUST_FLAMES, native_exhausts.cpp): a car that
+ * shifts up throws one out of each exhaust it has marked, a second long -- grown
+ * to its size in a fifth of it, trembling there, then out -- in the colour the
+ * car's exhausts.json names, #f2380a where it names none.  A car revving at a
+ * standstill -- at the start, throttle down, the engine at the top of its revs
+ * -- pops them out one exhaust at a time instead, every quarter of a second or
+ * so.  A hard downshift, and lifting off at the top of the revs, pop half a
+ * one instead (popFlame) -- a racing car's overrun crackle.  Every car of the
+ * race, the opponents' too, the player's; a car with no exhausts marked has
+ * none.  Each throws a pool of its light on the road under the car
+ * (EffectParticle::Glow, NFS_FLAME_LIGHT), coming up and going out with it. */
 namespace nfs3hp
 {
+
+/* Whether the track it names rains or snows (nfs3hp_main.cpp, the weather's
+ * "type" in its 3trNNw.hrz: 1 rain, 2 snow). */
+bool trackRains(x86::reg32 track);
 
 namespace
 {
@@ -67,6 +88,34 @@ struct Particle
 
 constexpr std::size_t kMost = 2400;
 std::vector<Particle> s_particles;
+/* How many flakes and drops are in the air: a storm makes a great many, and
+ * they are not to crowd the dust, the smoke and the sparks out of the pool. */
+std::size_t s_weatherCount = 0;
+constexpr std::size_t kMostWeather = 900;
+
+/* An exhaust flame: which of the car's exhausts it burns at, in the car's own
+ * space, and how far through its second of life it is.  It does not move --
+ * not on the car, and not with the road either: it stays at the pipe's mouth it
+ * was lit at as the car goes, growing, trembling and going out there. */
+struct Flame
+{
+    x86::reg32 car;    // the car it burns on, its exhausts moving with it
+    float at[3];       // the mouth of the exhaust in that car's space, a little out of it
+    float age, life;   // seconds; a second
+    float size;        // the radius it grows to, metres
+    float light;       // how much light it throws on the road, 0 to 1
+    float seed;
+    float colour[3];
+};
+constexpr std::size_t kMostFlames = 96;
+std::vector<Flame> s_flames;
+x86::reg32 s_gear[16];   // each car's gear, as last seen: a shift up is a flame
+float s_pop[16];         // seconds until a car revving at rest pops its next flame
+float s_crackle[16];     // seconds until an engine on the overrun pops its next
+float s_revs[16];        // each car's revs a frame ago: rising fast is being revved
+bool s_revsKnown[16];
+float s_saidRevs[16];    // the revs NFS_EXHAUSTS_TRACE last said of a car at rest
+unsigned s_traced[16];   // what NFS_EXHAUSTS_TRACE has said of each: 1 a shift up, 2 a rev
 std::uint32_t s_random = 0x9e3779b9u;
 x86::sreg32 s_clock = -1;
 
@@ -103,14 +152,44 @@ float setting()
     return value;
 }
 
-/* The wheels' spray off a wet road (kind 10, throwSpray): NFS_WHEEL_SPRAY,
- * off by default (the weather's flakes and drops still show as small turned
- * squares with it, TODOs.md); 1 or on for the port's. */
+/* The smoke off a wheel spinning or locked (the game's kind 6, throwSmoke):
+ * NFS_TYRE_SMOKE, on; a number up to 3 for more and thicker, 0 or off for the
+ * game's. */
+float smokeSetting()
+{
+    static const float value = [] {
+        const char* text = SDL_getenv("NFS_TYRE_SMOKE");
+        if (!text || !*text || SDL_strcasecmp(text, "on") == 0)
+            return 1.0f;
+        if (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0)
+            return 0.0f;
+        const float parsed = float(SDL_atof(text));
+        return parsed > 0.0f ? SDL_min(parsed, 3.0f) : 1.0f;
+    }();
+    return value;
+}
+
+/* The weather's own flakes and drops (kinds 7 and 8, throwWeather): what falls
+ * is the port's, NFS_WEATHER_PARTICLES on; the game's pictures there are squares
+ * cut out of nothing (TODOs.md), a translucent box round every flake. */
+bool weatherSetting()
+{
+    static const bool value = [] {
+        const char* text = SDL_getenv("NFS_WEATHER_PARTICLES");
+        return !(text && (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0));
+    }();
+    return value;
+}
+
+/* The wheels' spray off a wet road (kind 10, throwSpray): NFS_WHEEL_SPRAY, on;
+ * 0 or off for none.  It was off while the game's own spray still showed as
+ * turned squares; the game's sprites are no longer drawn at all
+ * (gameSprites()), so the port's is what a wet road throws. */
 bool spraySetting()
 {
     static const bool value = [] {
         const char* text = SDL_getenv("NFS_WHEEL_SPRAY");
-        return text && (SDL_strcmp(text, "1") == 0 || SDL_strcasecmp(text, "on") == 0);
+        return !(text && (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0));
     }();
     return value;
 }
@@ -246,6 +325,308 @@ void throwSpray(win32::WinApplication* app, const float at[3], const float veloc
     }
 }
 
+/* Smoke off a wheel spinning or locked -- the game's kind 6, taken over: a dark
+ * cloud that comes off the tread, flies up and spreads, and is gone in a second
+ * or two.  No gravity and no ground to settle on (it rises, thinning as it
+ * grows), more of it and thicker the faster the wheel was going. */
+void throwSmoke(const float at[3], const float velocity[3])
+{
+    const float smoke = smokeSetting();
+    if (smoke <= 0.0f)
+        return;
+    const float speed = std::sqrt(velocity[0] * velocity[0] + velocity[1] * velocity[1] + velocity[2] * velocity[2]);
+    const float pace = SDL_min(speed / 30.0f, 1.2f);
+    const int clouds = int((1.0f + speed / 10.0f) * smoke + random01());
+    for (int k = 0; k < SDL_min(clouds, 3); ++k)
+    {
+        Particle m{};
+        for (int i = 0; i < 3; ++i)
+            m.p[i] = at[i] + randomRange(-0.2f, 0.2f);
+        m.p[1] = at[1] + randomRange(0.02f, 0.2f);
+        for (int i = 0; i < 3; i += 2)
+            m.v[i] = velocity[i] * randomRange(0.2f, 0.45f) + randomRange(-0.9f, 0.9f) * (0.5f + pace);
+        m.v[1] = randomRange(0.6f, 1.7f) * (0.5f + pace);
+        m.life = randomRange(1.1f, 2.1f);
+        m.size = randomRange(0.2f, 0.4f) * (0.7f + 0.5f * pace);
+        m.grow = randomRange(1.3f, 2.5f) * (0.6f + pace);
+        m.seed = random01();
+        m.alpha = randomRange(0.22f, 0.42f) * SDL_min(1.0f, 0.55f + pace);
+        const float grey = randomRange(0.14f, 0.21f);
+        for (int i = 0; i < 3; ++i)
+            m.colour[i] = grey;
+        m.noGround = true;
+        m.type = EffectParticle::Smoke;
+        add(m);
+    }
+}
+
+/* What falls out of the sky, off the game's own flakes and drops (kinds 7 and
+ * 8): a raindrop is a short bright streak, a snowflake a small soft speck, both
+ * where the game made its own and moving as it had it -- its speed and its size
+ * as it gave them.  Rain or snow is the track's (the "type" in its
+ * 3trNNw.hrz, 1 rain and 2 snow).  The game's pictures of them are squares with
+ * nothing cutting them out, so a flake that came near the lens was a box of
+ * dimmed picture over the view. */
+void throwWeather(win32::WinApplication* app, const float at[3], const float velocity[3], float scale)
+{
+    if (s_weatherCount >= kMostWeather)
+        return;   // as many as the pool keeps of them
+    ++s_weatherCount;
+    bool rains = true;   // without a track of its own, the weather is the rain's
+    if (const x86::reg32 track = app->getMemory<x86::reg32>(0x6fd4ac))
+        rains = trackRains(track);
+    Particle w{};
+    for (int i = 0; i < 3; ++i)
+    {
+        w.p[i] = at[i];
+        w.origin[i] = at[i];
+        w.v[i] = velocity[i];
+    }
+    w.seed = random01();
+    w.noGround = true;
+    w.alpha = rains ? randomRange(0.5f, 0.85f) : randomRange(0.6f, 0.95f);
+    if (rains)
+    {
+        w.life = randomRange(0.35f, 0.7f);
+        w.size = SDL_clamp(scale, 0.004f, 0.03f);
+        w.colour[0] = 0.72f;
+        w.colour[1] = 0.78f;
+        w.colour[2] = 0.9f;
+        w.type = EffectParticle::Droplet;
+    }
+    else
+    {
+        w.life = randomRange(1.2f, 2.6f);
+        w.size = SDL_clamp(scale, 0.01f, 0.06f);
+        w.colour[0] = 0.94f;
+        w.colour[1] = 0.96f;
+        w.colour[2] = 1.0f;
+        w.type = EffectParticle::Flake;
+    }
+    add(w);
+}
+
+/* One flame out of one of a car's exhausts, where the marking tool put it, in
+ * the model's own space -- x to the car's right, y up, z forward -- which is the
+ * car's own space here: its centre is at +0x98 and its axes at +0xc0 (right),
+ * +0xcc (up) and +0xd8 (forward).  A hand's width behind the pipe, so it is out
+ * of the body and shows from behind.  Which tip is the caller's.  A pop of the
+ * overrun is half a flame (`scale` 0.5), and throws half the light. */
+void throwFlame(const CarExhausts& exhausts, x86::reg32 car, std::size_t tip, float scale = 1.0f)
+{
+    Flame flame{};
+    flame.car = car;
+    flame.at[0] = exhausts.tips[tip].x;
+    flame.at[1] = exhausts.tips[tip].y;
+    flame.at[2] = exhausts.tips[tip].z - 0.06f;
+    flame.life = 1.0f;
+    flame.size = SDL_clamp(exhausts.tips[tip].radius * 2.6f, 0.05f, 0.16f) * scale;
+    flame.light = scale;
+    flame.seed = random01();
+    for (int i = 0; i < 3; ++i)
+        flame.colour[i] = exhausts.flame[i];
+    if (s_flames.size() >= kMostFlames)
+        s_flames.erase(s_flames.begin());   // the oldest makes room
+    s_flames.push_back(flame);
+}
+
+/* A shift up: a flame out of each of the car's exhausts at once. */
+void throwFlames(const CarExhausts& exhausts, x86::reg32 car)
+{
+    for (std::size_t tip = 0; tip < exhausts.tips.size(); ++tip)
+        throwFlame(exhausts, car, tip);
+}
+
+/* A pop of the overrun -- a downshift, or the throttle lifted at the top of the
+ * revs: one exhaust, half the size, a crackle rather than a flame. */
+void popFlame(const CarExhausts& exhausts, x86::reg32 car)
+{
+    const std::size_t tip = std::size_t(random01() * float(exhausts.tips.size())) % exhausts.tips.size();
+    throwFlame(exhausts, car, tip, 0.5f);
+}
+
+/* The engine's redline in rpm: the car's own data table (at [car+0x528], the one
+ * the AI's pull comes from) keeps it at +0x1c4, and the drivetrain drives to it
+ * -- redline less 200 rpm at full demand (0x406200, its `fild [eax+0x1c4]`), the
+ * rev counter's needle at the dial's end.  Zero where the car has no table yet. */
+x86::reg32 redline(win32::WinApplication* app, x86::reg32 car)
+{
+    const x86::reg32 table = app->getMemory<x86::reg32>(car + 0x528);
+    /* Where the port maps guest memory: the image's sections from 0x400000, then
+     * the simulated 128 MB above them (memmap.cpp, s_addressOffset), no further
+     * than 0x11000000.  Anything else is not a table, and reading it would fault.
+     * The game's own drivetrain subscribes to the same pointer for the same
+     * number (sub_406160), so a car in the race has one -- the car's data, set
+     * when it was loaded. */
+    if (table < 0x400000 || table >= 0x11000000)
+        return 0;
+    const x86::sreg32 rpm = app->getMemory<x86::sreg32>(table + 0x1c4);
+    return (rpm >= 2000 && rpm <= 20000) ? x86::reg32(rpm) : 0;   // if it is what we think it is
+}
+
+/* How much light the exhaust flames throw on the road (NFS_FLAME_LIGHT, on;
+ * a number up to 3 for more, 0 or off for none). */
+float flameLightSetting()
+{
+    static const float value = [] {
+        const char* text = SDL_getenv("NFS_FLAME_LIGHT");
+        if (!text || !*text || SDL_strcasecmp(text, "on") == 0)
+            return 1.0f;
+        if (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0)
+            return 0.0f;
+        const float parsed = float(SDL_atof(text));
+        return parsed > 0.0f ? SDL_min(parsed, 3.0f) : 1.0f;
+    }();
+    return value;
+}
+
+bool tracing()
+{
+    static const bool on = SDL_getenv("NFS_EXHAUSTS_TRACE") != nullptr;
+    return on;
+}
+
+/* The car the game's first view follows -- the first player's -- as every hook
+ * that needs to know finds it: [0x5e10b0] is the view, its car eight bytes in
+ * (sub_422bd0).  Zero where there is no view yet. */
+x86::reg32 playerCar(win32::WinApplication* app)
+{
+    const x86::reg32 view = app->getMemory<x86::reg32>(0x5e10b0);
+    return view ? x86::reg32(app->getMemory<x86::reg32>(view + 8)) : 0;
+}
+
+/* What the cars' engines are doing, each frame, for a flame out of the exhausts:
+ * a car that has just shifted up (the game's 1 is neutral, 2 the first forward
+ * gear, and 0x64 "none yet") throws them all; a car held at the top of its revs
+ * with the throttle down and no speed (the start line) pops one now and then,
+ * an exhaust at a time, as a limiter does.  Every car of the race is looked at
+ * -- the opponents' as much as the player's -- a car in it being one with a
+ * record of its own. */
+void engineFlames(win32::WinApplication* app, float dt)
+{
+    auto f = [app](x86::reg32 address) { return app->getMemory<float>(address); };
+    const bool trace = tracing();
+    const x86::reg32 player = playerCar(app);
+    for (x86::reg32 k = 0; k < 16; ++k)
+    {
+        const x86::reg32 car = 0x5e1120 + k * 0x9ac;
+        const x86::reg32 record = app->getMemory<x86::reg32>(car + 0x220);
+        if (record < 0x6fd52c || record >= 0x6fd52c + 16 * 0x6c || (record - 0x6fd52c) % 0x6c)
+        {
+            s_gear[k] = 0;   // not in the race: nothing remembered of it
+            s_pop[k] = 0.0f;
+            s_crackle[k] = 0.0f;
+            s_revsKnown[k] = false;
+            s_saidRevs[k] = 0.0f;
+            s_traced[k] = 0;
+            continue;
+        }
+        const CarExhausts* exhausts = carExhausts(app, car);
+        if (!exhausts)
+            continue;   // this car has none marked, and so shows no flames
+        const x86::reg32 gear = app->getMemory<x86::reg8>(car + 0x50b);
+        const x86::reg32 was = s_gear[k];
+        s_gear[k] = gear;
+        const float vx = f(car + 0xa4), vy = f(car + 0xa8), vz = f(car + 0xac);
+        const float speed = SDL_sqrtf(vx * vx + vy * vy + vz * vz);
+        const x86::reg32 limit = redline(app, car);
+        const float revs = float(app->getMemory<x86::sreg32>(car + 0x590));
+        if (was >= 1 && was <= 0x63 && gear > was && gear >= 2)
+        {
+            throwFlames(*exhausts, car);
+            if (trace && !(s_traced[k] & 1))
+            {
+                s_traced[k] |= 1;
+                SDL_Log("[EXHAUST] slot %u \"%s\": shifted up into %u -- %zu flames", unsigned(k),
+                        exhausts->folder.c_str(), unsigned(gear), exhausts->tips.size());
+            }
+        }
+        /* A hard downshift at speed: the overrun pops out of the exhausts as the
+         * engine is dragged up to the lower gear's revs -- one exhaust at a
+         * time, half a flame each, a crackle rather than a jet.  Real racing
+         * cars do it on the overrun, and a downshift is the hardest overrun
+         * there is. */
+        if (was >= 2 && was <= 0x63 && gear >= 2 && gear < was && speed > 4.0f)
+        {
+            const int pops = random01() < 0.5f ? 2 : 1;
+            for (int n = 0; n < pops; ++n)
+                popFlame(*exhausts, car);
+            if (trace && !(s_traced[k] & 4))
+            {
+                s_traced[k] |= 4;
+                SDL_Log("[EXHAUST] slot %u \"%s\": downshifted from %u into %u at %.0f m/s -- %d pops",
+                        unsigned(k), exhausts->folder.c_str(), unsigned(was), unsigned(gear), speed, pops);
+            }
+        }
+        /* Revved at a standstill -- the start line.  A car going nowhere has no
+         * throttle of its own to ask about, and what the game makes of its revs
+         * there is the game's to decide, so there are three ways to be revving
+         * and any will do: the player's throttle down (below), the revs pinned at
+         * the redline (the top seventh, where its pull is), or climbing by 60 rpm
+         * a frame, a blip no car over a walking pace can be doing without the
+         * speed to go with it.  The next pop is a quarter of a second off, more
+         * or less; the timer only runs while the engine is held there, so a
+         * limiter's bounce cannot turn into a stream of them. */
+        const bool known = s_revsKnown[k];
+        const bool climbing = known && revs > s_revs[k] + 60.0f;
+        s_revs[k] = revs;
+        s_revsKnown[k] = true;
+        const bool pinned = limit && revs >= 0.85f * float(limit);
+        /* The first player's own throttle, 0 to 255, at 0x79c339 (the camera's
+         * pull is off the same byte): a car does not keep one, and what a car
+         * standing still does with its revs is the game's to decide -- so it is
+         * asked directly, of the player's car, and the revs are only a second and
+         * third opinion (native_effects.cpp's cameraToView reads it too). */
+        const bool throttle = car == player && app->getMemory<x86::reg8>(0x79c339) > 0xa0;   // over five eighths
+        if (speed < 3.0f && (pinned || climbing || throttle))
+        {
+            s_pop[k] -= dt;
+            if (s_pop[k] <= 0.0f)
+            {
+                throwFlame(*exhausts, car, std::size_t(random01() * float(exhausts->tips.size()))
+                                              % exhausts->tips.size());
+                s_pop[k] = randomRange(0.15f, 0.35f);
+                if (trace && !(s_traced[k] & 2))
+                {
+                    s_traced[k] |= 2;
+                    SDL_Log("[EXHAUST] slot %u \"%s\": revving at a standstill (%s), %.0f of %u rpm -- %zu tips",
+                            unsigned(k), exhausts->folder.c_str(),
+                            pinned ? "at the redline" : climbing ? "climbing" : "throttle down", revs,
+                            unsigned(limit), exhausts->tips.size());
+                }
+            }
+        }
+        /* Lifting off at the top of the revs on the move: the other overrun, the
+         * one a driver hears as a crackle out of the exhausts for as long as the
+         * engine is dragged down by the car -- a pop every eighth to a third of
+         * a second, half a flame each, quieter than a gear change's.  Only the
+         * player's throttle is a byte the port can read (0x79c339), so only the
+         * player's car crackles here. */
+        if (car == player && speed > 12.0f && limit && revs > 0.7f * float(limit)
+            && app->getMemory<x86::reg8>(0x79c339) < 0x30)
+        {
+            s_crackle[k] = SDL_max(0.0f, s_crackle[k] - dt);
+            if (s_crackle[k] <= 0.0f)
+            {
+                popFlame(*exhausts, car);
+                s_crackle[k] = randomRange(0.1f, 0.35f);
+                if (trace && !(s_traced[k] & 8))
+                {
+                    s_traced[k] |= 8;
+                    SDL_Log("[EXHAUST] slot %u \"%s\": crackling on the overrun at %.1f m/s, %.0f of %u rpm",
+                            unsigned(k), exhausts->folder.c_str(), speed, revs, unsigned(limit));
+                }
+            }
+        }
+        if (trace && speed < 3.0f && revs > s_saidRevs[k] + 1000.0f)
+        {
+            s_saidRevs[k] = revs;   // the revs it has got to, as they climb: what to tune from
+            SDL_Log("[EXHAUST] slot %u \"%s\": at rest, %.0f rpm (redline %u), %.2f m/s", unsigned(k),
+                    exhausts->folder.c_str(), revs, unsigned(limit), speed);
+        }
+    }
+}
+
 void throwSpark(const float at[3], const float velocity[3])
 {
     const int count = random01() < 0.35f * setting() ? 2 : 1;
@@ -271,6 +652,14 @@ void throwSpark(const float at[3], const float velocity[3])
 
 void move(float dt)
 {
+    s_weatherCount = 0;
+    for (const Particle& q : s_particles)
+        s_weatherCount += q.type == EffectParticle::Droplet || q.type == EffectParticle::Flake ? 1 : 0;
+    for (Flame& flame : s_flames)
+        flame.age += dt;
+    s_flames.erase(std::remove_if(s_flames.begin(), s_flames.end(),
+                                  [](const Flame& flame) { return flame.age >= flame.life; }),
+                   s_flames.end());
     for (Particle& q : s_particles)
     {
         q.age += dt;
@@ -279,8 +668,17 @@ void move(float dt)
         const float drag = q.type == EffectParticle::Puff    ? 1.6f
                            : q.type == EffectParticle::Spark ? 0.4f
                            : q.type == EffectParticle::Blade ? 1.8f   // a blade flutters down
+                           : q.type == EffectParticle::Smoke ? 1.15f
+                           : q.type == EffectParticle::Droplet ? 0.2f   // it falls as it was thrown
+                           : q.type == EffectParticle::Flake ? 1.2f     // a flake drifts
                                                              : 0.9f;
-        const float gravity = q.type == EffectParticle::Puff ? -0.15f : 9.8f;
+        /* Smoke has no ground to fall to and nothing weighing it down: it rises,
+         * slowing and spreading, until it is gone. */
+        const float gravity = q.type == EffectParticle::Puff     ? -0.15f
+                              : q.type == EffectParticle::Smoke  ? -0.5f
+                              : q.type == EffectParticle::Droplet ? 9.8f
+                              : q.type == EffectParticle::Flake  ? 0.8f
+                                                                 : 9.8f;
         const float keep = std::exp(-drag * dt);
         for (int i = 0; i < 3; ++i)
             q.v[i] *= keep;
@@ -288,7 +686,8 @@ void move(float dt)
         for (int i = 0; i < 3; ++i)
             q.p[i] += q.v[i] * dt;
         q.size += q.grow * dt;
-        if (q.type != EffectParticle::Puff && q.p[1] < q.floor && q.v[1] < 0.0f)
+        if (q.type != EffectParticle::Puff && q.type != EffectParticle::Smoke && q.p[1] < q.floor
+            && q.v[1] < 0.0f)
         {
             q.p[1] = q.floor;
             if (q.type == EffectParticle::Grain || q.type == EffectParticle::Blade)
@@ -316,6 +715,19 @@ void move(float dt)
  * instead, the game's call then returned from with none made (eax 0). */
 int groundUnder(win32::WinApplication* app, x86::reg32 car, int wheel);   // native_surface.cpp
 
+/* Where a car's wheel (0 to 3) touches the road: the suspension record at
+ * car+0x300, 0x78 bytes each, keeps it at +4 as three 16.16 fixed-point ints --
+ * whole units of 1/65536, which the game itself turns into floats that way
+ * (`sub_4ca160`, the dust its own wheels throw, `fild`s each and times it by
+ * 1/65536).  Read as floats they are nonsense, and a particle thrown there
+ * lands at the world's origin. */
+void wheelContact(win32::WinApplication* app, x86::reg32 car, int wheel, float at[3])
+{
+    const x86::reg32 record = car + 0x300 + x86::reg32(wheel) * 0x78;
+    for (int i = 0; i < 3; ++i)
+        at[i] = float(app->getMemory<x86::sreg32>(record + 4 + x86::reg32(i) * 4)) * (1.0f / 65536.0f);
+}
+
 /* The kind of ground under the wheel nearest a point (within 1.2 m): as
  * groundUnder, or -1 for none near. */
 int groundAt(win32::WinApplication* app, const float at[3])
@@ -327,9 +739,9 @@ int groundAt(win32::WinApplication* app, const float at[3])
         const x86::reg32 car = 0x5e1120 + k * 0x9ac;
         for (int w = 0; w < 4; ++w)
         {
-            const x86::reg32 wheel = car + 0x304 + x86::reg32(w) * 0x78;
-            const float d[3] = { app->getMemory<float>(wheel) - at[0], app->getMemory<float>(wheel + 4) - at[1],
-                                 app->getMemory<float>(wheel + 8) - at[2] };
+            float wheel[3];
+            wheelContact(app, car, w, wheel);
+            const float d[3] = { wheel[0] - at[0], wheel[1] - at[1], wheel[2] - at[2] };
             const float distance = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
             if (distance < nearest)
             {
@@ -360,10 +772,84 @@ void grassFromWheels(win32::WinApplication* app, float dt)
         {
             if (random01() >= SDL_min(speed / 25.0f, 1.2f) * 60.0f * dt * setting() || groundUnder(app, car, w) != 1)
                 continue;
-            const x86::reg32 wheel = car + 0x304 + x86::reg32(w) * 0x78;
-            const float at[3] = { app->getMemory<float>(wheel), app->getMemory<float>(wheel + 4),
-                                  app->getMemory<float>(wheel + 8) };
+            float at[3];
+            wheelContact(app, car, w, at);
             throwDirt(at, velocity, true, 1 + int(random01() * 2.5f), random01() < 0.05f);
+        }
+    }
+}
+
+/* What makes a tyre smoke: a wheel scrubbed sideways -- cornering at the limit,
+ * or sliding -- a wheel spun up from low speed, a wheel locked under braking.
+ * That is when the game lays its tyre marks, so it is when smoke comes off them
+ * (the game's own kind 6, throwSmoke, only ever came off some ground).  Each
+ * frame, each car of the race, from one of the wheels that is scrubbing, on
+ * pavement: more often and thicker the harder it scrubs. */
+void tyreSmoke(win32::WinApplication* app, float dt)
+{
+    const float smoke = smokeSetting();
+    if (smoke <= 0.0f || dt <= 0.0f)
+        return;
+    auto f = [app](x86::reg32 address) { return app->getMemory<float>(address); };
+    const x86::reg32 player = playerCar(app);
+    for (x86::reg32 k = 0; k < 16; ++k)
+    {
+        const x86::reg32 car = 0x5e1120 + k * 0x9ac;
+        const x86::reg32 record = app->getMemory<x86::reg32>(car + 0x220);
+        if (record < 0x6fd52c || record >= 0x6fd52c + 16 * 0x6c || (record - 0x6fd52c) % 0x6c)
+            continue;   // not in the race
+        if (app->getMemory<uint16_t>(car + 0x164) != 0)
+            continue;   // in the air, nothing on the road
+        const float velocity[3] = { f(car + 0xa4), f(car + 0xa8), f(car + 0xac) };
+        const float speed = SDL_sqrtf(velocity[0] * velocity[0] + velocity[1] * velocity[1]
+                                      + velocity[2] * velocity[2]);
+        if (!(speed > 4.0f))
+            continue;
+        /* Sideways is the velocity across the car (+0xc0 is its right): over a
+         * metre a second the tyres are being dragged over a road they no longer
+         * roll along. */
+        const float right[3] = { f(car + 0xc0), f(car + 0xc4), f(car + 0xc8) };
+        const float lateral = SDL_fabsf(velocity[0] * right[0] + velocity[1] * right[1] + velocity[2] * right[2]);
+        float scrub = lateral > 1.2f ? SDL_min(1.0f, (lateral - 1.2f) / 3.0f) : 0.0f;
+        bool driven = false;   // the smoke comes off the wheels that are driven
+        if (car == player)
+        {
+            /* The first player's own pedals, 0 to 255: the throttle at 0x79c339
+             * and the brake at 0x79c33a (after the steering at 0x79c338). */
+            const float throttle = float(app->getMemory<x86::reg8>(0x79c339)) / 255.0f;
+            const float brake = float(app->getMemory<x86::reg8>(0x79c33a)) / 255.0f;
+            const x86::reg32 limit = redline(app, car);
+            const float revs = float(app->getMemory<x86::sreg32>(car + 0x590));
+            const x86::reg32 gear = app->getMemory<x86::reg8>(car + 0x50b);
+            // Spun up from a standstill: throttle down, in gear, revs up, the car
+            // barely moving -- the wheels are going round faster than the road.
+            if (throttle > 0.6f && gear >= 2 && speed < 12.0f && limit && revs > 0.5f * float(limit))
+            {
+                scrub = SDL_max(scrub, throttle);
+                driven = true;
+            }
+            // Locked: the brakes hard on with the car still going.
+            if (brake > 0.6f && speed > 8.0f)
+                scrub = SDL_max(scrub, brake);
+        }
+        if (!(scrub > 0.05f))
+            continue;
+        const float forward[3] = { f(car + 0xd8), f(car + 0xdc), f(car + 0xe0) };
+        for (int w = 0; w < 4; ++w)
+        {
+            if (groundUnder(app, car, w) != 0)
+                continue;   // pavement: grass, dirt and snow have dust of their own
+            float at[3];
+            wheelContact(app, car, w, at);
+            // Which end of the car it is: the contact point, along its forward axis.
+            const float ahead = (at[0] - f(car + 0x98)) * forward[0] + (at[1] - f(car + 0x9c)) * forward[1]
+                                + (at[2] - f(car + 0xa0)) * forward[2];
+            if (driven && ahead > 0.0f)
+                continue;   // a wheel spinning smokes at the driven end, not both
+            if (random01() >= scrub * 6.0f * dt * smoke)
+                continue;
+            throwSmoke(at, velocity);
+            break;   // one wheel a frame is enough to see
         }
     }
 }
@@ -372,8 +858,9 @@ bool particleTakeOver(win32::WinApplication* app, x86::CPU& cpu)
 {
     static bool s_inner = false;   // the game's own call, made from here (below)
     x86::reg32 kind = cpu.eax;
-    /* The game's smoke (6) off a wheel on grass -- sliding or braking on it --
-     * is grass thrown up instead of a dark cloud. */
+    /* The game's smoke (6) -- off a wheel spinning or locked -- is the port's
+     * own: on grass, grass thrown up instead of a dark cloud; anywhere else,
+     * smoke blacker than the game's, flying up and spreading (throwSmoke). */
     if (kind == 6 && !s_inner && setting() > 0.0f && win32::glide2x::effectParticlesDrawn()
         && app->getMemory<x86::reg32>(0x6fd3b0) != 1)
     {
@@ -381,7 +868,14 @@ bool particleTakeOver(win32::WinApplication* app, x86::CPU& cpu)
         if (groundAt(app, here) == 1)
             kind = 5;
     }
-    if (s_inner || (kind != 2 && kind != 3 && kind != 5 && kind != 10) || setting() <= 0.0f
+    if (kind == 7 || kind == 8)
+    {
+        if (!weatherSetting())
+            return false;   // the game's own pictures
+    }
+    if (s_inner
+        || (kind != 2 && kind != 3 && kind != 5 && kind != 6 && kind != 7 && kind != 8 && kind != 10)
+        || setting() <= 0.0f || (kind == 6 && smokeSetting() <= 0.0f)
         || !win32::glide2x::effectParticlesDrawn() || (kind == 10 && !spraySetting()))
         return false;
     if (app->getMemory<x86::reg32>(0x6fd3b0) == 1)
@@ -411,6 +905,10 @@ bool particleTakeOver(win32::WinApplication* app, x86::CPU& cpu)
     }
     if (kind == 10)
         throwSpray(app, at, velocity);
+    else if (kind == 7 || kind == 8)
+        throwWeather(app, at, velocity, argument(app, cpu, 3));
+    else if (kind == 6)
+        throwSmoke(at, velocity);
     else if (kind == 2 || kind == 5)
         throwDirt(at, velocity, kind == 5);
     else
@@ -517,33 +1015,78 @@ void noteTrail(win32::WinApplication* app, x86::sreg32 clock)
     }
 }
 
-}  // namespace
+/* The frame's particles, for every view of it -- the main one and, behind the
+ * car, the rear-view mirror's: the alpha-blended ones (grains, puffs, smoke, a
+ * strip's spikes) into the first, in the order drawParticles draws them, and
+ * the added ones (sparks, streaks, flames and the light they throw) into the
+ * second. */
+std::vector<EffectParticle> s_out;
+std::vector<EffectParticle> s_sparks;
+std::vector<std::array<float, 3>> s_teeth;   // Hot Pursuit's spike strips, drawn with them
+bool s_showTrails = false;                  // this frame's slipstream air lines
+bool s_showFlames = false;                  // and its exhaust flames
+bool s_frameOn = false;                     // anything to draw at all
 
-void particlesFrame(win32::WinApplication* app, x86::reg32 view)
+bool deeper(const EffectParticle& a, const EffectParticle& b)
 {
-    // Hot Pursuit's spike strips, their spikes drawn with the particles.
-    std::vector<std::array<float, 3>> teeth;
-    pursuitFrame(app, teeth);
-    const bool trails = trailsOn() && app->getMemory<x86::reg32>(0x6fd3b0) != 1;
-    if (setting() <= 0.0f && teeth.empty() && !trails)
-        return;
+    return a.depth > b.depth;   // back to front
+}
+
+/* The frame's particles moved on and made: once a frame, before any view of it
+ * is turned into the picture. */
+void frameParticles(win32::WinApplication* app)
+{
+    const bool trails = s_showTrails;
+    const bool flames = s_showFlames;
     auto f = [app](x86::reg32 address) { return app->getMemory<float>(address); };
     const x86::sreg32 clock = x86::sreg32(app->getMemory<x86::reg32>(0x7d3684));
     if (s_clock < 0 || clock < s_clock || clock - s_clock > 64)
-        s_clock = clock;   // a new race, or a jump: nothing is moved by it
+    {
+        for (x86::reg32& gear : s_gear)
+            gear = 0;      // a new race, or a jump: no shift since the last frame
+        for (float& pop : s_pop)
+            pop = 0.0f;
+        for (float& crackle : s_crackle)
+            crackle = 0.0f;
+        for (bool& known : s_revsKnown)
+            known = false;
+        for (float& said : s_saidRevs)
+            said = 0.0f;
+        for (unsigned& traced : s_traced)
+            traced = 0;
+        s_clock = clock;   // and nothing is moved by it
+    }
     if (clock < 2)
+    {
         s_particles.clear();
+        s_flames.clear();
+    }
     const float dt = float(clock - s_clock) / 64.0f;
     s_clock = clock;
     if (trails)
         noteTrail(app, clock);
+    if (flames)
+        engineFlames(app, dt);
     if (dt > 0.0f)
     {
         move(dt);
         if (setting() > 0.0f && app->getMemory<x86::reg32>(0x6fd3b0) != 1)
+        {
             grassFromWheels(app, dt);
+            tyreSmoke(app, dt);
+        }
     }
+}
 
+/* The frame's particles and flames in one view: its camera (at +0x38 of the
+ * view's record) and its matrix (+0x44) turn where each one is into that view's
+ * space, and the projection ([0x56009c..a8], set for the pass) into the
+ * picture.  The alpha-blended ones go to s_out, the added ones to s_sparks. */
+void projectParticles(win32::WinApplication* app, x86::reg32 view)
+{
+    auto f = [app](x86::reg32 address) { return app->getMemory<float>(address); };
+    const bool trails = s_showTrails;
+    const x86::sreg32 clock = x86::sreg32(app->getMemory<x86::reg32>(0x7d3684));
     const float* m = &app->getMemory<float>(view + 0x44);
     const float t[3] = { f(view + 0x38), f(view + 0x3c), f(view + 0x40) };
     const float k1 = f(0x56009c), k2 = f(0x5600a0), c1 = f(0x5600a4), c2 = f(0x5600a8);
@@ -557,8 +1100,7 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
         sy = k2 * y / z + c2;
         return true;
     };
-    std::vector<EffectParticle> out, sparks;
-    out.reserve(s_particles.size());
+    s_out.reserve(s_out.size() + s_particles.size());
     const float scale = std::fabs(k1);
     for (Particle& q : s_particles)
     {
@@ -578,6 +1120,35 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
         e.seed = q.seed;
         e.type = float(q.type);
         const float left = 1.0f - q.age / q.life;
+        if (q.type == EffectParticle::Droplet)
+        {
+            // A drop is a short bright streak from where it was a frame ago.
+            e.r = q.colour[0];
+            e.g = q.colour[1];
+            e.b = q.colour[2];
+            e.a = q.alpha * near;
+            e.size = SDL_max(0.8f, scale * q.size / z);
+            if (q.hasLast)
+            {
+                e.tx = q.last[0];
+                e.ty = q.last[1];
+            }
+            else
+            {
+                const float back[3] = { q.p[0] - q.v[0] * 0.03f, q.p[1] - q.v[1] * 0.03f, q.p[2] - q.v[2] * 0.03f };
+                float bz;
+                if (!project(back, e.tx, e.ty, bz))
+                {
+                    e.tx = e.x;
+                    e.ty = e.y;
+                }
+            }
+            q.last[0] = e.x;
+            q.last[1] = e.y;
+            q.hasLast = true;
+            s_sparks.push_back(e);
+            continue;
+        }
         if (q.type == EffectParticle::Spark)
         {
             // White hot to yellow, orange and a dull red as it cools.
@@ -605,7 +1176,7 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
             q.last[0] = e.x;
             q.last[1] = e.y;
             q.hasLast = true;
-            sparks.push_back(e);
+            s_sparks.push_back(e);
             continue;
         }
         // A grain's quad is twice it: on grass the renderer draws a blade in it.
@@ -618,17 +1189,102 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
         e.g = q.colour[1];
         e.b = q.colour[2];
         const float in = SDL_min(1.0f, q.age / 0.08f) * near;
-        e.a = q.alpha * in * (q.type == EffectParticle::Puff ? left * left : SDL_min(1.0f, left * 3.0f));
+        const bool puffing = q.type == EffectParticle::Puff || q.type == EffectParticle::Smoke;
+        e.a = q.alpha * in * (puffing ? left * left : SDL_min(1.0f, left * 3.0f));
         float oz;
         if (q.noGround || !project(q.origin, e.tx, e.ty, oz))
             e.tx = e.ty = -1.0f;
-        out.push_back(e);
+        s_out.push_back(e);
     }
-    for (std::size_t k = 0; k < teeth.size(); ++k)
+    /* The road under each car's wheels, for the light its flames throw on it: a
+     * wheel's contact point is at +0x304, 0x78 bytes each, and the lowest of the
+     * four is the ground the car stands on.  Worked out once a frame, for the
+     * cars that light something. */
+    float groundY[16];
+    bool groundKnown[16] = {};
+    auto groundOf = [&](x86::reg32 car) {
+        const x86::reg32 slot = (car - x86::reg32(0x5e1120)) / 0x9ac;
+        if (car < 0x5e1120 || slot >= 16 || (car - x86::reg32(0x5e1120)) % 0x9ac)
+            return f(car + 0x9c) - 0.6f;   // not one of the race's cars: under its centre
+        if (!groundKnown[slot])
+        {
+            float low = 1e9f, at[3];
+            for (int w = 0; w < 4; ++w)
+            {
+                wheelContact(app, car, w, at);
+                low = SDL_min(low, at[1]);
+            }
+            groundY[slot] = low;
+            groundKnown[slot] = true;
+        }
+        return groundY[slot];
+    };
+    const float light = flameLightSetting();
+    /* The exhaust flames: each a ball that grows to its size in a fifth of its
+     * second, holds there -- trembling, a little of the car's movement in it --
+     * and is out by the end of it (native_exhausts.cpp lit them).  Added to the
+     * picture rather than blended into it: light, not paint.  Each throws a pool
+     * of its own light on the road under it (EffectParticle::Glow), as wide as
+     * the ball is big and as bright as it burns. */
+    for (const Flame& flame : s_flames)
     {
         EffectParticle e{};
         float z = 0.0f;
-        if (!project(teeth[k].data(), e.x, e.y, z))
+        /* Where it burns: the car's own space, turned into the world as the car
+         * is now, so it stays at the pipe's mouth while the car goes. */
+        float at[3];
+        for (int i = 0; i < 3; ++i)
+        {
+            const x86::reg32 k = 4 * x86::reg32(i);
+            at[i] = f(flame.car + 0x98 + k) + f(flame.car + 0xc0 + k) * flame.at[0]
+                    + f(flame.car + 0xcc + k) * flame.at[1] + f(flame.car + 0xd8 + k) * flame.at[2];
+        }
+        if (!project(at, e.x, e.y, z) || z < 1.5f)
+            continue;
+        constexpr float grow = 0.18f;   // seconds to its size
+        constexpr float hold = 0.80f;   // at its size, trembling, until this
+        const float out = 1.0f - smoothStep(hold, flame.life, flame.age);   // and out
+        const float size = flame.size * std::sqrt(SDL_min(1.0f, flame.age / grow)) * out;
+        const float shake = scale * size * 0.12f / z;
+        e.x += std::sin(flame.age * 47.0f + flame.seed * 39.0f) * shake;
+        e.y += std::cos(flame.age * 59.0f + flame.seed * 23.0f) * shake;
+        e.size = SDL_min(SDL_max(1.0f, scale * size / z), 400.0f);
+        e.depth = z;
+        e.r = flame.colour[0];
+        e.g = flame.colour[1];
+        e.b = flame.colour[2];
+        e.a = SDL_min(1.0f, flame.age / 0.05f) * out * smoothStep(1.5f, 3.5f, z);
+        e.seed = flame.seed;
+        e.type = float(EffectParticle::Flame);
+        e.tx = e.ty = -1.0f;
+        s_sparks.push_back(e);
+        if (!(light > 0.0f))
+            continue;
+        const float pool[3] = { at[0], groundOf(flame.car) + 0.04f, at[2] };
+        EffectParticle glow{};
+        float poolZ = 0.0f;
+        if (!project(pool, glow.x, glow.y, poolZ) || poolZ < 1.5f)
+            continue;
+        glow.depth = poolZ;
+        glow.size = SDL_min(scale * (0.35f + size * 5.0f) / poolZ, 400.0f);
+        glow.r = flame.colour[0];
+        glow.g = flame.colour[1];
+        glow.b = flame.colour[2];
+        /* Faint on purpose: light spilling out of a pipe onto the road is a
+         * glow, not a puddle of paint -- a third of what the flame itself is
+         * worth, so it reads as a tint under the car and nothing more. */
+        glow.a = SDL_min(1.0f, flame.age / 0.08f) * out * SDL_min(light, 2.0f) * flame.light * 0.15f
+                 * smoothStep(1.5f, 3.5f, poolZ);
+        glow.seed = flame.seed;
+        glow.type = float(EffectParticle::Glow);
+        glow.tx = glow.ty = -1.0f;
+        s_sparks.push_back(glow);
+    }
+    for (std::size_t k = 0; k < s_teeth.size(); ++k)
+    {
+        EffectParticle e{};
+        float z = 0.0f;
+        if (!project(s_teeth[k].data(), e.x, e.y, z))
             continue;
         // A spike and its belt, 12 cm, its quad round its middle, a little up.
         e.depth = z;
@@ -639,7 +1295,7 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
         e.seed = float(k % 7) / 7.0f;
         e.type = float(EffectParticle::Spike);
         e.tx = e.ty = -1.0f;
-        out.push_back(e);
+        s_out.push_back(e);
     }
     /* The air trails: each strand's pieces between two frames' points a thin
      * streak, narrow at its newest end and wider towards its oldest, fading
@@ -667,12 +1323,117 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
             e.r = e.g = e.b = 1.0f;
             e.a = alpha * smoothStep(1.5f, 3.0f, e.depth);
             e.type = float(EffectParticle::Streak);
-            sparks.push_back(e);
+            s_sparks.push_back(e);
         }
     }
-    std::sort(out.begin(), out.end(), [](const EffectParticle& a, const EffectParticle& b) { return a.depth > b.depth; });
-    out.insert(out.end(), sparks.begin(), sparks.end());
-    win32::glide2x::effectParticles(std::move(out));
+}
+
+/* Both views' particles to the renderer: the blended ones first, back to front
+ * in each view, then the added ones. */
+void handOver()
+{
+    std::vector<EffectParticle> all;
+    all.reserve(s_out.size() + s_sparks.size());
+    all.insert(all.end(), s_out.begin(), s_out.end());
+    all.insert(all.end(), s_sparks.begin(), s_sparks.end());
+    win32::glide2x::effectParticles(std::move(all));
+}
+
+}  // namespace
+
+/* Whether the port draws the weather's flakes and drops itself (NFS_WEATHER_PARTICLES):
+ * native_vertices.cpp leaves a particle that comes onto the camera out of the
+ * game's splash when it does. */
+bool ownWeather()
+{
+    return weatherSetting();
+}
+
+/* Whether the game's own particle sprites are drawn at all (NFS_GAME_SPRITES):
+ * off by default, and native_vertices.cpp then draws none of them -- neither
+ * the pool's quads (particlesNative) nor the drops on the view (dropsNative).
+ * Every picture in the game's particle set is a 565 texel with no alpha of its
+ * own and nothing cuts it out (TECHNICAL.md), and the pool turns each quad to
+ * its particle's spin (+0x38, +0x3c), so each one was a turned square of
+ * picture over the view, brighter or dimmer than what was behind it, the
+ * flakes and drops that come onto the camera worst of all.  Nothing the port
+ * needs goes through that path: the dust, the grass, the spray, the smoke, the
+ * exhaust flames and the weather are all made and drawn by this file, and with
+ * the game's kinds taken over (particleTakeOver) it has none of its own to draw.
+ *
+ * They are drawn anyway wherever the port leaves a kind to the game -- its own
+ * particles off, one of their switches off, or split screen, where every kind
+ * is the game's -- since something is better than nothing, the squares and all.
+ * `NFS_GAME_SPRITES=1`/`on` brings them back everywhere, for a comparison. */
+bool gameSprites(win32::WinApplication* app)
+{
+    static const bool forced = [] {
+        const char* text = SDL_getenv("NFS_GAME_SPRITES");
+        return text && (SDL_strcmp(text, "1") == 0 || SDL_strcasecmp(text, "on") == 0);
+    }();
+    return forced || setting() <= 0.0f || smokeSetting() <= 0.0f || !weatherSetting() || !spraySetting()
+        || app->getMemory<x86::reg32>(0x6fd3b0) == 1;
+}
+
+void particlesFrame(win32::WinApplication* app, x86::reg32 view)
+{
+    s_frameOn = false;
+    s_out.clear();
+    s_sparks.clear();
+    s_teeth.clear();
+    /* The drops the game puts on the view (0x7f0bd0, 200 a player, drawn by
+     * sub_4cb750): while the game's sprites are not drawn, one is a turned
+     * rectangle of blurred picture over the view and nothing may show it, so
+     * they are cleared once a frame and the splash that made them splashes
+     * nothing -- whatever path drew them, the weather on the lens is the port's
+     * own particles (throwWeather). */
+    if (!gameSprites(app))
+    {
+        x86::reg32 live = 0;
+        for (int player = 0; player < 2; ++player)
+        {
+            for (int drop = 0; drop < 200; ++drop)
+            {
+                const x86::reg32 address = 0x7f0bd0 + x86::reg32(player) * 0x3200 + x86::reg32(drop) * 0x40;
+                if (app->getMemory<x86::reg32>(address) != 0)
+                    ++live;
+                app->getMemory<x86::reg32>(address) = 0;
+            }
+        }
+        /* NFS_SPRITE_TRACE: how many the game had made, once each time there
+         * are any -- the splash (sub_4ca500), and so the game's own particle
+         * drawing, is what makes them. */
+        static const bool traced = SDL_getenv("NFS_SPRITE_TRACE") != nullptr;
+        static x86::reg32 s_wasLive = 0;
+        if (traced && live != 0 && s_wasLive == 0)
+            SDL_Log("[SPRITE] the drops on the view: %u live, cleared", unsigned(live));
+        s_wasLive = live;
+    }
+    pursuitFrame(app, s_teeth);   // Hot Pursuit's spike strips, their spikes drawn with them
+    s_showTrails = trailsOn() && app->getMemory<x86::reg32>(0x6fd3b0) != 1;
+    s_showFlames = exhaustFlamesOn();
+    if (setting() <= 0.0f && s_teeth.empty() && !s_showTrails && !s_showFlames)
+        return;
+    // The clock's state and what the cars and the engines make, once a frame.
+    frameParticles(app);
+    s_frameOn = true;
+    projectParticles(app, view);
+    std::sort(s_out.begin(), s_out.end(), deeper);
+    handOver();
+}
+
+/* The rear-view mirror: the same particles, in the mirror's own view, so that
+ * what burns or smokes behind the car is behind it in the mirror too.  Called
+ * for a frame's views after the first (the mirror's record is the main one's
+ * +0x54), once the main view has made them. */
+void particlesMirrorFrame(win32::WinApplication* app, x86::reg32 view)
+{
+    if (!s_frameOn || !view)
+        return;
+    const std::size_t from = s_out.size();
+    projectParticles(app, view);
+    std::sort(s_out.begin() + std::ptrdiff_t(from), s_out.end(), deeper);
+    handOver();
 }
 
 }  // namespace nfs3hp

@@ -232,6 +232,68 @@ static float airRollSetting()
     return value;
 }
 
+/* Cars keep the speed they took off with (NFS_AIR_SPEED, on; `0`/`off` for the
+ * game's).  Off its wheels a car is dragged down by the game -- a jump costs
+ * speed that the ramp never took, and a long one lands well short of what it
+ * left at -- where a real car in the air keeps what it had and loses it to the
+ * landing.  Each tick, for every car in the air (the word at +0x164), the speed
+ * the car had when it left the ground is put back on its velocity: its sideways
+ * and forward parts scaled up, its fall left to gravity.  Nothing is put back
+ * when the loss is sudden -- a wall in the air is a hit, and a hit is meant --
+ * and nothing at all once it is on its wheels. */
+static float airSpeedSetting()
+{
+    static const float value = [] {
+        const char *text = SDL_getenv("NFS_AIR_SPEED");
+        if (!text || !*text || SDL_strcasecmp(text, "on") == 0)
+            return 1.0f;
+        if (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0)
+            return 0.0f;
+        const float parsed = float(SDL_atof(text));
+        return parsed > 0.0f ? 1.0f : 0.0f;
+    }();
+    return value;
+}
+
+static void airSpeed(win32::WinApplication* app, int ticks)
+{
+    static float held[16] = {};   // the speed each car left the ground at, m/s; 0 when it is down
+    const float setting = airSpeedSetting();
+    const x86::reg32 count = SDL_min(word(app, 0x5efda0), x86::reg32(16));
+    for (x86::reg32 k = 0; k < count; ++k)
+    {
+        const x86::reg32 car = word(app, 0x5efc48 + 4 * k);
+        if (car < 0x5e1120 || car >= 0x5e1120 + 16 * 0x9ac || (car - 0x5e1120) % 0x9ac != 0)
+            continue;
+        float& was = held[(car - 0x5e1120) / 0x9ac];
+        if (setting <= 0.0f || app->getMemory<uint16_t>(car + 0x164) == 0)
+        {
+            was = 0.0f;   // on its wheels: nothing held
+            continue;
+        }
+        const float v[3] = { value(app, car + 0xa4), value(app, car + 0xa8), value(app, car + 0xac) };
+        const float speed = std::sqrt(v[0] * v[0] + v[2] * v[2]);   // over the ground, the fall aside
+        if (was <= 0.0f)
+        {
+            was = speed;   // the first tick off the ground: this is what it took off with
+            continue;
+        }
+        if (speed >= was)
+        {
+            was = speed;   // it keeps it, or gains a little: hold what it has now
+            continue;
+        }
+        if (was - speed > 3.0f)
+        {
+            was = speed;   // a hit in the air loses speed at once, and a hit is meant
+            continue;
+        }
+        const float scale = was / SDL_max(speed, 1e-3f);
+        put(app, car + 0xa4, v[0] * scale);
+        put(app, car + 0xac, v[2] * scale);
+    }
+}
+
 static void airRoll(win32::WinApplication* app, int ticks)
 {
     const float setting = airRollSetting();
@@ -371,10 +433,12 @@ static void slipstream(win32::WinApplication* app, int ticks)
 }
 
 void objectsFrame(win32::WinApplication* app);   // native_objects.cpp
+void crashFrame(win32::WinApplication* app);     // native_crash.cpp
 
 void surfaceFrame(win32::WinApplication* app)
 {
     objectsFrame(app);
+    crashFrame(app);
     static x86::sreg32 last = -1;
     static x86::reg32 lastPlayer = 0;
     static float slips[16] = {};   // each car slot's sideways speed after the last tick
@@ -407,6 +471,7 @@ void surfaceFrame(win32::WinApplication* app)
     if (player)
     {
         airRoll(app, ticks);
+        airSpeed(app, ticks);
         slipstream(app, ticks);
     }
     if (!player || ticks <= 0 || setting() <= 0.0f || app->getMemory<x86::reg32>(0x6fd3b0) == 1)

@@ -10,7 +10,10 @@ The editor: every car in a list on the left (a page at a time), the charts in
 the middle, the specs on the right as boxes -- change one and press Enter and
 the charts follow at once; Save writes the car (through car_perf.py, car.viv
 and the loose carp.txt, the gearbox's rpm per m/s kept in step), Cancel puts
-it back.  It needs a window (Tk or Qt for matplotlib).
+it back.  A value wider than its box (the gear ratios) is cut at the box and
+scrolls sideways with the arrow keys or the wheel over it, and pointing at a
+box brings up a note on what that value does to the car.  It needs a window
+(Tk or Qt for matplotlib).
 
 CARMODEL_DIR defaults to gamedata/carmodel.  Each car folder's performance
 data is its carp.txt -- loose in the folder, or packed in its car.viv (a BIGF
@@ -40,12 +43,16 @@ import math
 import os
 import struct
 import sys
+import textwrap
 
 import matplotlib
 
 if not any(a in ("--edit", "edit") for a in sys.argv[1:]):
     matplotlib.use("Agg")   # pictures only; the editor needs a window
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.patches import Rectangle  # noqa: E402
+from matplotlib.transforms import Bbox, ScaledTranslation  # noqa: E402
+from car_perf import hovering, present  # noqa: E402  (what a window draws again)
 
 # The chart's colours: a light surface, ink for text, and the series in a
 # fixed order (validated for colour-vision deficiency; see the dataviz palette).
@@ -419,7 +426,10 @@ class Fields:
     the one being typed in (the canvas given the keyboard), the first key typed
     replaces its value, Backspace takes a character off, Enter or Tab or a click
     elsewhere hands the value on, Escape puts it back.  Only the box is drawn
-    again as you type (blitting)."""
+    again as you type, never the rest of the figure.  A value wider than its box
+    (the gear ratios) is clipped at the box and scrolled sideways: the arrow keys
+    or the wheel over the box, and by typing itself, which keeps the end of what
+    is typed in view."""
 
     TYPED = "0123456789.,-+eE "
 
@@ -431,11 +441,14 @@ class Fields:
         self.fig = fig
         self.on_submit = on_submit
         self.boxes = []          # [ax, text artist, value]
+        self.offsets = []        # per box, how far its value is scrolled, in pixels
+        self.blanks = []         # per box, the window-coloured rectangle under it
         self.active = None
         self.buffer = ""
         self.fresh = False
         fig.canvas.mpl_connect("button_press_event", self._press)
         fig.canvas.mpl_connect("key_press_event", self._key)
+        fig.canvas.mpl_connect("scroll_event", self._scroll)
 
     def add(self, rect, label):
         ax = self.fig.add_axes(rect)
@@ -445,26 +458,80 @@ class Fields:
         for spine in ax.spines.values():
             spine.set_color(INK_2)
         ax.text(-0.04, 0.5, label, transform=ax.transAxes, ha="right", va="center", fontsize=9, color=INK_2)
-        text = ax.text(0.04, 0.5, "", transform=ax.transAxes, ha="left", va="center", fontsize=9, color=INK)
+        text = ax.text(0.04, 0.5, "", transform=ax.transAxes, ha="left", va="center", fontsize=9, color=INK,
+                       clip_on=True)
+        # The window's own colour over the box and its frame, drawn under the
+        # figure: a box drawn on its own starts from it, so the box's soft-edged
+        # frame is never laid over itself and darkened (as a full draw never
+        # does -- it clears the whole window first).
+        blank = Rectangle((rect[0] - 0.0015, rect[1] - 0.0025), rect[2] + 0.003, rect[3] + 0.005,
+                          transform=self.fig.transFigure, facecolor=SURFACE, edgecolor="none", zorder=-1)
+        self.fig.add_artist(blank)
         self.boxes.append([ax, text, ""])
+        self.offsets.append(0.0)
+        self.blanks.append(blank)
         return len(self.boxes) - 1
 
     def set(self, n, value):
-        self.boxes[n][2] = value
+        box = self.boxes[n]
         if n != self.active:
-            self.boxes[n][1].set_text(value)
+            box[1].set_text(value)
+        if value != box[2]:
+            self._scroll_to(n, 0.0)   # a new value shows from its start
+        box[2] = value
 
-    def _show(self, n):
+    def _scroll_to(self, n, offset):
+        ax, text, _value = self.boxes[n]
+        self.offsets[n] = offset
+        text.set_transform(ax.transAxes + ScaledTranslation(-offset / self.fig.dpi, 0,
+                                                            self.fig.dpi_scale_trans))
+
+    def _overflow(self, n, renderer):
+        """The pixels by which box n's value runs past the room the box has for
+        it: 0 when it fits, which every value does but the gear ratios."""
+        ax, text, _value = self.boxes[n]
+        return max(0.0, text.get_window_extent(renderer).width - max(1.0, ax.bbox.width * 0.92))
+
+    def _scroll(self, event):
+        """The wheel over a box scrolls its value sideways -- the way down for
+        what comes later, as a page scrolls."""
+        n = self._box_at(event)
+        step = getattr(event, "step", 0)
+        if n is not None and step:
+            self._scroll_by(n, 24 * step)
+
+    def _scroll_by(self, n, dx):
+        renderer = getattr(self.fig.canvas, "renderer", None)
+        if renderer is None:
+            return
+        offset = min(max(0.0, self.offsets[n] + dx), self._overflow(n, renderer))
+        if offset != self.offsets[n]:
+            self._scroll_to(n, offset)
+            self._show(n)
+
+    def _box_at(self, event):
+        for n, (ax, _text, _value) in enumerate(self.boxes):
+            if event.inaxes is ax:
+                return n
+        return None
+
+    def _show(self, n, caret=False):
         ax, text, value = self.boxes[n]
         typing = n == self.active
         text.set_text((self.buffer + "|") if typing else value)
         ax.set_facecolor("#f0efec" if typing else SURFACE)
-        renderer = self.fig.canvas.get_renderer() if hasattr(self.fig.canvas, "get_renderer") else None
+        canvas = self.fig.canvas
         try:
+            if getattr(canvas, "renderer", None) is None:
+                canvas.draw()   # nothing drawn yet: no buffer to draw a box into
+            renderer = canvas.get_renderer()
+            over = self._overflow(n, renderer)
+            self._scroll_to(n, over if caret else min(self.offsets[n], over))
+            self.blanks[n].draw(renderer)
             ax.draw(renderer)
-            self.fig.canvas.blit(ax.bbox)
-        except Exception:   # no renderer yet, or a backend that cannot blit
-            self.fig.canvas.draw_idle()
+            present(canvas, ax.bbox)
+        except Exception:   # no renderer, or a backend that can only draw the whole figure
+            canvas.draw_idle()
 
     def _focus(self):
         canvas = self.fig.canvas
@@ -487,17 +554,17 @@ class Fields:
             self.on_submit(n, typed)
 
     def _press(self, event):
-        for n, (ax, _text, value) in enumerate(self.boxes):
-            if event.inaxes is ax:
-                if self.active != n:
-                    self._finish(True)
-                    self.active = n
-                    self.buffer = value
-                    self.fresh = True
-                    self._focus()
-                    self._show(n)
-                return
-        self._finish(True)
+        n = self._box_at(event)
+        if n is None:
+            self._finish(True)
+            return
+        if self.active != n:
+            self._finish(True)
+            self.active = n
+            self.buffer = self.boxes[n][2]
+            self.fresh = True
+            self._focus()
+            self._show(n)
 
     def _key(self, event):
         n = self.active
@@ -510,6 +577,9 @@ class Fields:
         if key == "escape":
             self._finish(False)
             return
+        if key in ("left", "right"):
+            self._scroll_by(n, -24 if key == "left" else 24)
+            return
         if key in ("backspace", "delete"):
             self.buffer = "" if self.fresh else self.buffer[:-1]
         elif len(key) == 1 and key in self.TYPED:
@@ -519,8 +589,91 @@ class Fields:
         else:
             return
         self.fresh = False
-        self._show(n)
+        self._show(n, caret=True)
 
+
+
+class Hints:
+    """What each box's value does to the car, in a note that comes up beside it
+    while the pointer is over the box: semi-transparent, so the curves behind it
+    stay readable.  It is drawn into the buffer over the charts as they were, and
+    the bit of window under it is kept and put back when it goes -- nothing is
+    drawn again for it, and no window is redrawn."""
+
+    def __init__(self, fig, axes, notes):
+        self.fig = fig
+        self.axes = axes       # the boxes, in the notes' order
+        self.notes = notes
+        self.shown = None      # the box whose note is up, or None
+        self.area = None       # where that note is, in window pixels
+        self.under = None      # what was there before it
+        self.panel = Rectangle((0, 0), 0, 0, transform=fig.transFigure, facecolor=(0.09, 0.09, 0.09, 0.92),
+                               edgecolor="none", zorder=40, animated=True, visible=False)
+        fig.add_artist(self.panel)
+        self.text = fig.text(0, 0, "", fontsize=9, color="#f5f4f0", va="top", ha="left", zorder=41,
+                             animated=True, visible=False)
+        # (a canvas that keeps no buffer to draw into and copy out of -- every
+        # backend matplotlib draws through Agg, but not, say, a cairo one -- has
+        # no notes; the boxes go on working without them)
+        self.drawable = hasattr(fig.canvas, "copy_from_bbox")
+        fig.canvas.mpl_connect("motion_notify_event", self._move)
+        fig.canvas.mpl_connect("draw_event", self._redrawn)
+
+    def _at(self, event):
+        for n, ax in enumerate(self.axes):
+            if event.inaxes is ax:
+                return n
+        return None
+
+    def _move(self, event):
+        if not self.drawable:
+            return
+        n = self._at(event)
+        if n == self.shown:
+            return
+        canvas = self.fig.canvas
+        if self.shown is not None:      # what was under the last one, back
+            canvas.restore_region(self.under)
+            present(canvas, self.area)
+        self.panel.set_visible(False)
+        self.text.set_visible(False)
+        self.shown, self.under = None, None
+        if n is None:
+            return
+        renderer = canvas.get_renderer()
+        self._layout(n, renderer)
+        self.panel.set_visible(True)    # (the text is shown by _layout, to be measured)
+        self.under = canvas.copy_from_bbox(self.area)
+        self.panel.draw(renderer)
+        self.text.draw(renderer)
+        present(canvas, self.area)
+        self.shown = n
+
+    def _layout(self, n, renderer):
+        """The note for box n, wrapped, and the panel round it, level with the box
+        and just left of the column of boxes."""
+        fig = self.fig
+        ax = self.axes[n]
+        self.text.set_visible(True)   # a text that is not shown has no size to measure
+        self.text.set_text(textwrap.fill(self.notes[n], 74))
+        self.text.set_position((0.0, 0.0))
+        extent = self.text.get_window_extent(renderer)
+        w, h = extent.width / fig.bbox.width, extent.height / fig.bbox.height
+        pad_x, pad_y = 0.011, 0.010
+        x0 = 0.820 - w - 2 * pad_x                       # the column of boxes starts at 0.825
+        centre = (ax.bbox.y0 + ax.bbox.y1) / 2 / fig.bbox.height
+        y0 = min(max(centre - (h + 2 * pad_y) / 2, 0.015), 0.985 - (h + 2 * pad_y))
+        self.panel.set_bounds(x0, y0, w + 2 * pad_x, h + 2 * pad_y)
+        self.text.set_position((x0 + pad_x, y0 + pad_y + h))
+        corners = fig.transFigure.transform([[x0, y0], [x0 + w + 2 * pad_x, y0 + h + 2 * pad_y]])
+        self.area = Bbox([[corners[0][0] - 3, corners[0][1] - 3], [corners[1][0] + 3, corners[1][1] + 3]])
+
+    def _redrawn(self, _event):
+        # A whole draw leaves the note out (it is drawn over the window, not in
+        # it): it comes back with the next move of the pointer.
+        self.panel.set_visible(False)
+        self.text.set_visible(False)
+        self.shown, self.under = None, None
 
 
 # What the editor lets you change: its label, carp.txt's field number (or
@@ -545,6 +698,58 @@ EDITABLE = [
 SHORT = {2: "mass", 8: "ratios", 10: "torque", 11: "final", 12: "min rpm", 13: "redline", 14: "vmax",
          15: "speed cap", 16: "front drive", 18: "brake decel", 19: "brake bias", 25: "front grip",
          30: "grip", 31: "downforce", 77: "ratios auto", 79: "final auto"}
+
+# What each of them does to the car, in a note that comes up beside the box while
+# the pointer is over it.  The game reads these figures itself -- there is no
+# handling code of ours between them and the drive.
+HINTS = {
+    "Mass (kg)":
+        "What the engine has to move. The dashed estimate and the 0-100 / 400 m times are worked out with it, "
+        "so less is quicker off the line; the AI's acceleration table is separate and does not follow it.",
+    "Torque x":
+        "The whole torque curve, scaled by one number. Power is torque against rpm, so this raises the pull in "
+        "every gear at once and leaves the curve's shape alone -- the quick way to a stronger engine without "
+        "editing 41 figures.",
+    "Redline (rpm)":
+        "Where the engine is cut off, and where each line of the gearbox chart ends. Raising it lets the gears "
+        "reach further, but past the curve's peak the pull is falling away already, so the last few hundred rpm "
+        "buy little.",
+    "Idle (rpm)":
+        "The slowest the engine turns: the gearbox never reads an engine speed below it. It is what the first "
+        "metres of a standing start are made of, off the bottom of the torque curve.",
+    "Gear ratios":
+        "The size of each gear, first to last. A bigger number is more pull at the wheels and a lower speed "
+        "before the redline, a smaller one is a long gear for top speed; each line of the gearbox chart ends "
+        "where its gear runs out. The rpm-per-speed figures the game reads follow them.",
+    "Final drive":
+        "Multiplies every gear at once. Bigger shortens the whole box -- quicker, and out of gears sooner; "
+        "smaller lengthens it -- slower off the line, faster flat out. The gearbox chart and the rpm-per-speed "
+        "figures follow it.",
+    "Top speed (km/h)":
+        "The car's maximum velocity. The game's acceleration table is built to run out at it, and the gearbox "
+        "chart is drawn against it.",
+    "Speed cap (km/h)":
+        "A hard ceiling on top of the top speed: past it the game does not let the car go. Set it at, or a "
+        "little above, the top speed and it stays out of the way.",
+    "Front drive (0-1)":
+        "How much of the pull goes to the front axle: 0 is rear drive, 1 front drive, and anything between is "
+        "four-wheel drive in that share. It decides which wheels light up when the power comes on.",
+    "Brakes (m/s²)":
+        "How hard the car can slow down, in metres per second squared -- a road car manages about 9, a race "
+        "car 14 or more. The bias below says which end does the work.",
+    "Brake bias front":
+        "The share of that braking taken by the front wheels, 0.6 being a road car's usual. More at the front "
+        "keeps the car straight but asks more of the front tyres; less lets the tail come round.",
+    "Lateral grip":
+        "The cornering force the tyres will hold, in g. It sets the speed through a bend and what happens when "
+        "the limit arrives, and it changes no straight-line figure.",
+    "Front grip bias":
+        "How much of that grip sits at the front axle. More at the front turns in harder and holds the nose, at "
+        "the risk of a tail that steps out; less is the other way round.",
+    "Downforce":
+        "A multiplier on the aerodynamic downforce, and so on grip at speed: the faster the car goes the harder "
+        "the tyres are pressed down. It buys cornering speed, not acceleration.",
+}
 
 
 def rolling_of(fields):
@@ -648,7 +853,8 @@ def edit(carmodel, start=None):
             name = car_name(os.path.join(carmodel, f), "")
             labels.append("%s%s%s" % ("* " if changed(f) else "", f, ("  " + name[:22]) if name else ""))
         active = state["index"] - first if first <= state["index"] < first + per_page else 0
-        radio = RadioButtons(ax, labels, active=active, activecolor=SERIES[0])
+        radio = RadioButtons(ax, labels, active=active, activecolor=SERIES[0], useblit=False)
+        radio.drawon = False   # a click redraws for the car it opens anyway
         for label in radio.labels:
             label.set_fontsize(8.5)
             label.set_color(INK)
@@ -663,14 +869,15 @@ def edit(carmodel, start=None):
         show_list()
         fig.canvas.draw_idle()
 
-    up = Button(fig.add_axes((0.008, 0.9, 0.07, 0.03)), "^ up", color=GRID, hovercolor="#d4d3cf")
-    down = Button(fig.add_axes((0.083, 0.9, 0.07, 0.03)), "v down", color=GRID, hovercolor="#d4d3cf")
+    up = hovering(fig, Button(fig.add_axes((0.008, 0.9, 0.07, 0.03)), "^ up", color=GRID, hovercolor="#d4d3cf"))
+    down = hovering(fig, Button(fig.add_axes((0.083, 0.9, 0.07, 0.03)), "v down", color=GRID, hovercolor="#d4d3cf"))
     up.on_clicked(lambda _: page(-1))
     down.on_clicked(lambda _: page(1))
 
     # The specs, each a box.
     fig.text(0.825, 0.965, "Specs", fontsize=13, color=INK, fontweight="bold", va="top")
-    fig.text(0.825, 0.935, "click a value, type, Enter (Esc: as it was)", fontsize=8.5, color=INK_2, va="top")
+    fig.text(0.825, 0.935, "click, type, Enter (Esc: undo); arrows scroll",
+             fontsize=8.5, color=INK_2, va="top")
 
     def shown(field, kind, fields, folder):
         if field == "torque":
@@ -736,6 +943,9 @@ def edit(carmodel, start=None):
     for n, (label, field, kind) in enumerate(EDITABLE):
         y = 0.885 - n * 0.054
         fields_ui.add((0.895, y, 0.1, 0.036), label)
+    # What each of them does, in a note that comes up beside the box it is over.
+    state["hints"] = Hints(fig, [box[0] for box in fields_ui.boxes],
+                           [HINTS[label] for label, _field, _kind in EDITABLE])
 
     def save(_):
         folder = current()
@@ -783,14 +993,16 @@ def edit(carmodel, start=None):
         show_list()
         redraw()
 
-    save_button = Button(fig.add_axes((0.825, 0.06, 0.08, 0.04)), "Save", color=SERIES[0], hovercolor="#1c5cab")
+    save_button = hovering(fig, Button(fig.add_axes((0.825, 0.06, 0.08, 0.04)), "Save", color=SERIES[0],
+                                       hovercolor="#1c5cab"))
     save_button.label.set_color("white")
-    cancel_button = Button(fig.add_axes((0.912, 0.06, 0.08, 0.04)), "Cancel", color=GRID, hovercolor="#d4d3cf")
+    cancel_button = hovering(fig, Button(fig.add_axes((0.912, 0.06, 0.08, 0.04)), "Cancel", color=GRID,
+                                         hovercolor="#d4d3cf"))
     save_button.on_clicked(save)
     cancel_button.on_clicked(cancel)
     # The exhausts of the car shown, marked in a window of their own (car_exhausts.py).
-    exhaust_button = Button(fig.add_axes((0.825, 0.11, 0.167, 0.035)), "Mark exhausts...", color=GRID,
-                            hovercolor="#d4d3cf")
+    exhaust_button = hovering(fig, Button(fig.add_axes((0.825, 0.11, 0.167, 0.035)), "Mark exhausts...", color=GRID,
+                                           hovercolor="#d4d3cf"))
 
     def exhausts(_):
         import car_exhausts
