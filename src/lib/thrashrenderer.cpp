@@ -880,6 +880,53 @@ void dumpTexture(x86::reg32 index, GLuint name)
     }
 }
 
+/* NFS_FRAME_DUMP=<folder>: a run of race frames as they go out, each at half
+ * size as frame-NNNNN.bmp, for finding a frame that differs from the ones
+ * round it.  From the bound framebuffer. */
+static void dumpFrame(const char* directory, int number, int width, int height)
+{
+    const int wide = width / 2, high = height / 2;
+    std::vector<unsigned char> full(size_t(width) * size_t(height) * 4);
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);
+    glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, full.data());
+    const size_t rowLen = size_t(wide) * 3, padded = (rowLen + 3) & ~size_t(3);
+    std::vector<unsigned char> rows(padded * size_t(high));
+    for (int y = 0; y < high; ++y)
+        for (int x = 0; x < wide; ++x)
+            for (int c = 0; c < 3; ++c)
+            {
+                int sum = 0;
+                for (int dy = 0; dy < 2; ++dy)
+                    for (int dx = 0; dx < 2; ++dx)
+                        sum += full[(size_t(y * 2 + dy) * size_t(width) + size_t(x * 2 + dx)) * 4 + size_t(c)];
+                // The picture is upside down in its texture (the blit turns it over),
+                // and a BMP's rows go up from the bottom: row y is written from the
+                // top.  Its texels are BGR.
+                rows[size_t(high - 1 - y) * padded + size_t(x) * 3 + size_t(2 - c)] = (unsigned char)(sum / 4);
+            }
+    char path[512];
+    SDL_snprintf(path, sizeof path, "%s/frame-%05d.bmp", directory, number);
+    if (SDL_IOStream* io = SDL_IOFromFile(path, "wb"))
+    {
+        Uint8 header[54] = {0};
+        header[0] = 'B'; header[1] = 'M';
+        const Uint32 dataSize = Uint32(padded * size_t(high)), fileSize = 54 + dataSize, offset = 54, dibSize = 40;
+        const Sint32 w32 = wide, h32 = high;
+        const Uint16 planes = 1, bpp = 24;
+        SDL_memcpy(header + 2, &fileSize, 4);
+        SDL_memcpy(header + 10, &offset, 4);
+        SDL_memcpy(header + 14, &dibSize, 4);
+        SDL_memcpy(header + 18, &w32, 4);
+        SDL_memcpy(header + 22, &h32, 4);
+        SDL_memcpy(header + 26, &planes, 2);
+        SDL_memcpy(header + 28, &bpp, 2);
+        SDL_memcpy(header + 34, &dataSize, 4);
+        SDL_WriteIO(io, header, sizeof header);
+        SDL_WriteIO(io, rows.data(), rows.size());
+        SDL_CloseIO(io);
+    }
+}
+
 void ThrashRenderer::render(x86::reg32 buffer)
 {
     m_renderer->m_currentBuffer = buffer;
@@ -1195,6 +1242,67 @@ static const char g_brightShader[] =
 "    o_color = vec4(c * smoothstep(floorLevel, floorLevel + 0.2, peak), 1.0);"
 "}";
 
+/* Auto-exposure (NFS_EXPOSURE): the picture brightened as it goes dark and
+ * dimmed as it goes bright, as an eye or a camera does, so a tunnel's mouth
+ * or a dark stretch is not a black hole for as long as the car is in it.
+ *
+ * The meter (g_meterShader): the picture, before its glow and grade, into a
+ * 64x64 texture (m_meter), each texel the log brightness of sixteen of its
+ * pixels -- in exposure::kStops stops below white, 0 to 1 -- weighted towards
+ * the middle of the view (centre-weighted, as a camera meters), the weight
+ * beside it so that the texture's levels down to one texel are the weighted
+ * mean: the scene's brightness, as a geometric mean, so one bright lamp or a
+ * patch of sky does not outweigh the rest.
+ *
+ * The adaptation (g_adaptShader): one texel (m_adapt, two of them in turn, the
+ * last frame's read as this one's is written) keeps two brightnesses, each in
+ * two bytes of 8 bits: the eye's -- following the scene within a second, faster
+ * to the light than to the dark -- and the track's usual one, following it over
+ * many seconds, slowly into the dark and faster out of it, so that a long
+ * tunnel does not become the usual.  No reading back to the CPU: the composite
+ * reads the texel itself.
+ *
+ * The composite then brightens or dims the picture by how far the eye's is
+ * from the usual, in stops, less a dead zone (so a track's own light and shade
+ * are left as they are), times NFS_EXPOSURE, within kMostUp and kMostDown. */
+static const char g_meterShader[] =
+"in vec2 v_uv;"
+"layout (location=0) out vec4 o_color;"
+"uniform sampler2D u_source;"
+"uniform float u_stops;"
+"uniform vec2 u_texel;"   // a quarter of a meter texel, in the picture's uv
+"float stopsOf(vec3 c) { return clamp((log2(max(dot(c, vec3(0.299, 0.587, 0.114)), 1e-4)) + u_stops) / u_stops, 0.0, 1.0); }"
+"void main()"
+"{"
+"    float t = 0.25 * (stopsOf(texture(u_source, v_uv + vec2(-u_texel.x, -u_texel.y)).rgb)"
+"                    + stopsOf(texture(u_source, v_uv + vec2( u_texel.x, -u_texel.y)).rgb)"
+"                    + stopsOf(texture(u_source, v_uv + vec2(-u_texel.x,  u_texel.y)).rgb)"
+"                    + stopsOf(texture(u_source, v_uv + vec2( u_texel.x,  u_texel.y)).rgb));"
+"    vec2 d = (v_uv - 0.5) * vec2(1.6, 2.0);"
+"    float w = 0.25 + 0.75 * exp(-dot(d, d) * 2.0);"
+"    o_color = vec4(t * w, w, 0.0, 1.0);"
+"}";
+
+static const char g_adaptShader[] =
+"in vec2 v_uv;"
+"layout (location=0) out vec4 o_color;"
+"uniform sampler2D u_meter;"
+"uniform sampler2D u_last;"
+"uniform float u_meterLevel;"
+"uniform vec4 u_rate;"   // the eye to the dark, to the light; the usual to the dark, to the light (1: at once)
+"float unpack(vec2 c) { return c.x + c.y / 255.0; }"
+"vec2 pack(float t) { float s = clamp(t, 0.0, 1.0) * 255.0; return vec2(floor(s) / 255.0, fract(s)); }"
+"void main()"
+"{"
+"    vec4 m = textureLod(u_meter, vec2(0.5), u_meterLevel);"
+"    float now = m.r / max(m.g, 1e-4);"
+"    vec4 last = texture(u_last, vec2(0.5));"
+"    float eye = unpack(last.rg), usual = unpack(last.ba);"
+"    eye += (now - eye) * (now < eye ? u_rate.x : u_rate.y);"
+"    usual += (now - usual) * (now < usual ? u_rate.z : u_rate.w);"
+"    o_color = vec4(pack(eye), pack(usual));"
+"}";
+
 static const char g_compositeShader[] =
 "in vec2 v_uv;"
 "layout (location=0) out vec4 o_color;"
@@ -1218,7 +1326,18 @@ static const char g_compositeShader[] =
 "uniform float u_trailOn;"
 "uniform float u_glare;"
 "uniform vec2 u_glareAt;"
+"uniform sampler2D u_adapt;"
+"uniform vec4 u_exposure;"   // strength, dead zone, most up, most down (stops)
+"uniform float u_stops;"
 "float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }"
+/* Auto-exposure (above): the eye's brightness against the usual, in stops. */
+"float exposureGain()"
+"{"
+"    vec4 a = texture(u_adapt, vec2(0.5));"
+"    float stops = ((a.b + a.a / 255.0) - (a.r + a.g / 255.0)) * u_stops;"
+"    float d = sign(stops) * max(abs(stops) - u_exposure.y, 0.0) * u_exposure.x;"
+"    return exp2(clamp(d, -u_exposure.w, u_exposure.z));"
+"}"
 /* The shadows of what stands by the road (initPost, NFS_OBJECT_SHADOWS): from
  * each pixel's place in the view -- the depth buffer holds 1 - 1/z (as the
  * game's vertices give THRASH their depth), so z comes back as 1 / (1 - d);
@@ -1381,6 +1500,8 @@ static const char g_compositeShader[] =
 "        c *= 1.0 - u_shadow * sunShadow(v_uv);"
 "    if (u_glare > 0.0)"
 "        c = glare(c);"
+"    if (u_exposure.x > 0.0)"
+"        c *= exposureGain();"
 /* The lamps (initPost): a soft halo round each, from the light layer's
  * smaller levels -- wide and faint over narrow -- and, at speed, their
  * trails: what the lamps nearer the middle of the view than this pixel, on the
@@ -1496,7 +1617,7 @@ static const char g_particleShader[] =
 "    float behind = texture(u_depth, gl_FragCoord.xy / u_size).r;"
 "    float zBehind = 1.0 / max(1.0 - behind, 1e-5);"
 "    float room = zBehind - z;"
-"    if (room < (type == 4 ? -0.4 : -0.05)) discard;"
+"    if (room < (type == 4 ? -0.4 : type == 11 ? -0.45 : -0.05)) discard;"
 "    float r = length(v_uv);"
 "    if (type == 5) {"   /* a piece of an air trail: thin, even, soft at its sides */
 "        o_color = vec4(v_color.rgb, exp(-v_uv.y * v_uv.y * 4.0) * v_color.a);"
@@ -1536,6 +1657,23 @@ static const char g_particleShader[] =
 "        a *= v_color.a;"
 "        if (a <= 0.002) discard;"
 "        o_color = vec4(v_color.rgb * (0.75 + 0.5 * a), a);"
+"        return;"
+"    }"
+/* A hot brake disc (11): a soft glow round the hub, its ring a little hotter
+ * than its middle, as a disc glows through the spokes; narrowed sideways as the
+ * disc turns edge on (v_from.x, 0 to 1, how round it is seen).  Added, like a
+ * flame's light.  It may lie up to 45 cm behind what is drawn in front of it --
+ * the tyre's tread, from behind the car -- and fades the deeper it lies, so a
+ * glow behind the tyre is a faint warmth round the wheel, not cut off. */
+"    if (type == 11) {"
+"        vec2 q = vec2(v_uv.x / max(v_from.x, 0.2), v_uv.y);"
+"        float rr = length(q);"
+"        if (rr >= 1.0) discard;"
+"        float soft = (1.0 - rr) * (1.0 - rr);"
+"        float ring = exp(-(rr - 0.55) * (rr - 0.55) / 0.04);"
+"        float a = (soft * 0.7 + ring * 0.3) * v_color.a * clamp(room / 0.45 + 1.0, 0.0, 1.0);"
+"        if (a <= 0.002) discard;"
+"        o_color = vec4(v_color.rgb * (0.85 + 0.4 * soft), a);"
 "        return;"
 "    }"
 /* Tyre smoke (8): a dark cloud off a wheel spinning or locked, ragged by its
@@ -1673,6 +1811,32 @@ static float lightGlowSetting();
 static float lightTrailSetting();
 static float smoothStep(float edge0, float edge1, float x);
 
+/* NFS_WET_TRACE: what the frames of a wet race were drawn as.  Asked when
+ * first needed, after nfs3hp.ini is in the environment. */
+static bool wetTraced()
+{
+    static const bool on = SDL_getenv("NFS_WET_TRACE") != nullptr || SDL_getenv("NFS_FRAME_DUMP") != nullptr;
+    return on;
+}
+
+/* Auto-exposure's tunables (g_meterShader, g_adaptShader, the composite). */
+namespace exposure
+{
+constexpr float kStrength = 0.7f;        // NFS_EXPOSURE: of each stop past the dead zone, how much is made up
+constexpr float kStops = 10.0f;          // the meter's range: 2^-10 to white
+constexpr int kMeterSize = 64;           // texels a side; its levels down to one
+constexpr int kMeterLevels = 7;
+constexpr float kDeadZone = 0.35f;       // stops either side of the usual left alone
+constexpr float kMostUp = 1.0f;          // stops brighter at most
+constexpr float kMostDown = 0.5f;        // stops darker at most
+constexpr float kEyeToDark = 0.8f;       // seconds: the eye opening in the dark
+constexpr float kEyeToLight = 0.3f;      // and closing in the light, faster
+constexpr float kUsualToDark = 60.0f;    // seconds: the track's usual brightness, slowly into the dark
+constexpr float kUsualToLight = 8.0f;    // and back out of it
+constexpr float kRestartAfter = 0.5f;    // seconds without a race's picture: start again from the scene
+constexpr float kLongestStep = 0.1f;     // seconds: a frame's step, at most
+}  // namespace exposure
+
 static float onOff(const char* name, float otherwise)
 {
     const char* value = SDL_getenv(name);
@@ -1697,6 +1861,9 @@ void ThrashRenderer::initPost()
     m_bloom = onOff("NFS_BLOOM", 0.6f);
     m_gradeOn = onOff("NFS_GRADE", 1.0f) > 0.0f;
     m_antialias = onOff("NFS_AA", 1.0f) > 0.0f;
+    m_exposure = SDL_min(onOff("NFS_EXPOSURE", exposure::kStrength), 1.0f);
+    m_exposureTrace = SDL_getenv("NFS_EXPOSURE_TRACE") != nullptr;
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[GFX] auto-exposure %.2f", double(m_exposure));
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                 "[GFX] haze %.2f; glow %.2f; colour grade %s; anti-aliasing %s; headlights on objects %.2f; motion blur %.2f",
                 double(m_haze), double(m_bloom), m_gradeOn ? "on" : "off", m_antialias ? "FXAA" : "off", double(m_headStrength),
@@ -1749,6 +1916,17 @@ void ThrashRenderer::initPost()
         m_compositeTrailOn = glGetUniformLocation(m_compositeProgram, "u_trailOn");
         m_compositeGlare = glGetUniformLocation(m_compositeProgram, "u_glare");
         m_compositeGlareAt = glGetUniformLocation(m_compositeProgram, "u_glareAt");
+        m_compositeAdapt = glGetUniformLocation(m_compositeProgram, "u_adapt");
+        m_compositeExposure = glGetUniformLocation(m_compositeProgram, "u_exposure");
+        glUseProgram(m_compositeProgram);
+        glUniform1f(glGetUniformLocation(m_compositeProgram, "u_stops"), exposure::kStops);
+        glUniform4f(m_compositeExposure, 0.0f, 0.0f, 0.0f, 0.0f);
+        glUseProgram(0);
+        if (m_exposure > 0.0f)
+        {
+            m_meterProgram = postProgram(compileShader, g_meterShader);
+            m_adaptProgram = postProgram(compileShader, g_adaptShader);
+        }
         glGenFramebuffers(1, &m_lightFramebuffer);
         glGenFramebuffers(1, &m_depthFramebuffer);
         glGenVertexArrays(1, &m_postArray);
@@ -1845,7 +2023,8 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
         const bool streak = p.type == EffectParticle::Spark || p.type == EffectParticle::Streak
                             || p.type == EffectParticle::Droplet;
         const bool additive =
-            streak || p.type == EffectParticle::Flame || p.type == EffectParticle::Glow;
+            streak || p.type == EffectParticle::Flame || p.type == EffectParticle::Glow
+            || p.type == EffectParticle::BrakeGlow;
         float ax, ay, bx, by;   // the quad's two axes, half its length and width
         if (streak)
         {
@@ -1914,6 +2093,84 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
     }
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDisable(GL_BLEND);
+}
+
+/* Auto-exposure's meter and adaptation (g_meterShader, g_adaptShader): the
+ * picture in m_postCopy (on unit 0) metered, and this frame's eye and usual
+ * brightness written to m_adapt[m_adaptIndex] from the last frame's.  The
+ * picture's framebuffer is bound again after.  False where they cannot be. */
+bool ThrashRenderer::meterExposure()
+{
+    if (!m_meterProgram || !m_adaptProgram)
+        return false;
+    auto make = [](unsigned int& texture, int size, int levels) {
+        glGenTextures(1, &texture);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexStorage2D(GL_TEXTURE_2D, levels, GL_RGBA8, size, size);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, levels > 1 ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, levels > 1 ? GL_LINEAR : GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    };
+    if (!m_meter)
+    {
+        make(m_meter, exposure::kMeterSize, exposure::kMeterLevels);
+        make(m_adapt[0], 1, 1);
+        make(m_adapt[1], 1, 1);
+    }
+    /* The step since the last race picture; after a while without one -- the
+     * menus, a new race, a pause -- the eye and the usual both start from what
+     * is seen now. */
+    const Uint64 now = SDL_GetTicksNS();
+    const float since = m_adaptNs ? float(double(now - m_adaptNs) * 1e-9) : 1e9f;
+    m_adaptNs = now;
+    const bool restart = since > exposure::kRestartAfter;
+    const float dt = SDL_min(since, exposure::kLongestStep);
+    auto rate = [&](float seconds) { return restart ? 1.0f : 1.0f - std::exp(-dt / seconds); };
+
+    glBindFramebuffer(GL_FRAMEBUFFER, m_postFramebuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_meter, 0);
+    glViewport(0, 0, exposure::kMeterSize, exposure::kMeterSize);
+    glUseProgram(m_meterProgram);
+    glUniform1i(glGetUniformLocation(m_meterProgram, "u_source"), 0);
+    glUniform1f(glGetUniformLocation(m_meterProgram, "u_stops"), exposure::kStops);
+    glUniform2f(glGetUniformLocation(m_meterProgram, "u_texel"), 0.25f / float(exposure::kMeterSize),
+                0.25f / float(exposure::kMeterSize));
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glActiveTexture(GL_TEXTURE5);
+    glBindTexture(GL_TEXTURE_2D, m_meter);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glActiveTexture(GL_TEXTURE6);
+    glBindTexture(GL_TEXTURE_2D, m_adapt[m_adaptIndex]);
+    m_adaptIndex ^= 1;
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_adapt[m_adaptIndex], 0);
+    glViewport(0, 0, 1, 1);
+    glUseProgram(m_adaptProgram);
+    glUniform1i(glGetUniformLocation(m_adaptProgram, "u_meter"), 5);
+    glUniform1i(glGetUniformLocation(m_adaptProgram, "u_last"), 6);
+    glUniform1f(glGetUniformLocation(m_adaptProgram, "u_meterLevel"), float(exposure::kMeterLevels - 1));
+    glUniform4f(glGetUniformLocation(m_adaptProgram, "u_rate"), rate(exposure::kEyeToDark), rate(exposure::kEyeToLight),
+                rate(exposure::kUsualToDark), rate(exposure::kUsualToLight));
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    /* NFS_EXPOSURE_TRACE: once a second, what the eye and the usual are and
+     * what that makes of the picture -- read back, so only when asked. */
+    if (m_exposureTrace && now - m_exposureSaidNs > 1000000000ull)
+    {
+        m_exposureSaidNs = now;
+        unsigned char texel[4] = {};
+        glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, texel);
+        auto stops = [](unsigned char hi, unsigned char lo) {
+            return (float(hi) / 255.0f + float(lo) / 255.0f / 255.0f) * exposure::kStops - exposure::kStops;
+        };
+        const float eye = stops(texel[0], texel[1]), usual = stops(texel[2], texel[3]);
+        const float off = usual - eye;
+        const float d = (off < 0.0f ? -1.0f : 1.0f) * SDL_max(SDL_fabsf(off) - exposure::kDeadZone, 0.0f) * m_exposure;
+        SDL_Log("[EXPOSURE] scene %.2f stops, usual %.2f, picture %+.2f stops", double(eye), double(usual),
+                double(SDL_clamp(d, -exposure::kMostDown, exposure::kMostUp)));
+    }
+    glActiveTexture(GL_TEXTURE0);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
+    return true;
 }
 
 void ThrashRenderer::postProcess(const ThrashDraw& draw)
@@ -2016,6 +2273,7 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
         glGenerateMipmap(GL_TEXTURE_2D);
         glActiveTexture(GL_TEXTURE0);
     }
+    const bool exposed = m_exposure > 0.0f && meterExposure();
     if (m_bloom > 0.0f)
     {
         glBindFramebuffer(GL_FRAMEBUFFER, m_postFramebuffer);
@@ -2066,6 +2324,16 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
     glUniform1f(m_compositeTrailOn, trails);
     glUniform1f(m_compositeGlare, glareAmount);
     glUniform2f(m_compositeGlareAt, glareX, glareY);
+    if (exposed)
+    {
+        glUniform1i(m_compositeAdapt, 5);
+        glActiveTexture(GL_TEXTURE5);
+        glBindTexture(GL_TEXTURE_2D, m_adapt[m_adaptIndex]);
+        glActiveTexture(GL_TEXTURE0);
+        glUniform4f(m_compositeExposure, m_exposure, exposure::kDeadZone, exposure::kMostUp, exposure::kMostDown);
+    }
+    else
+        glUniform4f(m_compositeExposure, 0.0f, 0.0f, 0.0f, 0.0f);
     if (glareAmount > 0.0f)
         glUniform2f(m_compositeSize, float(width), float(height));
     if (lights)
@@ -2188,6 +2456,18 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
     const bool wet = draw.wetness > 0.0f && m_reflectionValid && m_reflectionW == int(draw.width)
                      && m_reflectionH == int(draw.height);
     glUniform1f(m_locations.wet, wet ? draw.wetness : 0.0f);
+    /* NFS_WET_TRACE: a wet frame drawn dry, and why. */
+    const bool traced = wetTraced();
+    if (traced)
+    {
+        ++m_traceDraws;
+        m_traceWet = m_traceWet || wet;
+        m_traceWetness = SDL_max(m_traceWetness, draw.wetness);
+    }
+    if (traced && draw.wetness > 0.0f && !wet)
+        SDL_Log("[WET] a wet frame drawn dry: reflection %s, %dx%d against %ux%u",
+                m_reflectionValid ? "kept" : "none", m_reflectionW, m_reflectionH, unsigned(draw.width),
+                unsigned(draw.height));
     if (wet)
     {
         glUniform2f(m_locations.screen, float(draw.width), float(draw.height));
@@ -2208,21 +2488,41 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
         }
         /* The world drawn, the HUD to come: its first draw is unfogged and
          * writes no depth, after the world's fogged ones.  That is the picture the
-         * next frame's wet road reflects, without the HUD in it. */
+         * next frame's wet road reflects, without the HUD in it.  Or a draw
+         * that neither tests nor writes depth: in the rain the game left its
+         * fog on into the HUD now and then, no draw after the world was
+         * unfogged, and that frame had no whole-picture pass -- its rain, spray,
+         * glow and grade gone for the frame, the "weather flicker" (2026-11-17,
+         * NFS_WET_TRACE). */
         /* And (the port's haze) the sky as it stands before the world's first
          * draw; and (its whole-picture effects) the world, once, as the HUD
          * begins. */
         if (wet || draw.wetness > 0.0f || haze > 0.0f || post || headlight > 0.0f)
         {
             const ThrashVertex& corner = draw.vertices[first];
-            const bool flat = corner.combine[3] == 0 && !batch.zBuffer;
+            const bool flat = (corner.combine[3] == 0 || !batch.zTest) && !batch.zBuffer;
+            if (traced && m_sceneDrawn && m_traceKinds.size() < 4000)
+            {
+                // F flat, f fogged without depth, t tested without depth writes, W world; a run once
+                const char kind = flat ? (m_roadDrawn ? 'F' : 'e') : !batch.zBuffer ? (batch.zTest ? 't' : 'f') : 'W';
+                if (m_traceKinds.empty() || m_traceKinds.back() != kind)
+                    m_traceKinds.push_back(kind);
+            }
             if (!flat)
             {
                 if (!m_sceneDrawn && !m_skyTaken && haze > 0.0f)
                     takeSky(int(draw.width), int(draw.height));
                 m_sceneDrawn = true;
+                m_roadDrawn = m_roadDrawn || batch.detail;
             }
-            else if (m_sceneDrawn)
+            /* Not before the road: in the rain the game draws something flat
+             * after the sky and before the road, for frames on end -- taken for
+             * the HUD's start, the reflection was the sky alone and the
+             * whole-picture pass came before the road, which was then drawn
+             * over the rain's spray and glow: the road dry for those frames
+             * (2026-11-17, NFS_FRAME_DUMP).  A frame with no road at all keeps
+             * its reflection from the end of the frame. */
+            else if (m_sceneDrawn && m_roadDrawn)
             {
                 // The HUD has begun; what follows (the mirror's own view among it) is
                 // not lit by the lamps of this one.
@@ -2306,11 +2606,18 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
          * car's soft shadow, drawn over the road, keeps the road's 1 under it
          * (written as its own faint alpha it was taken for a car, and its rim
          * stood out light inside the shadow of a wall). */
+        /* Nor does a lamp's glow touch it: its texture is 8888 or 4444, so its
+         * batch counts as a car's, and since it is no longer cut (below) its
+         * whole square -- and every square of a tail light's trail -- marked the
+         * road under it as car: left out of the motion blur and the shadows, a
+         * sharp piece of the car's own shadow stood in each, two broken shadows
+         * behind the rear wheels (2026-11-17).  Light leaves the picture's alpha
+         * as it was. */
         if (!previous || batch.alphaBlend != previous->alphaBlend || batch.car != previous->car
-            || batch.decal != previous->decal)
+            || batch.decal != previous->decal || batch.light != previous->light)
         {
-            const GLenum alphaSource = batch.car || batch.decal ? GL_ZERO : GL_ONE;
-            const GLenum alphaKept = batch.car ? GL_ZERO : GL_ONE;
+            const GLenum alphaSource = batch.car || batch.decal || batch.light ? GL_ZERO : GL_ONE;
+            const GLenum alphaKept = batch.car && !batch.light ? GL_ZERO : GL_ONE;
             if (batch.alphaBlend)
                 glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, alphaSource, alphaKept);
             else
@@ -2446,6 +2753,10 @@ void ThrashRenderer::swap()
             // A frame that never reached its HUD (a menu) keeps it whole.
             if (!m_reflectionTaken)
             {
+                if (wetTraced() && m_sceneDrawn)
+                    SDL_Log("[WET] a race frame with no HUD seen%s (%d draws; after the scene: %s): its reflection "
+                            "taken at the end, HUD and all",
+                            m_roadDrawn ? "" : " (no road drawn)", m_traceDraws, m_traceKinds.c_str());
                 takeReflection(frameW, frameH);
             }
         }
@@ -2453,7 +2764,34 @@ void ThrashRenderer::swap()
         {
             m_reflectionValid = false;
         }
+        /* NFS_FRAME_DUMP: NFS_FRAME_DUMP_COUNT race frames in a row (90, three
+         * seconds) from the NFS_FRAME_DUMP_AT'th (600: past the countdown, the
+         * car on its way), each with a line of how it was drawn.  A race's
+         * frame: one with a whole-picture pass, or a wet road (the menus'
+         * turning car has neither). */
+        static const char* dumpTo = SDL_getenv("NFS_FRAME_DUMP");
+        static const int dumpAt = SDL_getenv("NFS_FRAME_DUMP_AT") ? SDL_atoi(SDL_getenv("NFS_FRAME_DUMP_AT")) : 600;
+        static const int dumpCount =
+            SDL_getenv("NFS_FRAME_DUMP_COUNT") ? SDL_atoi(SDL_getenv("NFS_FRAME_DUMP_COUNT")) : 90;
+        static int raceFrames = 0, dumped = 0;
+        if (dumpTo && m_sceneDrawn && (m_postDone || m_traceWetness > 0.0f) && dumped < dumpCount
+            && ++raceFrames >= dumpAt)
+        {
+            glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_renderer->m_texture, 0);
+            dumpFrame(dumpTo, dumped, frameW, frameH);
+            SDL_Log("[FRAME] %05d: %d draws, wetness %.2f, wet %d, reflection taken at the HUD %d, post %d, "
+                    "after the scene: %s",
+                    dumped, m_traceDraws, double(m_traceWetness), int(m_traceWet), int(m_reflectionTaken && m_hudBegun),
+                    int(m_postDone), m_traceKinds.c_str());
+            ++dumped;
+        }
+        m_traceWet = false;
+        m_traceWetness = 0.0f;
         m_reflectionTaken = false;
+        m_roadDrawn = false;
+        m_traceKinds.clear();
+        m_traceDraws = 0;
         m_sceneDrawn = false;
         m_skyTaken = false;
         m_postDone = false;

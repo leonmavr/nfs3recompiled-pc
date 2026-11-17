@@ -2530,11 +2530,35 @@ bool rainsOn(x86::reg32 track)
     return rains;
 }
 
+/* A race's road stays wet through this many frames of the weather reading dry
+ * in a row (a second): a single frame of it dry made the whole road dry for
+ * that frame, the reflection and the darkening gone and back (2026-11-17).
+ * The end of a race dries it at once. */
+constexpr int kDryAfterFrames = 30;
+
 void wetRoadTick(win32::WinApplication* app)
 {
     float wetness = 0.0f;
-    if (nfs3hp::raceIsRunning() && app->getMemory<x86::reg32>(0x6fd4cc) != 0)
+    const bool racing = nfs3hp::raceIsRunning();
+    const x86::reg32 weather = app->getMemory<x86::reg32>(0x6fd4cc);
+    if (racing && weather != 0)
         wetness = rainsOn(app->getMemory<x86::reg32>(0x6fd4ac)) ? wetnessSetting() : 0.0f;
+    static float s_wet = 0.0f;   // the last wetness a race's frame had
+    static int s_dry = 0;        // frames it has read dry since
+    static const bool traced = SDL_getenv("NFS_WET_TRACE") != nullptr;
+    if (traced && (wetness > 0.0f) != (s_wet > 0.0f && s_dry == 0))
+        SDL_Log("[WET] swap %u: %s (race %d, weather %u, track %u)", unsigned(nfs3hp::s_swaps),
+                wetness > 0.0f ? "wet" : "dry", int(racing), unsigned(weather),
+                unsigned(app->getMemory<x86::reg32>(0x6fd4ac)));
+    if (wetness > 0.0f || !racing)
+    {
+        s_wet = wetness;
+        s_dry = 0;
+    }
+    else if (s_wet > 0.0f && ++s_dry < kDryAfterFrames)
+        wetness = s_wet;   // a frame or two of dry: still wet
+    else
+        s_wet = 0.0f;
     win32::glide2x::wetRoad(wetness);
     win32::glide2x::wetLightsLit(app->getMemory<x86::reg32>(0x6fd4c8) != 0);  // night
 }

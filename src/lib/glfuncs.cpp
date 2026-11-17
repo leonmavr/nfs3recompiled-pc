@@ -36,6 +36,7 @@ PFNGLUNIFORMMATRIX4FVPROC        glUniformMatrix4fv;
 PFNGLUNIFORM1IPROC               glUniform1i;
 PFNGLUNIFORM2FPROC               glUniform2f;
 PFNGLUNIFORM3FPROC               glUniform3f;
+PFNGLUNIFORM4FPROC               glUniform4f;
 PFNGLUNIFORM3IPROC               glUniform3i;
 PFNGLUNIFORM1FPROC               glUniform1f;
 PFNGLUNIFORM1FVPROC              glUniform1fv;
@@ -114,6 +115,7 @@ void loadGlFunctions()
     load(glUniform1i,               "glUniform1i");
     load(glUniform2f,               "glUniform2f");
     load(glUniform3f,               "glUniform3f");
+    load(glUniform4f,               "glUniform4f");
     load(glUniform3i,               "glUniform3i");
     load(glUniform1f,               "glUniform1f");
     load(glUniform1fv,              "glUniform1fv");

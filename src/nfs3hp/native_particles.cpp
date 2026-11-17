@@ -627,6 +627,104 @@ void engineFlames(win32::WinApplication* app, float dt)
     }
 }
 
+/* Brake discs that glow at night (NFS_BRAKE_GLOW).  Each car has a glow, 0 to
+ * 1: while it brakes hard it comes up to how fast the car is going (none
+ * below kFromSpeed, all of it from kFullSpeed) in kRiseSeconds, and once it
+ * stops braking it goes out over kFadeSeconds.  The first player's car brakes
+ * hard when its brake byte (0x79c33a, as the tyre marks read it) is past
+ * kPedal; any other car -- no car's pedal is a byte the port can read but the
+ * first player's -- when it slows harder than kDecelMin, past what drag and
+ * the engine do, and not so hard that it is a hit (kDecelMost).  Drawn at
+ * night only ([0x6fd4c8]), at each wheel: a pool of orange light on the road
+ * where the wheel touches it (EffectParticle::Glow, the flames' light) and a
+ * glow at the hub (EffectParticle::BrakeGlow); the fronts brighter than the
+ * rears, as the front brakes do most of the work. */
+namespace brakes
+{
+constexpr float kPedal = 0.55f;             // the first player's brake byte, of 255, that is braking hard
+constexpr float kDecelMin = 6.0f;           // m/s^2: another car slowing harder than this is braking hard
+constexpr float kDecelMost = 18.0f;         // m/s^2: slowing harder than this is a hit
+constexpr float kFromSpeed = 8.0f;          // m/s: no glow braking slower than this
+constexpr float kFullSpeed = 30.0f;         // m/s: braking from this fast or faster, all of it
+constexpr float kRiseSeconds = 0.35f;       // from out to full while braking
+constexpr float kFadeSeconds = 1.25f;       // from full to out once the brake is off
+constexpr float kRearShare = 0.6f;          // a rear wheel's, against a front's
+constexpr float kHubHeight = 0.3f;          // m: the hub above where the wheel touches the road (its radius)
+constexpr float kHubOut = 0.05f;            // m: out from the wheel's middle, towards its face
+constexpr float kDiscRadius = 0.22f;        // m: the hub glow's radius
+constexpr float kFlatMost = 0.3f;           // a disc seen edge on is drawn this wide of round, at the least
+constexpr float kHubAlpha = 0.8f;           // how bright the hub glow is added, at full
+constexpr float kPoolRadius = 0.55f;        // m: the pool on the road
+constexpr float kPoolAlpha = 0.35f;         // and how bright, at full
+constexpr float kCool[3] = { 0.85f, 0.16f, 0.03f };   // dull red, as it starts to show
+constexpr float kHot[3] = { 1.0f, 0.42f, 0.1f };      // orange, at full
+constexpr x86::reg32 kNight = 0x6fd4c8;
+constexpr x86::reg32 kBrakeByte = 0x79c33a;
+}  // namespace brakes
+
+float s_brakeGlow[16];          // each car's, 0 to 1
+float s_brakeVelocity[16][3];   // each car's velocity a frame ago
+bool s_brakeKnown[16];
+
+/* NFS_BRAKE_GLOW: on (1); a number up to 3 for brighter, 0 or off for none. */
+float brakeGlowSetting()
+{
+    static const float value = [] {
+        const char* text = SDL_getenv("NFS_BRAKE_GLOW");
+        if (!text || !*text || SDL_strcasecmp(text, "on") == 0)
+            return 1.0f;
+        if (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0)
+            return 0.0f;
+        const float parsed = float(SDL_atof(text));
+        return parsed > 0.0f ? SDL_min(parsed, 3.0f) : 1.0f;
+    }();
+    return value;
+}
+
+/* Each car's brake glow brought up while it brakes hard and let go out after,
+ * once a frame. */
+void brakeGlowFrame(win32::WinApplication* app, float dt)
+{
+    auto f = [app](x86::reg32 address) { return app->getMemory<float>(address); };
+    const x86::reg32 player = playerCar(app);
+    for (x86::reg32 k = 0; k < 16; ++k)
+    {
+        const x86::reg32 car = 0x5e1120 + k * 0x9ac;
+        const x86::reg32 record = app->getMemory<x86::reg32>(car + 0x220);
+        if (record < 0x6fd52c || record >= 0x6fd52c + 16 * 0x6c || (record - 0x6fd52c) % 0x6c)
+        {
+            s_brakeGlow[k] = 0.0f;   // not in the race
+            s_brakeKnown[k] = false;
+            continue;
+        }
+        const float v[3] = { f(car + 0xa4), f(car + 0xa8), f(car + 0xac) };
+        const float speed = SDL_sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        bool braking = false;
+        if (app->getMemory<uint16_t>(car + 0x164) == 0 && speed > brakes::kFromSpeed)
+        {
+            if (car == player)
+                braking = float(app->getMemory<x86::reg8>(brakes::kBrakeByte)) > brakes::kPedal * 255.0f;
+            else if (s_brakeKnown[k])
+            {
+                float shed = 0.0f;   // speed lost along the way it goes, m/s
+                for (int i = 0; i < 3; ++i)
+                    shed += (s_brakeVelocity[k][i] - v[i]) * v[i] / speed;
+                const float decel = shed / dt;
+                braking = decel > brakes::kDecelMin && decel < brakes::kDecelMost;
+            }
+        }
+        for (int i = 0; i < 3; ++i)
+            s_brakeVelocity[k][i] = v[i];
+        s_brakeKnown[k] = true;
+        float& glow = s_brakeGlow[k];
+        const float target = braking ? smoothStep(brakes::kFromSpeed, brakes::kFullSpeed, speed) : 0.0f;
+        if (glow < target)
+            glow = SDL_min(target, glow + dt / brakes::kRiseSeconds);
+        else
+            glow = SDL_max(target, glow - dt / brakes::kFadeSeconds);
+    }
+}
+
 void throwSpark(const float at[3], const float velocity[3])
 {
     const int count = random01() < 0.35f * setting() ? 2 : 1;
@@ -1025,6 +1123,7 @@ std::vector<EffectParticle> s_sparks;
 std::vector<std::array<float, 3>> s_teeth;   // Hot Pursuit's spike strips, drawn with them
 bool s_showTrails = false;                  // this frame's slipstream air lines
 bool s_showFlames = false;                  // and its exhaust flames
+bool s_showBrakes = false;                  // and its brake discs' glow
 bool s_frameOn = false;                     // anything to draw at all
 
 bool deeper(const EffectParticle& a, const EffectParticle& b)
@@ -1054,6 +1153,11 @@ void frameParticles(win32::WinApplication* app)
             said = 0.0f;
         for (unsigned& traced : s_traced)
             traced = 0;
+        for (x86::reg32 k = 0; k < 16; ++k)
+        {
+            s_brakeGlow[k] = 0.0f;   // out
+            s_brakeKnown[k] = false;
+        }
         s_clock = clock;   // and nothing is moved by it
     }
     if (clock < 2)
@@ -1067,6 +1171,8 @@ void frameParticles(win32::WinApplication* app)
         noteTrail(app, clock);
     if (flames)
         engineFlames(app, dt);
+    if (s_showBrakes && dt > 0.0f)
+        brakeGlowFrame(app, dt);
     if (dt > 0.0f)
     {
         move(dt);
@@ -1280,6 +1386,91 @@ void projectParticles(win32::WinApplication* app, x86::reg32 view)
         glow.tx = glow.ty = -1.0f;
         s_sparks.push_back(glow);
     }
+    /* The brakes, at night (brakeGlowFrame): at each wheel a pool of their
+     * light on the road where it touches (EffectParticle::Glow, as a flame's)
+     * and a glow at the hub on the wheel's outer side -- round where the disc
+     * faces the view and narrowed as it turns edge on, the renderer told how
+     * much in tx -- dull red as it comes up, orange at full. */
+    const float brakeLight = brakeGlowSetting();
+    if (s_showBrakes && app->getMemory<x86::reg32>(brakes::kNight) != 0)
+    {
+        for (x86::reg32 k = 0; k < 16; ++k)
+        {
+            const float glow = s_brakeGlow[k];
+            if (!(glow > 0.01f))
+                continue;
+            const x86::reg32 car = 0x5e1120 + k * 0x9ac;
+            float centre[3], right[3], up[3], forward[3];
+            for (int i = 0; i < 3; ++i)
+            {
+                const x86::reg32 o = 4 * x86::reg32(i);
+                centre[i] = f(car + 0x98 + o);
+                right[i] = f(car + 0xc0 + o);
+                up[i] = f(car + 0xcc + o);
+                forward[i] = f(car + 0xd8 + o);
+            }
+            auto heated = [glow](int i) { return brakes::kCool[i] + (brakes::kHot[i] - brakes::kCool[i]) * glow; };
+            // The disc's face, the car's right, in the view's axes (no translation).
+            const float face[3] = { right[0] * m[0] + right[1] * m[3] + right[2] * m[6],
+                                    right[0] * m[1] + right[1] * m[4] + right[2] * m[7],
+                                    right[0] * m[2] + right[1] * m[5] + right[2] * m[8] };
+            for (int w = 0; w < 4; ++w)
+            {
+                float at[3];
+                wheelContact(app, car, w, at);
+                float ahead = 0.0f, side = 0.0f;
+                for (int i = 0; i < 3; ++i)
+                {
+                    ahead += (at[i] - centre[i]) * forward[i];
+                    side += (at[i] - centre[i]) * right[i];
+                }
+                const float share = (ahead > 0.0f ? 1.0f : brakes::kRearShare) * glow * brakeLight;
+                // The pool on the road.
+                const float ground[3] = { at[0], at[1] + 0.04f, at[2] };
+                EffectParticle pool{};
+                float poolZ = 0.0f;
+                if (project(ground, pool.x, pool.y, poolZ) && poolZ >= 1.5f)
+                {
+                    pool.depth = poolZ;
+                    pool.size = SDL_min(SDL_max(1.0f, scale * brakes::kPoolRadius / poolZ), 300.0f);
+                    pool.r = heated(0);
+                    pool.g = heated(1);
+                    pool.b = heated(2);
+                    pool.a = SDL_min(1.0f, share * brakes::kPoolAlpha) * smoothStep(1.5f, 3.5f, poolZ);
+                    pool.seed = float(w) * 0.25f;
+                    pool.type = float(EffectParticle::Glow);
+                    pool.tx = pool.ty = -1.0f;
+                    s_sparks.push_back(pool);
+                }
+                // The hub.
+                const float out = side < 0.0f ? -brakes::kHubOut : brakes::kHubOut;
+                float hub[3];
+                for (int i = 0; i < 3; ++i)
+                    hub[i] = at[i] + up[i] * brakes::kHubHeight + right[i] * out;
+                EffectParticle e{};
+                float z = 0.0f;
+                if (!project(hub, e.x, e.y, z) || z < 1.5f)
+                    continue;
+                // How round it is seen: its face against the way from the camera to it.
+                const float view[3] = { hub[0] * m[0] + hub[1] * m[3] + hub[2] * m[6] + t[0],
+                                        hub[0] * m[1] + hub[1] * m[4] + hub[2] * m[7] + t[1], z };
+                const float length = SDL_sqrtf(view[0] * view[0] + view[1] * view[1] + view[2] * view[2]);
+                const float facing = SDL_fabsf(face[0] * view[0] + face[1] * view[1] + face[2] * view[2])
+                                     / SDL_max(length, 1e-3f);
+                e.depth = z;
+                e.size = SDL_min(SDL_max(1.0f, scale * brakes::kDiscRadius / z), 200.0f);
+                e.r = heated(0);
+                e.g = heated(1);
+                e.b = heated(2);
+                e.a = SDL_min(1.0f, share * brakes::kHubAlpha) * smoothStep(1.5f, 3.5f, z);
+                e.seed = float(w) * 0.25f;
+                e.type = float(EffectParticle::BrakeGlow);
+                e.tx = SDL_max(brakes::kFlatMost, facing);
+                e.ty = 0.0f;
+                s_sparks.push_back(e);
+            }
+        }
+    }
     for (std::size_t k = 0; k < s_teeth.size(); ++k)
     {
         EffectParticle e{};
@@ -1412,7 +1603,8 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
     pursuitFrame(app, s_teeth);   // Hot Pursuit's spike strips, their spikes drawn with them
     s_showTrails = trailsOn() && app->getMemory<x86::reg32>(0x6fd3b0) != 1;
     s_showFlames = exhaustFlamesOn();
-    if (setting() <= 0.0f && s_teeth.empty() && !s_showTrails && !s_showFlames)
+    s_showBrakes = brakeGlowSetting() > 0.0f;
+    if (setting() <= 0.0f && s_teeth.empty() && !s_showTrails && !s_showFlames && !s_showBrakes)
         return;
     // The clock's state and what the cars and the engines make, once a frame.
     frameParticles(app);

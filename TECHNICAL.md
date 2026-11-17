@@ -250,9 +250,9 @@ grain over light lay on the road at night as a white noise.
 
 ### Haze, glow, colour grade and anti-aliasing
 
-Four effects on a race's picture, each on by default and off with its
+Five effects on a race's picture, each on by default and off with its
 variable set to `0` (or `off`): `NFS_HAZE`, `NFS_BLOOM`, `NFS_GRADE`,
-`NFS_AA`. The menus are never touched.
+`NFS_AA`, `NFS_EXPOSURE`. The menus are never touched.
 
 **Haze.** The fog was worked out at each corner and mixed into one flat
 colour. Now, for fogged draws blended over the picture, it is worked out at
@@ -280,6 +280,24 @@ road's reflection is taken -- the picture is copied and drawn back over itself
   Redrock Ridge and Lost Canyons warmer still, Atlantica, Aquatica and the
   Summit cooler, Country Woods a touch greener, Empire City flatter and
   harder; bluer and greyer at night, greyer and softer in the weather.
+- Auto-exposure (`NFS_EXPOSURE`, 0.7): the picture brightened as it goes dark
+  and dimmed as it goes bright, as an eye adapts, so a tunnel's mouth or a
+  dark stretch is not a black hole for as long as the car is in it. The
+  picture is metered into 64x64 (`g_meterShader`), each texel the log
+  brightness of sixteen pixels, weighted towards the middle of the view; its
+  levels down to one texel are the scene's geometric mean. One texel kept from
+  frame to frame (`g_adaptShader`, two in turn, never read back) holds two
+  brightnesses: the eye's, following the scene within a second (0.8 s into the
+  dark, 0.3 s into the light), and the track's usual, following it over many
+  (60 s into the dark, 8 s out of it, so a long tunnel does not become the
+  usual). The picture is brightened or dimmed by the eye's distance from the
+  usual in stops, less 0.35 either way left alone, times `NFS_EXPOSURE` -- at
+  most a stop brighter and half a stop darker (`exposure::` in
+  `thrashrenderer.cpp`). A race's first picture, and the first after half a
+  second without one, starts both from the scene. Before the glow and the
+  grade, so lamps keep their look; never the HUD or the menus.
+  `NFS_EXPOSURE_TRACE=1` prints the scene, the usual and what is made of the
+  picture once a second (`[EXPOSURE]`).
 
 ### Headlights on what stands by the road
 
@@ -315,6 +333,12 @@ went grey), not by the cars, which have their own (their pixels leave 0 in the
 picture's alpha), and faded at the screen's edges, past which what casts may
 lie. Fainter in the rain and at night as the cars' own are.
 `NFS_OBJECT_SHADOWS`, 0.45.
+
+A lamp's glow leaves the picture's alpha as it was: its texture is 8888 or
+4444, which counts it as a car's, and the whole square of each glow and of each
+point of a tail light's trail had marked the road under it as car -- left out
+of the motion blur and these shadows, so a sharp piece of the car's own shadow
+stood in each, two broken shadows behind the rear wheels.
 
 ### Sparks off walls
 
@@ -794,6 +818,22 @@ not a lamp itself. k is 0.45 times `NFS_LIGHT_TRAILS` (1), coming in from
 projection's (`[0x5600a4]`, `[0x5600a8]`). It costs a pass over the screen and
 a second draw of the few lamp sprites.
 
+### Brake discs glowing at night
+
+Braking hard at night, a car's brakes glow (`NFS_BRAKE_GLOW`,
+`brakeGlowFrame` in `native_particles.cpp`): at each wheel a pool of orange
+light on the road where it touches (`EffectParticle::Glow`, as an exhaust
+flame's) and a glow at the hub on the wheel's outer side
+(`EffectParticle::BrakeGlow`, round where the disc faces the view, narrowed as
+it turns edge on, fading rather than cut off behind the tyre). The first
+player's car brakes hard when its brake byte (`0x79c33a`, as the tyre marks
+read it) is past 0.55; any other car when it slows harder than 6 m/s² (and
+under 18, past which it is a hit) -- no other car's pedal can be read. While it
+brakes above 8 m/s the glow comes up in 0.35 s to as much as its speed gives
+(all of it from 30 m/s); off the brake it goes out over 1.25 s. Dull red
+coming up, orange at full; the fronts brighter than the rears (0.6 of them).
+Night only (`[0x6fd4c8]`); the tunables are `brakes::` in the same file.
+
 ### The cars' paint
 
 A car is drawn twice: its body with its own texture, then the reflection the
@@ -863,6 +903,26 @@ are flagged `wetStreak` and, by day (`0x6fd4c8` clear,
 (`skipDraw`) passes over its vertices too: before, the next batch drew them as
 its own -- the dark strips that stayed, and a skipped shadow
 (`NFS_CAR_SHADOW=0`) drawn with whatever texture followed it.
+
+The road stays wet through up to 30 frames of the weather reading dry
+(`kDryAfterFrames`, `wetRoadTick`): a single dry frame made the whole road dry
+for that frame. `NFS_WET_TRACE=1` logs each time the weather reads dry or wet
+again (`[WET] swap N`), a wet frame drawn dry and why, and a race frame whose
+HUD was never seen, its reflection taken at the end -- with how many draws the
+frame took and what came after the scene, a letter a run (`F` a draw taken for
+the HUD's start, `e` a flat draw before the road, `f` fogged with no depth test
+or write, `t` depth-tested with no write, `W` the world). `NFS_FRAME_DUMP=<folder>`
+saves `NFS_FRAME_DUMP_COUNT` race frames in a row (90) from the
+`NFS_FRAME_DUMP_AT`'th (600) at half size as `frame-NNNNN.bmp`, with a
+`[FRAME]` line each of how it was drawn.
+
+The HUD's start is the first draw, once some of the road has been drawn
+(`batch.detail`), that is unfogged and writes no depth, or neither tests nor
+writes depth. In the rain the game draws something flat after the sky and
+before the road, for frames on end; taken for the HUD's start, the wet road's
+reflection was the sky alone and the whole-picture pass ran before the road,
+which was then drawn over the rain's spray and glow -- the road dry for those
+frames, found with the frame dump (2026-11-17).
 
 With Weather on, on a track whose weather is rain (the `type` in its
 `3trNNw.hrz`; 2, snow, is left dry), the road is wet (`wetRoadTick`,
@@ -2021,10 +2081,44 @@ under it; a value wider than its box (the gear ratios) is cut at the box and
 scrolls with the arrow keys or the wheel. Save writes the car through
 `car_perf.py` (car.viv and the loose carp.txt, the gearbox's rpm per m/s kept
 in step with the ratios and the final drive, the automatic gearbox's the same
-where they were the same); Cancel puts it back as it is on disk. The
-acceleration table is the game's own and does not follow these edits
-(`car_perf.py derive` rebuilds it). It needs a window for matplotlib (Tk or
-Qt).
+where they were the same); Cancel puts it back as it is on disk. It needs a
+window for matplotlib (Tk or Qt).
+
+**The torque curve is dragged, not typed.** Its 41 points (one every 256 rpm)
+are marks on the torque chart: the pointer within a few pixels of one picks it
+up, moving up and down sets that point -- never below zero -- and letting go
+hands the curve on (`CurveDrag`). The "Torque x" box still scales the whole
+curve at once, and a factor typed there is folded into the points when the next
+drag starts, so the two never bite each other.
+
+**The acceleration chart shows both curves**: the game's own table, and dashed
+over it what the engine as tuned now makes of the car -- the same curve Save
+writes when it rebuilds the tables, carried through the same road (the pending
+changes applied to a copy of the car, the model's estimate for it, scaled to the
+car's own level), so the two meet exactly after a rebuild. The "Worked out"
+column has the times out of each. Both move *while* a point is dragged: a chart
+of its own costs tens of milliseconds to draw, so instead of drawing it again
+the drag freezes the two charts as they are -- their curves hidden, their pixels
+kept -- and every step puts those pixels back and draws the dragged curve and
+the new estimate over them (`drag_freeze`, `drag_show`): under five milliseconds
+a step, where drawing the charts again was over a hundred. Everything that
+follows the curve -- power, the push in each gear, the figures -- is drawn again
+once, when the drag ends.
+
+**The game's own acceleration table** -- the curve the AI drives to, carp.txt's
+eight AI ACC sections -- is rebuilt on Save when the box below Save says so
+("Rebuild AI tables on Save: yes"; `derive_tables`, the same as `car_perf.py
+derive`). Nothing else recomputes it, so a car whose engine, gearing or mass
+was tuned otherwise keeps the acceleration its donor had. Its *level* stays the
+car's own: the untuned car is worked out the same way and its figures are the
+anchor, so only the tune's own improvement is kept. Aimless, the model would
+have its way -- it has no clutch, tyre or traction loss in it, and on an
+add-on's optimistic figures it can be 3.4 times out (`clkg`: 3.4 s of car
+against a 1.4 s estimate), which would hand the AI a table it cannot drive to.
+
+An ACC section is written as many numbers as the section holds, not 14 each: an
+add-on's file can differ (`clkg`'s first section is a whole 98-sample curve),
+and the table is as long as the car's own.
 
 All of these find the cars on their own: `gamedata/carmodel` where they are run,
 or else the repository's (the folder above `tools/`), so they run from
@@ -2120,15 +2214,25 @@ what you want, copy it, then move the numbers.
 sections are a curve of acceleration against speed that nothing else
 recomputes, so without it your car would be quicker for you and stock for the
 AI. It rebuilds them by running the car's own torque curve through its own
-gearbox and mass, then applying the factor the model is optimistic by —
-measured across the whole retail field (about 0.96) — so the tuning shows
-through and the model's own cheerfulness does not. `--scale 1` writes the raw
-estimate, `--match <seconds>` aims the table at a 0-100 you choose, and
-`--dry-run` shows what would change.
+gearbox and mass, then scaling that estimate until it gives the 0-100 the car
+already has -- so the shape is the model's, the level the car's, and the model's
+own cheerfulness (it has no clutch, tyre or traction loss in it) is taken out
+car by car. The scale is per car rather than one factor for the field, which
+matters on an add-on whose engine figures are optimistic (`clkg`'s make it 3.4
+times quicker than it is): aimed greedily, it would hand the AI a 1.4 s table to
+drive to. `--scale 1` writes the raw estimate, `--match <seconds>` aims the
+table at a 0-100 you choose, and `--dry-run` shows what would change. The
+editor's "Rebuild AI tables on Save" box does the same on Save, except that it
+keeps the tune's own improvement -- anchored on the car's shipped 0-100 -- so
+the AI gets quicker when you made the car quicker.
 
-The torque curve is 41 numbers, one every 256 rpm from 0 to 10240, and the
-other arrays are fixed sizes too — `list --fields` gives every field and its
-size, and a wrong count is refused rather than written. What is worth setting
+The torque curve is 41 numbers, one every 256 rpm from 0 to 10240 — in the
+editor each is a mark on the chart to drag, no typing — and the other arrays
+are fixed sizes too — `list --fields` gives every field and its size, and a
+wrong count is refused rather than written. An `AI ACC` section is written as
+many numbers as that section already holds: the retail cars keep 14 each, an
+add-on's file can differ (`clkg`'s first is a whole 98-sample curve), and the
+table is as long as the car's own. What is worth setting
 first, in the order it changes the car: `mass`, `torque`, the gear `ratios` and
 `final` (whose `velocity to rpm ratio` follows automatically), `vmax` and
 `speed cap`, then the handling set — `grip`, `brake decel`, `front grip`,
@@ -2292,6 +2396,7 @@ the next time the game starts.
 | `NFS_BLOOM` | on (`0.6`) | `0`/`off`: no glow around lights brighter than the sky. A number: how strong. |
 | `NFS_GRADE` | on | `0`/`off`: no colour grade per track and light. |
 | `NFS_AA` | on | `0`/`off`: no FXAA over the race's picture. |
+| `NFS_EXPOSURE` | on (`0.7`) | `0`/`off`: no auto-exposure. A number up to 1: how much of the difference from the track's usual brightness is made up (Haze, glow, colour grade and anti-aliasing). `NFS_EXPOSURE_TRACE=1` prints it once a second. |
 | `NFS_CAR_SHINE` | `1` | How much the cars' reflection is shaped by how the body faces the view -- sharper highlights, stronger towards the edges -- 0 to 1; `0` the game's own (The cars' paint). |
 | `NFS_TEXTURE_SHARP` | on | `0`: textures seen larger than they are drawn bilinear, as the GPU does, instead of Catmull-Rom. |
 | `NFS_HEADLIGHT_REACH`, `NFS_HEADLIGHT_WIDTH` | `2`, `1.4` | How far the headlights' patch on the road reaches and how wide it is, against the original's (0.25 to 4; `1` and `1` are the original). |
@@ -2332,6 +2437,7 @@ the next time the game starts.
 | `NFS_MOTION_BLUR` | on (`2`) | `0`/`off`: no motion blur. A number: how long the shutter, times a ninetieth of a second (Speed you can feel). |
 | `NFS_LIGHT_GLOW` | on (`1`) | `0`/`off`: the lamps' glow as the game has it, a star of spikes. A number up to 3: how strong the halo round the soft glow (The lamps' glow, and their trails). |
 | `NFS_LIGHT_TRAILS` | on (`1`) | `0`/`off`: no streak. A number up to 3: how long the short streak under each lamp at speed, on the screen. |
+| `NFS_BRAKE_GLOW` | on (`1`) | `0`/`off`: no glow from the brakes at night. A number up to 3: how bright (Brake discs glowing at night). |
 | `NFS_TAILLIGHT_TRAILS` | on (`1`) | `0`/`off`: no trails behind the cars' tail lights. A number up to 3: how long they grow with speed, from 80 km/h (The lamps' glow, and their trails). |
 | `NFS_PARTICLES` | on (`1`) | `0`/`off`: the game's own dust and sparks. A number up to 3: how much dirt is thrown (Dust, grit and sparks of the port's own). |
 | `NFS_EXHAUST_FLAMES` | on (`1`) | `0`/`off`: no flames out of the cars' exhausts when they gear up (Exhaust flames when gearing up). |

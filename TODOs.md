@@ -80,7 +80,17 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     whenever the game lays a tyre mark: sliding sideways, a wheel spun up from a
     standstill, a wheel locked under braking.
 - [ ] Heat haze over the road on desert tracks by day.
-- [ ] Brake discs glowing faintly orange after hard braking at night.
+- [x] Brake discs glowing faintly orange after hard braking at night.
+  - Done (2026-11-17, `NFS_BRAKE_GLOW`): braking hard above 8 m/s, a pool of
+    orange light on the road at each wheel and a glow at its hub, up in 0.35 s
+    and out over 1.25 s after; every car, fronts brighter, night only (Brake
+    discs glowing at night).
+- [x] Two broken shadows behind the rear wheels (2026-11-17): the tail lights'
+  glow squares marked the road as car in the picture's alpha; light leaves it.
+- [x] Wet road dry for frames at a time in the rain (2026-11-17): a flat draw
+  of the game's between the sky and the road was taken for the HUD's start, so
+  the reflection and the whole-picture pass came before the road. The HUD's
+  start now waits for the road.
 - [x] Wider, sharper reflections on the cars from the sky already captured.
 - [x] Camera shake on big impacts and hard landings, by the hit's speed.
   - Done: `NFS_CRASH_SHAKE` (Crashes you feel).
@@ -203,8 +213,13 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 - [x] Car shadows back (2026-11-17): the ellipse that took the square away left
   them almost unseen -- the car stands over all of it. A rounder rectangle now
   (`kShadowRound`, `kShadowSolid`, `kShadowDarkness`, `thrashrenderer.cpp`).
-- [ ] Auto-exposure. Smooth brightness from the frame's average luminance in 
+- [x] Auto-exposure. Smooth brightness from the frame's average luminance in 
   the final blit, next to gamma. Tunnel mouths and dusk stops being a black flash. 
+  - Done (2026-11-17, `NFS_EXPOSURE` 0.7): in the race's whole-picture pass
+    rather than the final blit, so the HUD and menus are untouched. Metered on
+    the GPU, centre-weighted; the picture follows the scene against the
+    track's own usual brightness, so each track keeps its look and only dark
+    or bright stretches are evened out.
 
 
 ### Races/locations
@@ -522,6 +537,21 @@ Obviously this effect depends on speed.
   the road, add textures, objects, etc with live preview.
 - [ ]  Make a way to convert 3d models .obj files into game environment ones OR 
   directly proceduraly make models and insert them.
+- [x] Car tool: drag the torque curve, rebuild the AI's acceleration table on Save, see the
+  acceleration the tune makes as you drag.
+  - Done: on the editor's torque chart each of the curve's 41 points is a mark to
+    drag (`CurveDrag`), and the box below Save says whether Save rebuilds the
+    game's ACC acceleration table from what was tuned (`derive_tables`), its
+    level anchored on the car's own figures so an add-on's optimistic engine data
+    cannot hand the AI an impossible table. Fixed with it: `car_perf.py derive`
+    refused any car whose ACC section is not 14 numbers long (an add-on's can be
+    a whole 98-sample curve -- `clkg`'s is), so `write_accel` now fills each
+    section to its own length.
+  - The acceleration chart shows the game's table solid and the tune's own curve
+    dashed over it, live while a point is dragged (the two charts are frozen and
+    the moving curves drawn over them -- under 5 ms a step, where drawing the
+    charts again was over 100). Both meet exactly after a rebuild, which is also
+    the check that the preview and Save agree.
 - [x] Peformance curve and other stuff like transmission visualizer based on the data of each car model
   - Done: `tools/car_perf.py report` (`tools/car_report.py`): a sheet per car
     (torque/power, gearbox, push in each gear, acceleration, specs), every car

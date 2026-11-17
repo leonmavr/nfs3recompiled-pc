@@ -4,6 +4,7 @@
 #include <lib/gliderenderer.h>
 #include <lib/effectparticle.h>
 #include <memory>
+#include <string>
 #include <array>
 #include <unordered_map>
 #include <vector>
@@ -265,6 +266,11 @@ private:
     bool                    m_reflectionValid = false;
     bool                    m_reflectionTaken = false;  // this frame's, as its HUD began
     bool                    m_sceneDrawn = false;       // this frame has drawn some of the world
+    bool                    m_roadDrawn = false;        // and some of its road (batch.detail)
+    std::string             m_traceKinds;               // NFS_WET_TRACE: this frame's draws after the scene
+    int                     m_traceDraws = 0;           // and how many drawPending calls it took
+    bool                    m_traceWet = false;         // and whether any of them drew the road wet
+    float                   m_traceWetness = 0.0f;      // and how wet the game thread said it was
     void takeReflection(int width, int height);
     // The haze's sky and the whole-picture effects (thrashrenderer.cpp, initPost).
     void initPost();
@@ -272,6 +278,7 @@ private:
     void allocateLightLayer(int width, int height);
     void drawParticles(const ThrashDraw& draw, int width, int height);
     void postProcess(const ThrashDraw& draw);
+    bool meterExposure();
     float                   m_grade[5] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };  // the game thread's
     float                   m_head[14] = {};        // the game thread's: on, origin, direction, projection, up
     float                   m_headStrength = 0.0f;  // NFS_HEADLIGHT_OBJECTS
@@ -281,6 +288,11 @@ private:
     float                   m_bloom = 0.0f;         // NFS_BLOOM
     bool                    m_gradeOn = false;      // NFS_GRADE
     bool                    m_antialias = false;    // NFS_AA
+    float                   m_exposure = 0.0f;      // NFS_EXPOSURE; the GL thread's from here on
+    bool                    m_exposureTrace = false;  // NFS_EXPOSURE_TRACE
+    unsigned int            m_meter = 0, m_adapt[2] = {}, m_meterProgram = 0, m_adaptProgram = 0;
+    int                     m_adaptIndex = 0;       // m_adapt's, this frame's
+    Uint64                  m_adaptNs = 0, m_exposureSaidNs = 0;
     unsigned int            m_sky = 0;              // the GL thread's, from here on
     int                     m_skyW = 0, m_skyH = 0;
     bool                    m_skyTaken = false;     // this frame's
@@ -306,7 +318,8 @@ private:
                             m_compositeTint = -1, m_compositeAa = -1, m_compositeDepth = -1, m_compositeShadow = -1,
                             m_compositeSun = -1, m_compositeScale = -1, m_compositeCentre = -1, m_compositeUp = -1,
                             m_compositeSize = -1, m_compositeBlur = -1, m_compositeLight = -1, m_compositeHalo = -1,
-                            m_compositeTrailOn = -1, m_compositeGlare = -1, m_compositeGlareAt = -1;
+                            m_compositeTrailOn = -1, m_compositeGlare = -1, m_compositeGlareAt = -1,
+                            m_compositeAdapt = -1, m_compositeExposure = -1;
     float                   m_detailStrength = 0.0f;  // NFS_ROAD_DETAIL; 0 for none
     float                   m_surfaceStrength = 0.0f; // NFS_OBJECT_DETAIL; 0 for none
     bool                    m_sharpen = false;        // NFS_TEXTURE_SHARP
