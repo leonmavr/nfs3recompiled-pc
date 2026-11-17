@@ -67,8 +67,8 @@ constexpr x86::reg32 kCarRight = 0xc0, kCarForward = 0xd8, kCarAir = 0x164, kCar
 constexpr float kSpinThrottle = 0.6f, kSpinSpeed = 12.0f, kSpinRevs = 0.5f;   // a wheel spun up
 constexpr float kLaunchSpeed = 8.0f;                     // m/s: a launch in first marks up to this
 constexpr x86::reg8 kFirstGear = 2;                      // car+0x50b: 0 reverse, 1 neutral
-constexpr float kBrakeHard = 0.55f, kBrakeSpeed = 3.0f;                       // a brake held on
-constexpr x86::sreg32 kBrakeAfter = 64;                  // ticks of it first: a second
+constexpr float kBrakeHard = 0.5f, kBrakeSpeed = 3.0f;                        // a brake held on
+constexpr x86::sreg32 kBrakeAfter = 4;                   // ticks of it first: a sixteenth of a second, not a tap
 constexpr float kStep = 0.3f;                            // m between two of its pieces
 constexpr x86::sreg32 kSpinEvery = 6;                    // ticks between two pieces laid on the spot
 constexpr float kMarkHalfWidth = 0.11f;                  // m
@@ -295,8 +295,9 @@ x86::reg32 s_pedalCar = 0;
 /* Marks the game lays none of (from collisionEffects, each car, each frame):
  * for the first player's car, a wheel spun up on the spot -- throttle down, in
  * gear, revs up and the car slow -- marks the road under the driven wheels, a
- * short dark patch laid again and again where it stands; and the brake held on
- * for a second while the car moves marks it under all four.  Each piece is the
+ * short dark patch laid again and again where it stands; the brake past half
+ * while the car moves marks it under all four, and the handbrake under the
+ * rear two.  Each piece is the
  * game's own (sub_4c6cb0), shaded by skidLaid as every piece is.  False when
  * the game stopped in it. */
 bool skidPedals(win32::WinApplication* app, x86::CPU& cpu, x86::reg32 car)
@@ -334,7 +335,12 @@ bool skidPedals(win32::WinApplication* app, x86::CPU& cpu, x86::reg32 car)
                         && float(app->getMemory<x86::sreg32>(car + kCarRevs)) > kSpinRevs * float(limit);
     const bool launching = gear == kFirstGear && speed < kLaunchSpeed;
     const bool spinning = grounded && throttle > kSpinThrottle && (revved || launching);
-    if (grounded && brake > kBrakeHard && speed > kBrakeSpeed)
+    /* The brake past half, or the handbrake (which locks the rear wheels
+     * alone), the car moving: marks almost at once (2026-11-17: after a second
+     * of it, they were hardly ever laid). */
+    const bool handbrake = (app->getMemory<x86::reg8>(kActionBits) & kHandbrakeBit) != 0;
+    const bool pedal = brake > kBrakeHard;
+    if (grounded && (pedal || handbrake) && speed > kBrakeSpeed)
     {
         if (s_braking < 0)
             s_braking = clock;
@@ -364,6 +370,8 @@ bool skidPedals(win32::WinApplication* app, x86::CPU& cpu, x86::reg32 car)
         const float ahead = (at[0] - centre[0]) * forward[0] + (at[1] - centre[1]) * forward[1] + (at[2] - centre[2]) * forward[2];
         if (spinning && !braking && ahead > 0.0f)
             continue;   // a spin marks under the driven end (the rear)
+        if (braking && !pedal && !spinning && ahead > 0.0f)
+            continue;   // the handbrake alone locks the rear wheels
         Wheel& w = s_wheels[n];
         float pair[6];
         for (int i = 0; i < 3; ++i)

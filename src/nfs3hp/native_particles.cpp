@@ -65,6 +65,7 @@ namespace nfs3hp
 /* Whether the track it names rains or snows (nfs3hp_main.cpp, the weather's
  * "type" in its 3trNNw.hrz: 1 rain, 2 snow). */
 bool trackRains(x86::reg32 track);
+void wheelContact(win32::WinApplication* app, x86::reg32 car, int wheel, float at[3]);   // below
 
 namespace
 {
@@ -86,12 +87,12 @@ struct Particle
     int type;              // EffectParticle::Type
 };
 
-constexpr std::size_t kMost = 2400;
+constexpr std::size_t kMost = 3600;
 std::vector<Particle> s_particles;
 /* How many flakes and drops are in the air: a storm makes a great many, and
  * they are not to crowd the dust, the smoke and the sparks out of the pool. */
 std::size_t s_weatherCount = 0;
-constexpr std::size_t kMostWeather = 900;
+constexpr std::size_t kMostWeather = 2200;   // enough for the heaviest shower (NFS_WEATHER_MAX)
 
 /* An exhaust flame: which of the car's exhausts it burns at, in the car's own
  * space, and how far through its second of life it is.  It does not move --
@@ -384,6 +385,10 @@ void throwWeather(win32::WinApplication* app, const float at[3], const float vel
     }
     w.seed = random01();
     w.noGround = true;
+    /* Its floor is its caller's to say (fallWeather); left at 0, a drop on a
+     * track lying below the world's 0 was under it as soon as it was made, and
+     * was put up there and bounced: the rain gone from those tracks. */
+    w.floor = at[1] - 40.0f;
     w.alpha = rains ? randomRange(0.5f, 0.85f) : randomRange(0.6f, 0.95f);
     if (rains)
     {
@@ -404,6 +409,147 @@ void throwWeather(win32::WinApplication* app, const float at[3], const float vel
         w.type = EffectParticle::Flake;
     }
     add(w);
+}
+
+
+x86::reg32 playerCar(win32::WinApplication* app);   // below
+
+/* The weather the port makes itself (fallWeather): rain or snow falling round
+ * the camera, as much on average as the game threw -- the game's own drops and
+ * flakes (kinds 7 and 8) are counted, not drawn, and their rate is the mean --
+ * and no longer the same all race long: a slow noise brings showers and lulls,
+ * from a little of it up to NFS_WEATHER_MAX times the mean (2.5).  Where the
+ * game throws none to measure, kFallbackRain or kFallbackSnow a second is the
+ * mean.  Each starts somewhere in a cylinder round where the camera will be in
+ * a moment and falls until it reaches the ground under the player's car. */
+namespace weather
+{
+constexpr float kMaxDefault = 2.5f;          // NFS_WEATHER_MAX: the heaviest, against the mean
+constexpr float kNoiseMean = 0.3124f;        // the mean of the squared noise below, worked out
+constexpr float kNoiseSeconds = 9.0f;        // between two of the noise's knots: a shower over half a minute or so
+constexpr float kMeasureSeconds = 3.0f;      // the game's rate, averaged over
+constexpr float kFewest = 20.0f;             // a second: the game throwing fewer than this is not a rate
+constexpr float kFallbackRain = 700.0f;      // drops a second, where the game throws none
+constexpr float kFallbackSnow = 120.0f;      // flakes a second
+/* The game's rate, as many in the air at once as the game's had: its drops
+ * lived about half a second, as these take to reach the ground; its flakes
+ * under two seconds, where these drift down for six. */
+constexpr float kRainMatch = 1.0f, kSnowMatch = 0.3f;
+constexpr float kRadius = 14.0f;             // m round the camera they start in
+constexpr float kAhead = 0.5f;               // s along the camera's way the cylinder is centred
+constexpr float kLowest = -1.0f, kHighest = 7.0f;   // m: where they start, against the camera's height
+constexpr float kRainFall = 9.0f, kSnowFall = 1.0f; // m/s down as they start
+constexpr float kRainSize = 0.012f, kSnowSize = 0.03f;
+constexpr float kRainLife = 1.6f, kSnowLife = 9.0f; // s at most, if no ground stops them first
+}  // namespace weather
+
+float s_gameWeather = 0.0f;       // the game's drops and flakes thrown since the last frame
+float s_gameWeatherRate = 0.0f;   // and a second, averaged
+float s_weatherOwed = 0.0f;       // this frame's share of one not yet made
+float s_camera[3] = {};           // where the main view's camera is (particlesFrame)
+bool s_cameraKnown = false;
+
+/* NFS_WEATHER_MAX: the heaviest the weather comes, against the mean (2.5); 1
+ * keeps it as the game had it, steady. */
+float weatherMax()
+{
+    static const float value = [] {
+        const char* text = SDL_getenv("NFS_WEATHER_MAX");
+        const float parsed = text && *text ? float(SDL_atof(text)) : weather::kMaxDefault;
+        return parsed >= 1.0f && parsed <= 10.0f ? parsed : weather::kMaxDefault;
+    }();
+    return value;
+}
+
+/* How much is falling now, against the mean: lo + (max - lo) n^2, n a smooth
+ * noise from 0 to 1 over the race's time, lo chosen so the mean is 1. */
+float weatherDensity(float seconds)
+{
+    auto knot = [](int k) {
+        std::uint32_t h = std::uint32_t(k) * 0x9e3779b1u;
+        h ^= h >> 15;
+        h *= 0x85ebca6bu;
+        h ^= h >> 13;
+        return float(h & 0xffffff) / float(0x1000000);
+    };
+    const float at = seconds / weather::kNoiseSeconds;
+    const int k = int(std::floor(at));
+    const float u = smoothStep(0.0f, 1.0f, at - float(k));
+    const float n = knot(k) + (knot(k + 1) - knot(k)) * u;
+    const float most = weatherMax();
+    const float least = SDL_max(0.0f, (1.0f - most * weather::kNoiseMean) / (1.0f - weather::kNoiseMean));
+    return least + (most - least) * n * n;
+}
+
+bool weatherTracing()
+{
+    static const bool on = SDL_getenv("NFS_WEATHER_TRACE") != nullptr;
+    return on;
+}
+
+void fallWeather(win32::WinApplication* app, float dt)
+{
+    const float measured = s_gameWeather / dt;
+    s_gameWeather = 0.0f;
+    s_gameWeatherRate += (measured - s_gameWeatherRate) * (1.0f - std::exp(-dt / weather::kMeasureSeconds));
+    if (!s_cameraKnown || app->getMemory<x86::reg32>(0x6fd4cc) == 0)
+        return;   // no weather, or no view to make it round
+    bool rains = true;
+    if (const x86::reg32 track = app->getMemory<x86::reg32>(0x6fd4ac))
+        rains = trackRains(track);
+    const float mean = s_gameWeatherRate >= weather::kFewest
+                           ? s_gameWeatherRate * (rains ? weather::kRainMatch : weather::kSnowMatch)
+                       : rains ? weather::kFallbackRain
+                               : weather::kFallbackSnow;
+    const float seconds = float(app->getMemory<x86::reg32>(0x7d3684)) / 64.0f;
+    const float density = weatherDensity(seconds);
+    s_weatherOwed += mean * density * dt;
+    // The ground: the lowest of the player's wheels; and where the camera is going.
+    const x86::reg32 car = playerCar(app);
+    float ground = s_camera[1] - 3.0f, ahead[3] = { 0.0f, 0.0f, 0.0f };
+    if (car)
+    {
+        float low = 1e9f;
+        for (int w = 0; w < 4; ++w)
+        {
+            float contact[3];
+            wheelContact(app, car, w, contact);
+            low = SDL_min(low, contact[1]);
+        }
+        if (low < 1e8f)
+            ground = low;
+        for (int i = 0; i < 3; ++i)
+            ahead[i] = app->getMemory<float>(car + 0xa4 + 4 * x86::reg32(i)) * weather::kAhead;
+    }
+    int made = 0;
+    for (; s_weatherOwed >= 1.0f && s_weatherCount < kMostWeather; s_weatherOwed -= 1.0f, ++made)
+    {
+        const float angle = randomRange(0.0f, 6.2832f);
+        const float r = weather::kRadius * std::sqrt(random01());   // even over the disc
+        const float at[3] = { s_camera[0] + ahead[0] + r * std::cos(angle),
+                              s_camera[1] + randomRange(weather::kLowest, weather::kHighest),
+                              s_camera[2] + ahead[2] + r * std::sin(angle) };
+        const float fall = rains ? weather::kRainFall : weather::kSnowFall;
+        const float velocity[3] = { randomRange(-0.3f, 0.3f), -fall * randomRange(0.85f, 1.15f), randomRange(-0.3f, 0.3f) };
+        throwWeather(app, at, velocity, rains ? weather::kRainSize : weather::kSnowSize);
+        Particle& w = s_particles.back();
+        w.floor = ground;
+        w.life = rains ? randomRange(0.6f, 1.0f) * weather::kRainLife : randomRange(0.6f, 1.0f) * weather::kSnowLife;
+    }
+    s_weatherOwed = SDL_min(s_weatherOwed, 1.0f);   // what the pool had no room for is not owed
+    if (weatherTracing())
+    {
+        static float said = 0.0f;
+        if (seconds - said >= 1.0f || seconds < said)
+        {
+            said = seconds;
+            SDL_Log("[WEATHER] %s: the game throws %.0f a second%s, now %.2f of the mean (most %.1f): %d this "
+                    "frame, %zu in the air",
+                    rains ? "rain" : "snow", double(s_gameWeatherRate),
+                    s_gameWeatherRate >= weather::kFewest ? "" : " (too few: the port's own mean)", double(density),
+                    double(weatherMax()), made, s_weatherCount);
+        }
+    }
 }
 
 /* One flame out of one of a car's exhausts, where the marking tool put it, in
@@ -788,7 +934,9 @@ void move(float dt)
             && q.v[1] < 0.0f)
         {
             q.p[1] = q.floor;
-            if (q.type == EffectParticle::Grain || q.type == EffectParticle::Blade)
+            if (q.type == EffectParticle::Droplet || q.type == EffectParticle::Flake)
+                q.life = q.age;   // a drop or a flake on the ground is gone
+            else if (q.type == EffectParticle::Grain || q.type == EffectParticle::Blade)
             {
                 // Down: it lies there a moment, then is gone.
                 q.settled = true;
@@ -1004,7 +1152,7 @@ bool particleTakeOver(win32::WinApplication* app, x86::CPU& cpu)
     if (kind == 10)
         throwSpray(app, at, velocity);
     else if (kind == 7 || kind == 8)
-        throwWeather(app, at, velocity, argument(app, cpu, 3));
+        s_gameWeather += 1.0f;   // counted for the mean; what falls is fallWeather's
     else if (kind == 6)
         throwSmoke(at, velocity);
     else if (kind == 2 || kind == 5)
@@ -1176,6 +1324,8 @@ void frameParticles(win32::WinApplication* app)
     if (dt > 0.0f)
     {
         move(dt);
+        if (setting() > 0.0f && weatherSetting() && app->getMemory<x86::reg32>(0x6fd3b0) != 1)
+            fallWeather(app, dt);
         if (setting() > 0.0f && app->getMemory<x86::reg32>(0x6fd3b0) != 1)
         {
             grassFromWheels(app, dt);
@@ -1606,6 +1756,18 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
     s_showBrakes = brakeGlowSetting() > 0.0f;
     if (setting() <= 0.0f && s_teeth.empty() && !s_showTrails && !s_showFlames && !s_showBrakes)
         return;
+    /* Where the camera is, for the weather to fall round: the view turns a
+     * point p into p M + t (M at +0x44, t at +0x38), so the camera, at 0 in
+     * the view, is -t M^T. */
+    if (view)
+    {
+        const float* m = &app->getMemory<float>(view + 0x44);
+        const float t[3] = { app->getMemory<float>(view + 0x38), app->getMemory<float>(view + 0x3c),
+                             app->getMemory<float>(view + 0x40) };
+        for (int i = 0; i < 3; ++i)
+            s_camera[i] = -(t[0] * m[i * 3] + t[1] * m[i * 3 + 1] + t[2] * m[i * 3 + 2]);
+        s_cameraKnown = true;
+    }
     // The clock's state and what the cars and the engines make, once a frame.
     frameParticles(app);
     s_frameOn = true;

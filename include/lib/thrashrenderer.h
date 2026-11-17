@@ -279,6 +279,7 @@ private:
     void drawParticles(const ThrashDraw& draw, int width, int height);
     void postProcess(const ThrashDraw& draw);
     bool meterExposure();
+    void meterSkyOpen();
     float                   m_grade[5] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };  // the game thread's
     float                   m_head[14] = {};        // the game thread's: on, origin, direction, projection, up
     float                   m_headStrength = 0.0f;  // NFS_HEADLIGHT_OBJECTS
@@ -292,6 +293,9 @@ private:
     bool                    m_exposureTrace = false;  // NFS_EXPOSURE_TRACE
     unsigned int            m_meter = 0, m_adapt[2] = {}, m_meterProgram = 0, m_adaptProgram = 0;
     int                     m_adaptIndex = 0;       // m_adapt's, this frame's
+    unsigned int            m_skyOpen[2] = {}, m_skyOpenProgram = 0;   // how much sky is overhead (meterSkyOpen)
+    int                     m_skyIndex = 0;
+    Uint64                  m_skyOpenNs = 0;
     Uint64                  m_adaptNs = 0, m_exposureSaidNs = 0;
     unsigned int            m_sky = 0;              // the GL thread's, from here on
     int                     m_skyW = 0, m_skyH = 0;

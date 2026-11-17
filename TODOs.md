@@ -213,6 +213,13 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 - [x] Car shadows back (2026-11-17): the ellipse that took the square away left
   them almost unseen -- the car stands over all of it. A rounder rectangle now
   (`kShadowRound`, `kShadowSolid`, `kShadowDarkness`, `thrashrenderer.cpp`).
+- [x] Rain falling again, and showers and lulls (2026-11-17,
+  `NFS_WEATHER_MAX` 2.5): the port makes the rain and snow round the camera,
+  at the game's rate on average.
+- [x] No rain or snow in tunnels and under bridges (2026-11-17): the sky's share
+  of the top of the picture, from the depth buffer.
+- [x] Tyre marks under the brake past half and the handbrake, at once
+  (2026-11-17).
 - [x] Auto-exposure. Smooth brightness from the frame's average luminance in 
   the final blit, next to gamma. Tunnel mouths and dusk stops being a black flash. 
   - Done (2026-11-17, `NFS_EXPOSURE` 0.7): in the race's whole-picture pass

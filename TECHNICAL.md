@@ -455,6 +455,31 @@ so: none of them is cut out. `NFS_SPRITE_TRACE=1` prints each kind of draw
 once, with the texture the game gave it, its format, whether it is cut out and
 by what colour, and what it is blended by.
 
+
+**What falls is the port's own, round the camera** (`fallWeather`,
+2026-11-17). The drops and flakes the game throws (kinds 7 and 8) are counted,
+not drawn, and their rate a second, averaged over three seconds, is the mean:
+rain at that rate (its drops took about as long to reach the ground as these
+do), snow at 0.3 of it (these drift down for six seconds, its lived under two).
+Where the game throws fewer than 20 a second, 700 drops or 120 flakes a second
+are the mean. The rate is not steady: the mean times `lo + (max - lo) n²`, `n`
+a smooth noise of the race's clock with a knot every 9 s, `max`
+`NFS_WEATHER_MAX` (2.5) and `lo` what makes the mean 1 (0.36 for 2.5) -- lulls
+and showers over half a minute or so. Each starts in a cylinder 14 m across
+round where the camera will be half a second on, from a metre below it to seven
+above, falling at 9 m/s (a flake 1 m/s), and is gone at the ground under the
+player's car. Their floor was the world's 0 before: on a track lying below it
+every drop was under the ground as it was made, put up there and bounced, and
+the rain was gone. `weather::` in `native_particles.cpp`.
+
+**None under a roof.** In a tunnel, or under a bridge, no rain or snow is seen
+(`meterSkyOpen`, `thrashrenderer.cpp`): in the whole-picture pass, before the
+particles, a grid of 12 by 6 points over the top of the picture (3 to 43% of
+its height, before the HUD) is looked up in the depth buffer, and the share of
+them that is the sky's or as far (as the glare has it) is kept in one texel,
+eased over a quarter of a second, never read back. The particle shader fades
+the drops and flakes by it: none under 3% sky, all from 12%. `overhead::` in
+`thrashrenderer.cpp`.
 ### The game's own sprites are not drawn
 
 Every picture in the game's particle set is a 565 texel with no alpha and
@@ -1607,8 +1632,10 @@ the first player's car) lays the port's own through `sub_4c6cb0` too
 (`guest::call`; the two pairs in scratch below the stack, 48 of 255 before
 `skidLaid`'s shading), on pavement only, 30 cm a piece: under the rear wheels
 while they spin -- full throttle pulling away in first below 8 m/s, or revved
-past half the redline below 12 m/s -- and under all four once the brake has
-been held past 0.55 for a second above 3 m/s. The handbrake (bit 0x04 of
+past half the redline below 12 m/s -- under all four once the brake is past 0.5
+above 3 m/s, and under the rear two with the handbrake on, both from a
+sixteenth of a second of it (a second of the brake past 0.55 until
+2026-11-17: they were hardly ever laid). The handbrake (bit 0x04 of
 `0x79c33b`) makes a piece 1.7 times darker, and a wet road (`0x6fd4cc`) every
 piece 1.6 times: the wet road darkens the road, and its reflection is not
 added over what lies on the road half seen (alpha under 0.98), so the marks
@@ -2443,6 +2470,7 @@ the next time the game starts.
 | `NFS_EXHAUST_FLAMES` | on (`1`) | `0`/`off`: no flames out of the cars' exhausts when they gear up (Exhaust flames when gearing up). |
 | `NFS_EXHAUST_DEFAULTS` | off (`0`) | `1`/`on`: a car with no exhausts marked gets two default pipes at its rear corners, and so flames too (Exhaust flames when gearing up). A marked car keeps its own. |
 | `NFS_FLAME_LIGHT` | on (`1`) | `0`/`off`: no pool of light on the road under each exhaust flame. A number up to 3: how strong (Exhaust flames when gearing up). |
+| `NFS_WEATHER_MAX` | `2.5` | How heavy the rain or snow comes at its heaviest, against the mean, which is as much as the game throws; it comes and goes over the race (The weather's flakes and drops, the port's own). 1 to 10; `1` steady. `NFS_WEATHER_TRACE=1` prints the game's rate and the weather's once a second. |
 | `NFS_WEATHER_PARTICLES` | on | `0`/`off`: the game's own flakes and drops, drawn as squares cut out of nothing, instead of the port's (The weather's flakes and drops, the port's own). |
 | `NFS_SPRITE_TRACE` | unset | `1`: one line for each kind of draw in the frame -- the texture the game gave it, its format and levels, whether and by what colour it is cut out, what it is blended by, its depth and clip. For finding a sprite that is cut out by nothing. |
 | `NFS_CHROMA_TRACE` | unset | `1`: print each colour the game cuts its pictures out by, once each (`[CHROMA] keyed out: 0x0000f800 (0,248,0)`), for telling one picture's key from another's. |

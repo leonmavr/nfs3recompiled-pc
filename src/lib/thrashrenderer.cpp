@@ -1303,6 +1303,32 @@ static const char g_adaptShader[] =
 "    o_color = vec4(pack(eye), pack(usual));"
 "}";
 
+/* Whether the sky is overhead (skyOpen): of a grid over the top of the picture
+ * (the picture's own rows from the top, before the HUD), the share where the
+ * depth buffer is the sky's or as far (over 250 m, as the glare has it).  In a
+ * tunnel, or under a bridge, that is all roof.  One texel kept from frame to
+ * frame (two in turn), eased towards it; the particles read it to leave the
+ * rain and snow out where nothing falls (drawParticles). */
+static const char g_skyOpenShader[] =
+"in vec2 v_uv;"
+"layout (location=0) out vec4 o_color;"
+"uniform sampler2D u_depth;"
+"uniform sampler2D u_last;"
+"uniform float u_rate;"
+"uniform vec2 u_band;"   // from, to: the top of the picture, in its rows (0 the top)
+"void main()"
+"{"
+"    float open = 0.0;"
+"    for (int j = 0; j < 6; ++j)"
+"        for (int i = 0; i < 12; ++i) {"
+"            vec2 at = vec2((float(i) + 0.5) / 12.0, mix(u_band.x, u_band.y, (float(j) + 0.5) / 6.0));"
+"            open += step(0.996, texture(u_depth, at).r);"
+"        }"
+"    open /= 72.0;"
+"    float last = texture(u_last, vec2(0.5)).r;"
+"    o_color = vec4(mix(last, open, u_rate), 0.0, 0.0, 1.0);"
+"}";
+
 static const char g_compositeShader[] =
 "in vec2 v_uv;"
 "layout (location=0) out vec4 o_color;"
@@ -1579,6 +1605,9 @@ static const char g_particleShader[] =
 "uniform sampler2D u_source;"
 "uniform sampler2D u_depth;"
 "uniform vec2 u_size;"
+"uniform sampler2D u_open;"   /* how much sky is overhead (g_skyOpenShader), 0 to 1 */
+"uniform vec2 u_openFade;"    /* from, to: none of the weather below the first, all of it from the second */
+"float overhead() { return smoothstep(u_openFade.x, u_openFade.y, texture(u_open, vec2(0.5)).r); }"
 "float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }"
 "float noise(vec2 p)"
 "{"
@@ -1627,7 +1656,7 @@ static const char g_particleShader[] =
  * no corner and no square to it however large it comes to be. */
 "    if (type == 9) {"
 "        float a = exp(-v_uv.y * v_uv.y * 4.0) * (1.0 - smoothstep(0.45, 1.0, abs(v_uv.x)));"
-"        o_color = vec4(v_color.rgb, a * v_color.a);"
+"        o_color = vec4(v_color.rgb, a * v_color.a * overhead());"
 "        return;"
 "    }"
 /* An exhaust flame (6): a ball of burning gas, ragged and flickering by its
@@ -1683,7 +1712,7 @@ static const char g_particleShader[] =
 "        float rr = length(v_uv) * (0.85 + 0.35 * noise(v_uv * 3.0 + vec2(seed * 19.0, seed * 7.0)));"
 "        float a = (1.0 - smoothstep(0.35, 1.0, rr)) * inside(v_uv);"
 "        if (a <= 0.002) discard;"
-"        o_color = vec4(v_color.rgb, a * v_color.a * clamp(room / 0.1 + 0.5, 0.0, 1.0));"
+"        o_color = vec4(v_color.rgb, a * v_color.a * clamp(room / 0.1 + 0.5, 0.0, 1.0) * overhead());"
 "        return;"
 "    }"
 "    if (type == 8) {"
@@ -1819,6 +1848,17 @@ static bool wetTraced()
     return on;
 }
 
+/* The weather under a roof (g_skyOpenShader): the band of the picture looked
+ * at for sky, from the top; under what share of sky none falls, and from what
+ * share all of it; how fast it follows. */
+namespace overhead
+{
+constexpr float kBandFrom = 0.03f, kBandTo = 0.43f;   // of the picture's height, from the top
+constexpr float kNone = 0.03f, kAll = 0.12f;          // share of the band that is sky
+constexpr float kSeconds = 0.25f;                     // its ease
+constexpr float kRestartAfter = 0.5f;                 // s without a race picture: from what is seen
+}  // namespace overhead
+
 /* Auto-exposure's tunables (g_meterShader, g_adaptShader, the composite). */
 namespace exposure
 {
@@ -1922,6 +1962,7 @@ void ThrashRenderer::initPost()
         glUniform1f(glGetUniformLocation(m_compositeProgram, "u_stops"), exposure::kStops);
         glUniform4f(m_compositeExposure, 0.0f, 0.0f, 0.0f, 0.0f);
         glUseProgram(0);
+        m_skyOpenProgram = postProgram(compileShader, g_skyOpenShader);
         if (m_exposure > 0.0f)
         {
             m_meterProgram = postProgram(compileShader, g_meterShader);
@@ -2076,6 +2117,19 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
     glUniform1i(glGetUniformLocation(m_particleProgram, "u_source"), 0);
     glUniform1i(glGetUniformLocation(m_particleProgram, "u_depth"), 2);
     glUniform2f(glGetUniformLocation(m_particleProgram, "u_size"), float(width), float(height));
+    glUniform1i(glGetUniformLocation(m_particleProgram, "u_open"), 7);
+    glActiveTexture(GL_TEXTURE7);
+    if (m_skyOpen[0])
+    {
+        glBindTexture(GL_TEXTURE_2D, m_skyOpen[m_skyIndex]);
+        glUniform2f(glGetUniformLocation(m_particleProgram, "u_openFade"), overhead::kNone, overhead::kAll);
+    }
+    else
+    {
+        // No sky looked for (its shader failed): the weather as it is, all of it.
+        glBindTexture(GL_TEXTURE_2D, m_postCopy);
+        glUniform2f(glGetUniformLocation(m_particleProgram, "u_openFade"), -2.0f, -1.0f);
+    }
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, m_postDepth);
     glActiveTexture(GL_TEXTURE0);
@@ -2093,6 +2147,45 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
     }
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDisable(GL_BLEND);
+}
+
+/* How much sky is overhead this frame (g_skyOpenShader), from the depth copied
+ * into m_postDepth, into m_skyOpen[m_skyIndex] from the last frame's.  The
+ * picture's framebuffer is bound again after. */
+void ThrashRenderer::meterSkyOpen()
+{
+    if (!m_skyOpenProgram)
+        return;
+    if (!m_skyOpen[0])
+        for (unsigned int& texture : m_skyOpen)
+        {
+            glGenTextures(1, &texture);
+            glBindTexture(GL_TEXTURE_2D, texture);
+            glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 1, 1);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        }
+    const Uint64 now = SDL_GetTicksNS();
+    const float since = m_skyOpenNs ? float(double(now - m_skyOpenNs) * 1e-9) : 1e9f;
+    m_skyOpenNs = now;
+    const float rate = since > overhead::kRestartAfter ? 1.0f : 1.0f - std::exp(-since / overhead::kSeconds);
+    glActiveTexture(GL_TEXTURE6);
+    glBindTexture(GL_TEXTURE_2D, m_skyOpen[m_skyIndex]);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, m_postDepth);
+    m_skyIndex ^= 1;
+    glBindFramebuffer(GL_FRAMEBUFFER, m_postFramebuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_skyOpen[m_skyIndex], 0);
+    glViewport(0, 0, 1, 1);
+    glUseProgram(m_skyOpenProgram);
+    glUniform1i(glGetUniformLocation(m_skyOpenProgram, "u_depth"), 2);
+    glUniform1i(glGetUniformLocation(m_skyOpenProgram, "u_last"), 6);
+    glUniform1f(glGetUniformLocation(m_skyOpenProgram, "u_rate"), rate);
+    glUniform2f(glGetUniformLocation(m_skyOpenProgram, "u_band"), overhead::kBandFrom, overhead::kBandTo);
+    glBindVertexArray(m_postArray);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glActiveTexture(GL_TEXTURE0);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
 }
 
 /* Auto-exposure's meter and adaptation (g_meterShader, g_adaptShader): the
@@ -2253,7 +2346,9 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
     }
     if (particles)
     {
-        // Over the world, then the picture taken again with them in it.
+        // How much sky is overhead, for the rain and snow; then the particles
+        // over the world, then the picture taken again with them in it.
+        meterSkyOpen();
         drawParticles(draw, width, height);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, m_postCopy);
