@@ -15,6 +15,11 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     uneven dust clouds -- more of them and higher the faster, coloured like
     the ground they came from (sand, snow, mud).
 - [ ] Rain on the windscreen/camera: drops and streaks that clear at speed.
+  Independent of the game's own particles that landed on the view (cleared
+  every frame, see The game's own sprites are not drawn): an effect of its own
+  on top of the rendering, in the whole-picture pass, and cheap -- a few
+  procedural drops refracting the picture behind them, sliding and streaking
+  off with speed, none under a roof (the sky test the weather uses).
 - [x] Sun glare by day with no weather: a haze and lens ghosts round the sun,
   dimmed behind what stands in front of it (`NFS_SUN_GLARE`).
 - [x] The weather's own flakes and drops drawn as blocky, translucent squares.
@@ -382,6 +387,9 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   - Done: letters (and digits, punctuation) reach the Controllers screen as
     on Windows (WM_CHAR), and X is the keyboard's default brake ("Reset to
     Defaults" to get it in a settings file already written).
+- [ ] In performance view/head to head comparison of each car, have an
+  'Advanced...' option which shows acceleration curve, top speed and 0-100
+  acceleration for each car (like car_perf.py tool does but in game's UI).
 
 ### Driving/Gameplay
 - [x] Tire grip by surface: less on snow, sand and grass than on asphalt. Each
@@ -447,13 +455,16 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   - Partly done (`NFS_SLIPSTREAM`, `NFS_SLIPSTREAM_TRAILS`): the push behind
     another car, for every car, and the air trails beside the player's car.
     Still to do: the icon with the slipstream's time.
-- [ ] More car visual feedback based on actions; e.g. Slight body roll during cornering.
+- [x] More car visual feedback based on actions; e.g. Slight body roll during cornering.
       Front-end compression under hard braking.
       Rear-end compression during acceleration.
       Suspension compression when landing after a jump.
       Small vertical movements when driving over uneven terrain.
       Different suspension responses depending on the vehicle. No need to re-do the
       physics here, just tilt, or vibrate the body kit slightly based on motion.
+  - Done (2026-11-17, `NFS_BODY_MOTION`): discreet roll in corners, tilt on
+    slopes and a settle on landing, every car, as drawn only (Bodies on their
+    springs). Still to do: uneven ground and a response per vehicle.
 - [x] Trees and lamp posts shouldn't be immovable; they should be able to be
   destroyed the same way signposts get destroyed and respawn after 10 sec.
   - Done: knocked down like the signs, falling slower, slowing the car by
@@ -507,6 +518,10 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   - Done (`NFS_AIR_STEER`, `airSteer` in `native_surface.cpp`): the player's
     car turns about its up axis by the steering while in the air, easing to
     0.9 rad/s at full lock over a third of a second, back to none when let go.
+- [ ] Be able to select any number of laps (1-99), not just 2,4,8.
+- [ ] Opponents choose always: one copy of player's car and game's default cars.
+  They should also be able to choose from added cars (given that class
+  restrivtions are repsected)
 
 ### Music/Sound
 - [x] Sound quality is great and sound works well but volume is still too

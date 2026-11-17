@@ -294,8 +294,8 @@ static void airSpeed(win32::WinApplication* app, int ticks)
     }
 }
 
-/* Steering in the air (NFS_AIR_STEER, 1; a number up to 3 for more, 0/off for
- * none): off its wheels a car went wherever it took off towards.  Now, for
+/* Steering in the air (NFS_AIR_STEER, 0.2 -- 1 was far too much; a number up
+ * to 3 for more, 0/off for none): off its wheels a car went wherever it took off towards.  Now, for
  * the first player's car, the steering (its byte at kSteering, -127 left to
  * 127 right) turns it a little about its own up axis (+0xcc) while it is in
  * the air: the spin about that axis eases towards kAirYawRate rad/s at full
@@ -308,13 +308,28 @@ constexpr float kAirYawRate = 0.9f;             // rad/s at full lock, in the ai
 constexpr float kAirSteerEase = 0.35f;          // s to come round to it
 constexpr float kAirSteerSign = 1.0f;           // right steering is positive spin about up (as on the ground)
 constexpr x86::sreg32 kAirSteerAfter = 4;       // ticks off the ground before it takes
+constexpr float kAirSteerDefault = 0.2f;        // NFS_AIR_STEER unset: a fifth of kAirYawRate
+
+/* Pitching in the air (NFS_AIR_PITCH, 0.2 as the steering; up to 3, 0/off for
+ * none): the pedals tip the first player's car about its own right axis
+ * (+0xc0) while it is in the air, as the steering turns it about its up --
+ * the brake (down) the nose up and the tail down, the throttle (up) the
+ * nose down -- the spin about that axis easing towards kAirPitchRate rad/s at
+ * a pedal's full, with kAirSteerEase a second to get there.  The spin is the
+ * world's (+0xe4) and the car's own (+0x4f8, its first, about right).  A
+ * positive spin about right turns forward towards down (as one about up turns
+ * it towards right): kAirPitchSign is the throttle's. */
+constexpr x86::reg32 kThrottlePedal = 0x79c339, kBrakePedal = 0x79c33a;   // the first player's, 0 to 255
+constexpr float kAirPitchRate = 0.9f;           // rad/s at a pedal's full, times NFS_AIR_PITCH
+constexpr float kAirPitchSign = 1.0f;           // the throttle: the nose down
+constexpr float kAirPitchDefault = 0.2f;        // NFS_AIR_PITCH unset
 
 static float airSteerSetting()
 {
     static const float value = [] {
         const char* text = SDL_getenv("NFS_AIR_STEER");
         if (!text || !*text || SDL_strcasecmp(text, "on") == 0)
-            return 1.0f;
+            return kAirSteerDefault;
         if (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0)
             return 0.0f;
         const float parsed = float(SDL_atof(text));
@@ -347,6 +362,44 @@ static void airSteer(win32::WinApplication* app, int ticks)
     for (int i = 0; i < 3; ++i)
         put(app, car + 0xe4 + 4 * x86::reg32(i), w[i] + up[i] * step);
     put(app, car + 0x4fc, value(app, car + 0x4fc) + step);
+}
+
+static float airPitchSetting()
+{
+    static const float value = [] {
+        const char* text = SDL_getenv("NFS_AIR_PITCH");
+        if (!text || !*text || SDL_strcasecmp(text, "on") == 0)
+            return kAirPitchDefault;
+        if (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0)
+            return 0.0f;
+        const float parsed = float(SDL_atof(text));
+        return parsed > 0.0f ? SDL_min(parsed, 3.0f) : kAirPitchDefault;
+    }();
+    return value;
+}
+
+static void airPitch(win32::WinApplication* app, int ticks)
+{
+    const float setting = airPitchSetting();
+    const x86::reg32 car = word(app, 0x5efa48);
+    if (setting <= 0.0f || ticks <= 0 || !car)
+        return;
+    if (x86::sreg32(app->getMemory<uint16_t>(car + 0x164)) < kAirSteerAfter)
+        return;   // on its wheels, or only just off them
+    const float pedals = (float(app->getMemory<x86::reg8>(kThrottlePedal))
+                          - float(app->getMemory<x86::reg8>(kBrakePedal))) / 255.0f;
+    float w[3], right[3];
+    for (int i = 0; i < 3; ++i)
+    {
+        w[i] = value(app, car + 0xe4 + 4 * x86::reg32(i));
+        right[i] = value(app, car + 0xc0 + 4 * x86::reg32(i));
+    }
+    const float pitch = w[0] * right[0] + w[1] * right[1] + w[2] * right[2];
+    const float target = kAirPitchSign * pedals * kAirPitchRate * setting;
+    const float step = (target - pitch) * SDL_min(1.0f, float(ticks) / 64.0f / kAirSteerEase);
+    for (int i = 0; i < 3; ++i)
+        put(app, car + 0xe4 + 4 * x86::reg32(i), w[i] + right[i] * step);
+    put(app, car + 0x4f8, value(app, car + 0x4f8) + step);
 }
 
 static void airRoll(win32::WinApplication* app, int ticks)
@@ -530,6 +583,7 @@ void surfaceFrame(win32::WinApplication* app)
         airRoll(app, ticks);
         airSpeed(app, ticks);
         airSteer(app, ticks);
+        airPitch(app, ticks);
         slipstream(app, ticks);
     }
     if (!player || ticks <= 0 || setting() <= 0.0f || app->getMemory<x86::reg32>(0x6fd3b0) == 1)

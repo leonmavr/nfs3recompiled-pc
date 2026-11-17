@@ -15878,6 +15878,7 @@ static float settingOr(const char* name, float fallback, float most)
 void particlesFrame(win32::WinApplication* app, x86::reg32 view);        // native_particles.cpp
 void particlesMirrorFrame(win32::WinApplication* app, x86::reg32 view);  // and the mirror's
 void surfaceFrame(win32::WinApplication* app);                          // native_surface.cpp
+void bodyMotionFrame(win32::WinApplication* app);                       // native_body.cpp
 
 static x86::reg32 s_mainView = 0;   // the record of the view the particles were put in
 
@@ -15890,6 +15891,8 @@ static bool noteSun(win32::WinApplication* app, x86::reg32 view)
         return false;
     s_sunNoted = true;
     s_mainView = view;
+    // The cars' bodies leaned on their springs, for this frame's drawing alone.
+    bodyMotionFrame(app);
     // The port's particles move and are put in this view, the frame's main one.
     if (app->getMemory<x86::reg32>(0x6fd3b0) != 1)
     {

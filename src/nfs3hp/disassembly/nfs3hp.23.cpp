@@ -3,6 +3,8 @@
 
 namespace nfs3hp
 {
+// Port (tools/apply_body_motion.py): defined in native_body.cpp.
+bool bodyMotionPart(win32::WinApplication* app, x86::CPU& cpu);
 // Port (tools/apply_native_loading.py): defined in native_loading.cpp.
 bool fceRecords(win32::WinApplication* app, x86::CPU& cpu);
 // Port (tools/apply_native_render.py): defined in native_render.cpp.
@@ -8075,6 +8077,11 @@ void Application::sub_49de20(WinApplication* __restrict app, x86::CPU& cpu_)
   NFS2_USE(cpu);
   NFS2_USE(app);
     // 0049de20  56                     -push esi
+    if (bodyMotionPart(app, cpu.sync())) /* port: a car's part drawn leaned (tools/apply_body_motion.py) */
+    {
+        cpu.reload();
+        return;
+    }
     app->getMemory<x86::reg32>(cpu.esp-4) = cpu.esi;
     cpu.esp -= 4;
     // 0049de21  57                     -push edi

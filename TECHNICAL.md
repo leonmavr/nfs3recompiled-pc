@@ -1649,8 +1649,15 @@ wheels for four ticks or more (`+0x164`), its spin about its own up axis
 (`+0xcc`; the world's spin at `+0xe4` and the car's own second component at
 `+0x4fc`, as `airRoll` keeps them) eases towards the steering byte
 (`0x79c338`, -127 to 127) times 0.9 rad/s, with a third of a second to get
-there -- right is positive, as on the ground. `NFS_AIR_STEER` (1; up to 3,
-`0`/`off` none).
+there -- right is positive, as on the ground. `NFS_AIR_STEER` (0.2 -- 1 was far
+too much; up to 3, `0`/`off` none).
+
+`airPitch`, the same way: the pedals tip the car about its own right axis
+(`+0xc0`; the world's spin at `+0xe4`, the car's own first component at
+`+0x4f8`) -- the brake (`0x79c33a`, the down arrow) the nose up and the tail
+down, the throttle (`0x79c339`, up) the nose down -- easing towards their
+difference times 0.9 rad/s, with the same third of a second. `NFS_AIR_PITCH`
+(0.2; up to 3, `0`/`off` none).
 
 ### Crashes you feel
 
@@ -1702,6 +1709,36 @@ race. Tested with a throw (`NFS_AIR_TEST=1`: 5 s on the clock the player's
 car goes up 3 m, rolling): the game's own rolled it past its roof and round;
 damped it tips about 40 degrees and lands on its wheels.
 `NFS_AIR_ROLL_DAMP` (1; up to 3 for more, `0`/`off` for the game's).
+
+### Bodies on their springs
+
+Each car's body moves a little as it is drawn (`NFS_BODY_MOTION`,
+`native_body.cpp`) -- discreet and indicative only: it leans a little out of a
+corner, tilts a little back going uphill and forward going downhill, and
+settles a few centimetres onto its springs when it lands. Nothing from the
+throttle or the brakes, and nothing the game works out sees it: the car's
+record is never written.
+
+A car's model is drawn part by part by `sub_49de20` (from `sub_49d5c0`'s loop
+over the parts, and from the lights' stand-ins), handed the car's matrix
+(`[esp+4]`, its axes `+0xc0` right, `+0xcc` up, `+0xd8` forward) and position
+(`[esp+8]`). `bodyMotionPart`, at that function's top
+(`tools/apply_body_motion.py`), finds the race car whose axes the matrix is
+and draws the part through the original with a leaned matrix and a moved
+position put in for that call alone, then puts back what was there. (The first
+try wrote the lean into the cars' records for the frame; the game's physics
+runs in between and read it, and the cars drove on two wheels.)
+
+The lean is worked out once a frame as its drawing begins (`bodyMotionFrame`,
+the main view's sky), three springs with dampers in 1/120 s steps: roll,
+0.018 rad a g of sideways acceleration (the velocity's change along the car's
+right, eased over a quarter of a second), at most 1.5 degrees, to the outside
+of the corner; pitch, 0.06 of the road's slope, at most 1 degree, nose up
+going uphill; sink, on landing 6 mm for each m/s it came down at, at most
+4 cm. The angles' springs barely overshoot (1.4 Hz, damping 0.7). In the air
+it settles. The body turns about the ground under its centre (the lowest wheel
+contact). All of it times `NFS_BODY_MOTION` (1; up to 3; `0`/`off` none); the
+tunables are `body::` in `native_body.cpp`.
 
 ### Cars keep their speed in the air
 
@@ -2489,7 +2526,9 @@ the next time the game starts.
 | `NFS_CRASH_SHAKE` | `2` | How hard the camera shakes and vibrates on a hit, a scrape or a hard landing; up to `3`, `0`/`off` for none (Crashes you feel). |
 | `NFS_TYRE_MARKS` | on | `0`/`off`: the game's tyre marks, faint and kept until 64 blocks of them are used (Tyre marks). |
 | `NFS_TYRE_MARKS_LIFE` | `60` | Seconds a tyre mark lasts, fading over its last six. |
-| `NFS_AIR_STEER` | `1` | How much the steering turns the player's car in the air; up to `3`, `0`/`off` none (Steering in the air). |
+| `NFS_BODY_MOTION` | `1` | How much the cars' bodies lean in corners, tilt on slopes and settle on landing, as drawn only (the driving is untouched); up to `3`, `0`/`off` none (Bodies on their springs). |
+| `NFS_AIR_STEER` | `0.2` | How much the steering turns the player's car in the air; up to `3`, `0`/`off` none (Steering in the air). |
+| `NFS_AIR_PITCH` | `0.2` | How much the pedals tip the player's car in the air: the brake the nose up, the throttle down; up to `3`, `0`/`off` none (Steering in the air). |
 | `NFS_CRASH_SOUND` | on | `0`/`off`: the game's crash and scrape sounds as they were, none of the port's crash, no pitch by the hit. |
 | `NFS_AIR_ROLL_DAMP` | on (`1`) | `0`/`off`: cars keep their roll in the air, as the game has it. A number up to 3: how fast it dies away (Cars roll less in the air). |
 | `NFS_AIR_SPEED` | on | `0`/`off`: a car off its wheels is dragged down by the game, as it has it, so a jump costs speed the ramp never took. On, the speed it took off with is put back each tick, its fall left to gravity; a hit in the air still loses what a hit loses (Cars keep their speed in the air). |
