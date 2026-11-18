@@ -8,7 +8,10 @@ A window: every car in a list on the left; the car's body seen from behind
 (the high level of detail of its car.fce, shaded) and, small on the right,
 from the side and from above with the marks on them.
 
-  - left click on the car     a new exhaust there, on the body's surface;
+  - left click on the car     a new exhaust there, on the body's surface -- in
+                              any of the three views, since some cars have
+                              their exhausts down the side, where only the side
+                              view can place them;
                               hold the button and it grows
   - left click on a mark      hold and it grows
   - right click on a mark     hold and it shrinks
@@ -57,6 +60,10 @@ TYRE = (0.13, 0.13, 0.14)
 FLAME = "#f2380a"   # the colour the flames burn where the car's file names none
 FILE = "exhausts.json"
 MIN_RADIUS, MAX_RADIUS, START_RADIUS = 0.008, 0.25, 0.035
+# A car with more faces than this is drawn as a picture rather than face by face
+# (the viewer's colours off included): a PolyCollection of a few thousand faces
+# takes seconds a draw on the interactive canvases, which reads as a hang.
+HEAVY_FACES = 1200
 
 
 def load_mesh(folder):
@@ -169,23 +176,35 @@ def write_marks(folder, marks, flame=None):
     return path
 
 
-def pick(tris, u, v):
-    """The point on the body's surface under (x=u, y=v) seen from behind: of the
-    triangles over it, the one nearest the eye (the smallest z)."""
+def pick(tris, across, up, depth, near, u, v):
+    """The point on the body's surface under (u, v) in a view, as the depth along
+    the third axis: of the triangles over it, the one nearest the eye.
+
+    `across` and `up` are the axes the view draws, `depth` the one the camera
+    looks along, and `near` which way it looks from -- -1 the low values of that
+    axis (from behind a car, whose rear is its smallest z), +1 the high ones
+    (from its right side, and from above)."""
     import numpy as np
-    a, b, c = tris[:, 0], tris[:, 1], tris[:, 2]
-    d = (b[:, 1] - c[:, 1]) * (a[:, 0] - c[:, 0]) + (c[:, 0] - b[:, 0]) * (a[:, 1] - c[:, 1])
-    ok = np.abs(d) > 1e-12
-    d = np.where(ok, d, 1.0)
-    w0 = ((b[:, 1] - c[:, 1]) * (u - c[:, 0]) + (c[:, 0] - b[:, 0]) * (v - c[:, 1])) / d
-    w1 = ((c[:, 1] - a[:, 1]) * (u - c[:, 0]) + (a[:, 0] - c[:, 0]) * (v - c[:, 1])) / d
+    p0, p1, p2 = tris[:, 0], tris[:, 1], tris[:, 2]
+    # Each corner's place in the view: (u, v) is (across, up) there.
+    u0, v0 = p0[:, across], p0[:, up]
+    u1, v1 = p1[:, across], p1[:, up]
+    u2, v2 = p2[:, across], p2[:, up]
+    den = (v1 - v2) * (u0 - u2) + (u2 - u1) * (v0 - v2)
+    ok = np.abs(den) > 1e-12
+    den = np.where(ok, den, 1.0)
+    w0 = ((v1 - v2) * (u - u2) + (u2 - u1) * (v - v2)) / den
+    w1 = ((v2 - v0) * (u - u2) + (u0 - u2) * (v - v2)) / den
     w2 = 1.0 - w0 - w1
     inside = ok & (w0 >= -1e-6) & (w1 >= -1e-6) & (w2 >= -1e-6)
     if not inside.any():
         return None
-    z = w0 * a[:, 2] + w1 * b[:, 2] + w2 * c[:, 2]
-    z = np.where(inside, z, np.inf)
-    return float(z.min())
+    depth_here = w0 * p0[:, depth] + w1 * p1[:, depth] + w2 * p2[:, depth]
+    if near < 0:
+        depth_here = np.where(inside, depth_here, np.inf)
+        return float(depth_here.min())
+    depth_here = np.where(inside, depth_here, -np.inf)
+    return float(depth_here.max())
 
 
 def lit(tris, light, lowest=0.35):
@@ -219,7 +238,9 @@ def textured_view(tris, uvs, texture, light, across, up, down, across_range, up_
     columns = max(1, int(round((across_range[1] - across_range[0]) * scale)))
     rows = max(1, int(round((up_range[1] - up_range[0]) * scale)))
     image = np.zeros((rows, columns, 4), dtype=float)
-    height, width, _ = texture.shape
+    grey = texture is None      # no picture to show: the body's own grey, a face at a time
+    if not grey:
+        height, width, _ = texture.shape
     top = up_range[0] if down else up_range[1]     # the up the picture's first row is at
     sign = 1.0 if down else -1.0
     shade = lit(tris, light, 0.62)
@@ -268,13 +289,16 @@ def textured_view(tris, uvs, texture, light, across, up, down, across_range, up_
         inside = (l0 >= -1e-6) & (l1 >= -1e-6) & (l2 >= -1e-6)
         if not inside.any():
             continue
-        uv = uvs[index]
-        u = l0 * uv[0][0] + l1 * uv[1][0] + l2 * uv[2][0]
-        v = l0 * uv[0][1] + l1 * uv[1][1] + l2 * uv[2][1]
-        column = np.clip((u * width).astype(np.int32), 0, width - 1)
-        row = np.clip(((1.0 - v) * height).astype(np.int32), 0, height - 1)   # v runs up
         pixels = image[first_row:last_row, first:last]
-        pixels[inside, :3] = texture[row, column][inside] * shade[index]
+        if grey:
+            pixels[inside, :3] = BODY * shade[index]
+        else:
+            uv = uvs[index]
+            u = l0 * uv[0][0] + l1 * uv[1][0] + l2 * uv[2][0]
+            v = l0 * uv[0][1] + l1 * uv[1][1] + l2 * uv[2][1]
+            column = np.clip((u * width).astype(np.int32), 0, width - 1)
+            row = np.clip(((1.0 - v) * height).astype(np.int32), 0, height - 1)   # v runs up
+            pixels[inside, :3] = texture[row, column][inside] * shade[index]
         pixels[inside, 3] = 1.0
     extent = (across_range[0], across_range[1], up_range[1] if down else up_range[0],
               up_range[0] if down else up_range[1])
@@ -289,6 +313,15 @@ def run(root, start=None, show=True):
     from matplotlib.widgets import Button, RadioButtons
     import numpy as np
 
+    # NFS_TOOL_HANG=10: a stack of where the tool is, every ten seconds, on the
+    # terminal it was started from.  A window that stops answering gives the one
+    # thing a hang leaves behind -- where it stopped (2026-11-18).
+    if os.environ.get("NFS_TOOL_HANG"):
+        import faulthandler
+        try:
+            faulthandler.dump_traceback_later(float(os.environ["NFS_TOOL_HANG"] or 20), repeat=True)
+        except ValueError:
+            pass
     root = str(root)
     folders = car_perf.car_folders(root)
     if not folders:
@@ -398,12 +431,18 @@ def run(root, start=None, show=True):
         lo, hi = tris.reshape(-1, 3).min(axis=0), tris.reshape(-1, 3).max(axis=0)
         pad = 0.08
         texture = state["texture"] if state["colour"] else None
+        # Thousands of faces drawn one at a time is what a heavy car cannot
+        # afford -- 5282 of them in the Chevrolet Corvette C5R, against 700 in
+        # the Diablo -- so a heavy one is drawn as a picture, grey where the
+        # colour is off, which is one image a view instead of a collection of
+        # every face (2026-11-18).
+        raster = texture is not None or len(tris) > HEAVY_FACES
         for ax, across, up, down, light in VIEWS:
             across_range = (lo[across] - pad, hi[across] + pad)
             up_range = (lo[up] - pad, hi[up] + pad)
             ax.set_xlim(*across_range)
             ax.set_ylim(*(up_range[::-1] if down else up_range))
-            if texture is not None:
+            if raster:
                 # The car in its own colours, the texture drawn into every face.
                 # A picture's worth: the rear view is the big one on the screen,
                 # the two beside it a third of that.
@@ -424,8 +463,8 @@ def run(root, start=None, show=True):
         rear.set_title("from behind: click to mark, hold to size", loc="left", fontsize=10, color=INK)
         rear.set_xlabel("x (m, the car's right)", fontsize=8, color=INK_2)
         rear.set_ylabel("y (m, up)", fontsize=8, color=INK_2)
-        side.set_title("side (front to the right)", loc="left", fontsize=9, color=INK)
-        top.set_title("from above (front to the right)", loc="left", fontsize=9, color=INK)
+        side.set_title("side (front to the right): click to mark", loc="left", fontsize=9, color=INK)
+        top.set_title("from above (front to the right): click to mark", loc="left", fontsize=9, color=INK)
 
     marks_artists = []
 
@@ -477,7 +516,7 @@ def run(root, start=None, show=True):
         changed = state["marks"] != state["saved"]
         title.set_text("%s  -  %s%s" % (state["car"].display_name() or folders[state["index"]], folders[state["index"]],
                                          "  (changed, not saved)" if changed else ""))
-        help_text.set_text("left click: a new exhaust / hold to grow   right click on one: hold to shrink   "
+        help_text.set_text("left click in any view: a new exhaust / hold to grow   right click on one: hold to shrink   "
                            "middle click or d: remove   m: mirror %s   c: colour %s   s: save   r: revert   "
                            "the strip: the flames' colour (the swatch: the game's own)"
                            % ("ON" if state["mirror"] else "off", "ON" if state["colour"] else "off"))
@@ -509,13 +548,54 @@ def run(root, start=None, show=True):
         draw_marks()
         draw_flame()
 
-    def mark_at(x, y):
+    # Where a click marks an exhaust, a view at a time: the axes it draws across
+    # and up, and the axis the camera looks along -- with which side it looks
+    # from (-1 the low values of that axis, +1 the high ones).  The rear is a
+    # car's smallest z, so a click from behind lands on the nearest z; the side
+    # view looks from the car's right (+x), the top one from above (+y).  Some
+    # cars have their exhausts down the side, which only the side view shows.
+    MARK_VIEWS = {rear: (0, 1, 2, -1), side: (2, 1, 0, 1), top: (2, 0, 1, 1)}
+
+    def view_of(event):
+        """Which view a click is in, if it is one that marks."""
+        for ax in MARK_VIEWS:
+            if event.inaxes is ax:
+                return ax
+        return None
+
+    def mark_place(m, ax):
+        """A mark's (across, up) in a view, as the views draw them."""
+        across, up, _depth, _near = MARK_VIEWS[ax]
+        return ((m["x"], m["y"], m["z"])[across], (m["x"], m["y"], m["z"])[up])
+
+    def mark_at(ax, u, v):
         best, best_d = None, None
         for n, m in enumerate(state["marks"]):
-            d = math.hypot(m["x"] - x, m["y"] - y)
+            mu, mv = mark_place(m, ax)
+            d = math.hypot(mu - u, mv - v)
             if d <= max(m["radius"], 0.02) and (best_d is None or d < best_d):
                 best, best_d = n, d
         return best
+
+    def mark_here(ax, u, v):
+        """A new mark where the view was clicked, on the body's surface -- None
+        where the click missed the car."""
+        across, up, depth, near = MARK_VIEWS[ax]
+        d = pick(state["tris"], across, up, depth, near, u, v)
+        if d is None:
+            return None
+        point = [0.0, 0.0, 0.0]
+        point[across] = u
+        point[up] = v
+        point[depth] = d
+        return dict(x=point[0], y=point[1], z=point[2], radius=START_RADIUS)
+
+    def mirrored(m):
+        """The same exhaust on the car's other side: x negated, the body being
+        symmetric across it (its y and z stay where the exhaust is)."""
+        if abs(m["x"]) < 0.03:
+            return None
+        return dict(m, x=-m["x"])
 
     def twin(n):
         """The mark on the other side of this one (mirror), if there is one."""
@@ -526,26 +606,27 @@ def run(root, start=None, show=True):
         return None
 
     def on_press(event):
-        if event.inaxes is not rear or event.xdata is None or state["tris"] is None:
+        ax = view_of(event)
+        if ax is None or event.xdata is None or state["tris"] is None:
             return
-        x, y = event.xdata, event.ydata
-        n = mark_at(x, y)
+        u, v = event.xdata, event.ydata
+        n = mark_at(ax, u, v)
         if event.button == 2:
             if n is not None:
                 remove(n)
             return
         if event.button == 1 and n is None:
-            z = pick(state["tris"], x, y)
-            if z is None:
+            mark = mark_here(ax, u, v)
+            if mark is None:
                 status.set_text("not on the car")
                 fig.canvas.draw_idle()
                 return
-            state["marks"].append(dict(x=x, y=y, z=z, radius=START_RADIUS))
+            state["marks"].append(mark)
             n = len(state["marks"]) - 1
-            if state["mirror"] and abs(x) > 0.03:
-                z2 = pick(state["tris"], -x, y)
-                if z2 is not None:
-                    state["marks"].append(dict(x=-x, y=y, z=z2, radius=START_RADIUS))
+            if state["mirror"]:
+                other = mirrored(mark)
+                if other is not None:
+                    state["marks"].append(other)
         if n is None:
             return
         state["held"], state["button"] = n, event.button
@@ -581,7 +662,8 @@ def run(root, start=None, show=True):
         draw_marks(mark_only=True)
 
     def on_move(event):
-        hover = mark_at(event.xdata, event.ydata) if event.inaxes is rear and event.xdata is not None else None
+        ax = view_of(event)
+        hover = mark_at(ax, event.xdata, event.ydata) if ax is not None and event.xdata is not None else None
         if hover != state["hover"]:
             state["hover"] = hover
             draw_marks(mark_only=True)

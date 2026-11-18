@@ -711,6 +711,21 @@ struct FrdReader
      * memmove of src eax, dst edx, ebx bytes). */
     void read(x86::reg32 to, x86::reg32 count)
     {
+        /* NFS_FRD_TRACE: every read the loader makes of the file, and every
+         * allocation it makes room in, with the ones that cannot be right
+         * called out -- a read of more than a megabyte, or into address 0,
+         * which is what a count gone wrong in a converted file looks like
+         * before it becomes a memmove past the end of memory (2026-11-18). */
+        static const bool traced = SDL_getenv("NFS_FRD_TRACE") != nullptr;
+        if (traced)
+        {
+            const x86::reg32 from = word(0x5dd078);
+            if (count > 0x100000 || to == 0)
+                SDL_Log("[FRD] read %u bytes from the file at %#x into %#x  <-- cannot be right",
+                        unsigned(count), unsigned(from), unsigned(to));
+            else
+                SDL_Log("[FRD] read %u bytes from %#x into %#x", unsigned(count), unsigned(from), unsigned(to));
+        }
         const x86::reg32 from = word(0x5dd078);
         std::memmove(m + to, m + from, count);
         if (!(to > from && to < from + count))
@@ -724,7 +739,12 @@ struct FrdReader
         const x86::reg32 used = word(0x552e00);
         const x86::reg32 end = size + used;
         if (x86::sreg32(end) > 0x310000)
+        {
+            if (SDL_getenv("NFS_FRD_TRACE"))
+                SDL_Log("[FRD] the arena is full: %u wanted with %u used of %#x",
+                        unsigned(size), unsigned(used), 0x310000u);
             return 0;
+        }
         write32(m, 0x552e00, end);
         return word(0x552dfc) + used;
     }

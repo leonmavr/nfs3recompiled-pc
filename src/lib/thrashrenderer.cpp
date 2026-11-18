@@ -800,6 +800,7 @@ x86::reg32 traceFrameNumber = 0;
 
 /* NFS_CAR_SHADOW, beside the other switches (below). */
 static bool carShadowSetting();
+static bool carDepthSetting();
 
 /* NFS_TEXTURE_DUMP: the pictures of the sprites drawn over the view, saved
  * where the trace is -- <dir>/tex-<index>.bmp, and each line appended to
@@ -954,7 +955,14 @@ void ThrashRenderer::flush()
     batch.wrapT = m_wrapT;
     batch.zTest = m_zTest;
     batch.zTestAlways = m_depthAlways;
-    batch.zBuffer = m_zBuffer;
+    /* Port: a car's body writes depth even while the game has the mask off for
+     * it (NFS_CAR_DEPTH; see carDepthSetting).  The game draws cars with the
+     * test on and the write off, and gets away with it because its own
+     * particles are drawn before them; the port's are drawn after, in the
+     * whole-picture pass, and could not be cut off by a car that left no
+     * depth. */
+    batch.zBuffer = m_zBuffer || (m_carSurface && carDepthSetting());
+
     batch.alphaBlend = m_alphaBlend;
     batch.cull = m_cull;
     batch.chromaKey = m_chromaKey;
@@ -1944,6 +1952,24 @@ constexpr float kShadowRound = 3.0f;
 constexpr float kShadowSolid = 0.6f;
 constexpr float kShadowDarkness = 0.9f;
 
+/* NFS_CAR_DEPTH: 1 or on makes a car's body write depth even where the game
+ * has the mask off for it, which its own draw of the cars does in places.
+ * Off by default: it was added while the exhaust flames seemed to stand in
+ * front of the car because the car left no depth, and that turned out to be
+ * the particle shader reading the depth buffer's rows upside down instead
+ * (drawParticles' shader, 2026-11-18).  Writing it is what the car's own alpha
+ * cut (kDepthCutCar) was made for -- faint glass still draws and still writes,
+ * near-invisible texels do neither -- so it is worth a look on a track where
+ * cars overlap, but it changes how cars resolve against each other. */
+static bool carDepthSetting()
+{
+    static const bool on = [] {
+        const char* value = SDL_getenv("NFS_CAR_DEPTH");
+        return value && (SDL_strcmp(value, "1") == 0 || SDL_strcasecmp(value, "on") == 0);
+    }();
+    return on;
+}
+
 /* NFS_CAR_SHADOW: 0 or off leaves the cars' shadows off the road (a car's
  * shadow is a decal the port has recognised, batch.decal). */
 static bool carShadowSetting()
@@ -2267,6 +2293,42 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
         float x, y, u, v, r, g, b, a, fx, fy, depth, seed, type, turn;
     };
     const std::vector<EffectParticle>& list = *draw.particles;
+    /* NFS_FLAME_DEPTH_TRACE: for the first flame of the frame, the depth the
+     * picture holds at its centre and the flame's own -- the two numbers the
+     * shader's cut is made of, printed side by side as metres.  A flame left
+     * standing in front of the car it burns on shows here as a depth under it
+     * that is the car's, or as the flame's own being smaller than it should. */
+    if (SDL_getenv("NFS_FLAME_DEPTH_TRACE"))
+    {
+        for (const EffectParticle& p : list)
+        {
+            if (p.type != EffectParticle::Flame)
+                continue;
+            const int px = int(p.x), py = int(p.y);
+            if (px < 0 || py < 0 || px >= width || py >= height)
+                break;
+            auto depthAt = [&](int sx, int sy, bool turned) {
+                const int row = turned ? height - 1 - sy : sy;
+                GLuint one = 0;
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, m_depthFramebuffer);
+                glReadBuffer(GL_NONE);
+                glReadPixels(sx, row, 1, 1, GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT, &one);
+                glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
+                return float(one) / 65535.0f;
+            };
+            auto alphaAt = [&](int sx, int sy) {
+                unsigned char rgba[4] = { 0, 0, 0, 0 };
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, m_framebuffer);
+                glReadBuffer(GL_COLOR_ATTACHMENT0);
+                glReadPixels(sx, sy, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+                return int(rgba[3]);
+            };
+            const float straight = depthAt(px, py, false), turned = depthAt(px, py, true);
+            SDL_Log("[FLAME] %d,%d: flame %.2f m; depth straight %.4f, turned %.4f; the picture's alpha there "
+                    "%d (0 is a car's)", px, py, double(p.depth), double(straight), double(turned), alphaAt(px, py));
+            break;
+        }
+    }
     /* Three runs, in this order: the soft ones (spray's mist, smoke) blended in
      * the half-size layer; the rest of the blended ones; the added ones. */
     std::vector<Corner> soft, corners, added;

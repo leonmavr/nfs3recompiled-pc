@@ -7680,7 +7680,17 @@ void viewRecordNative(win32::WinApplication* app, x86::CPU& cpu)
  * (sub_41d8a0, sub_40f280, stopping at [0x55e88c]), sub_41dae0, sub_41deb0,
  * the view records (sub_41df10: the main view and the mirror, or the two
  * halves of a split screen with [0x6fd3b0] 1), then sub_41d310 ..
- * sub_41d900. */
+ * sub_41d900.
+ *
+ * The setup stopping at [0x55e88c] is the one thing here that does not raise
+ * an error of its own: the flag is set by sub_4a33d0, the checkpoint the
+ * loading screens share, which arms it when the escape key (the game's key
+ * state at 0x564818, a byte a scan code) is held -- and the calls it guards
+ * then stand aside from the rest of the track.  A race that goes on with the
+ * setup cut short is a race with no track in it: [VIEW] reports one block and
+ * the game throws the race away afterwards, which looks nothing like a key
+ * being held.  Hence a line for each step, and a clock, and the keys that were
+ * down when a step was called off. */
 void raceViewsNative(win32::WinApplication* app, x86::CPU& cpu)
 {
     const Memory m{app};
@@ -7708,18 +7718,54 @@ void raceViewsNative(win32::WinApplication* app, x86::CPU& cpu)
         cpu.ebp = saved[3];
         cpu.esp = entry + 4;
     };
+    const Uint64 started = SDL_GetTicks();
+    auto step = [&](const char* what) {
+        char path[96] = "";
+        for (x86::reg32 at = 0x5dd86c; at < 0x5dd86c + sizeof path - 1; ++at)
+        {
+            const char c = char(m.byte(at));
+            if (!c)
+                break;
+            path[SDL_strlen(path)] = c;
+        }
+        char keys[64] = "";
+        for (x86::reg32 key = 0; key < 0x80; ++key)
+            if (m.byte(0x564818 + key))
+            {
+                char one[8];
+                SDL_snprintf(one, sizeof one, " %02x", unsigned(key));
+                SDL_strlcat(keys, one, sizeof keys);
+            }
+        SDL_Log("[TRACK] track %u: %s at %u ms, %u blocks, the flag %u%s%s%s%s", unsigned(m.word(0x6fd4ac)),
+                what, unsigned(SDL_GetTicks() - started), unsigned(m.word(0x5dd83c) + 1),
+                unsigned(m.word(0x55e88c)), path[0] ? ", the file " : "", path,
+                keys[0] ? ", the keys held" : "", keys);
+    };
+    SDL_Log("[TRACK] track %u: the views are being set up at %u ms", unsigned(m.word(0x6fd4ac)),
+            unsigned(SDL_GetTicks()));
     m.word(0x5dd834, 0x1234);
     if (!callTo(0x41de40))
+    {
+        SDL_Log("[TRACK] sub_41de40 ended the game");
         return;
+    }
     flags.compare(m.word(0x55e88c), 0);
     if (m.word(0x55e88c) != 0)
+    {
+        step("called off as the arrays were cleared");
         return leave();
+    }
+    step("the arrays cleared");
     r.eax = 0x536d10;
     if (!callTo(0x41d8a0) || !callTo(0x40f280))
         return;
     flags.compare(m.word(0x55e88c), 0);
     if (m.word(0x55e88c) != 0)
+    {
+        step("called off as the objects were loaded");
         return leave();
+    }
+    step("the objects loaded");
     if (!callTo(0x41dae0) || !callTo(0x41deb0))
         return;
     r.esi = m.word(0x6fd3b0);
@@ -7738,12 +7784,18 @@ void raceViewsNative(win32::WinApplication* app, x86::CPU& cpu)
     r.eax = 0;
     if (!callTo(0x41d310) || !callTo(0x41d620) || !callTo(0x419b60))
         return;
+    step("the views made");
     r.eax = 0x536d14;
-    if (!callTo(0x41d8a0) || !callTo(0x41dcc0) || !callTo(0x41dc60) || !callTo(0x41a100))
+    if (!callTo(0x41d8a0) || !callTo(0x41dcc0) || !callTo(0x41dc60))
         return;
+    step("the collision loaded");
+    if (!callTo(0x41a100))
+        return;
+    step("the road loaded");
     r.eax = m.word(0x6fd4ac);
     if (!callTo(0x470b90) || !callTo(0x41d900))
         return;
+    step("set up");
     leave();
 }
 

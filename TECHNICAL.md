@@ -2280,6 +2280,163 @@ place still goes down the traffic folder's path. The whole fix means letting `su
 id byte at `+0x31c` — instead of by place, so a place and an id stop meaning
 the same number, and that is the next piece of work here.
 
+### Porting a track from High Stakes
+
+Need For Speed: High Stakes (NFS4) is this game's engine a version on, and its
+`data/TRACKS` folders hold the same tracks. `tools/port_track.py` turns one
+into a track folder of `gamedata/tracks`:
+
+    python3 tools/port_track.py --list
+    python3 tools/port_track.py HOMETOWN --slot 0 --out /tmp/try --dry-run
+    python3 tools/port_track.py AQUATICA --slot 6 --force
+
+and undone with, no copying of folders either way:
+
+    python3 tools/port_track.py --status          # each slot against the snapshot
+    python3 tools/port_track.py --reset Aquatica   # or --reset 6, trk006, or all
+    python3 tools/port_track.py --reset --dry-run
+
+The first write into `gamedata/tracks` takes `gamedata/tracks-default.tar.gz`,
+the tracks as they shipped, and `--reset` puts every file of every slot back
+from it byte for byte and takes away any track that is not the game's (slot 9
+onward). `--snapshot` takes it by hand, `--force` replacing it.
+
+Nine of its nineteen tracks are this game's own: the slot a track belongs in is
+the art name at `0x559620` — home, redr, atla, rock, coun, lost, aqua, summ,
+empi — so `trk000` is Hometown, `trk005` Lost Canyons and `trk006` Aquatica,
+and each of the nine has exactly the same number of road vectors in the two
+games (`simhts.dat` holds one four-byte entry each, which is how the tool pairs
+them). `--slot` with `--force` puts High Stakes' version in that slot and the
+menus find it as before. The other ten — Coastal, Snowy, Hills, Park, France,
+Germany, UK, GT1, GT2, GT3 — go in a slot past the ninth, which the game never
+asks for: its location menu lists nine, and its per-track art, place names and
+place counts are the nine-entry tables at `0x559620`, `0x5596d4` and
+`0x5597f4` (the three are `dword[track * 4]` lookups, and slots 9 to 13 are
+empty in them — room, but nothing lists a track there yet).
+
+What is the same format and is copied: the road's objects (`TR00.CAN` …
+`TR05.CAN` → `tr0000.can` …, byte for byte), the heights (`HEIGHTS.SIM` →
+`simhts.dat`), the road's textures (`TR0.QFS` → `tr000.qfs` and its three
+siblings, one FSH container for this game's four), the sky (`SKY.QFS` →
+`sky.fsh`). `TR.INI`, `TRN.INI`, `TRW.INI` and `TRNW.INI` are this game's four
+`.hrz` files under other names — the same horizon, clouds, fog regions, weather
+and ambient light, key by key — and are translated, in the order this game's
+own `3tr00.hrz` writes them. Hometown's comes out with the same horizon values
+as the file this game ships (its fog regions are High Stakes' own, and more of
+them: nine to this game's two).
+
+The file's first two words matter: every track this game ships opens `0x0135`
+then `0xbeef`, every High Stakes one `0x0058` then `0xbeef`, and with High
+Stakes' word kept the game loads nothing at all — the race comes up with no
+blocks (`[VIEW] 1 blocks`), empty at the default fog, and drops back to the
+menu. A ported file therefore carries `0x0135` whatever its High Stakes source
+said (2026-11-18).
+
+**The two worlds are a scale apart.** High Stakes' version of a shared track is
+this game's divided by 1.3 — the same road vectors in the same order, the same
+block centres, every coordinate and every ground height 1/1.3 of this game's
+(High Stakes' `HEIGHTS.SIM` × 1.3 is this game's `simhts.dat` digit for digit;
+its block centres × 1.3 are the retail ones to within the integer rounding of
+High Stakes' own). Everything converted is scaled back up by that, without
+which a ported track sits 23% small under this game's cars.
+
+`TR.FRD` is the same data laid out differently and is converted. High Stakes
+writes a list of road vectors, then every block's header, then every block's
+data; this game interleaves each block's header with its data
+(`native_loading.cpp`, `sub_419c20`). The header is the same fields in another
+order plus a few (the eleven chunks' polygon counts, the block's min/max
+corners); a polygon is 13 bytes there to 14 here; and a polygon carries its own
+road vector instead of an index into its block's, so the tool collects a
+block's vectors, deduplicated, and writes the indices. High Stakes' four
+polygon chunks past the seven a block holds here — its extra scenery ones — and
+its special objects (the ones a car drives into) have no counterpart and are
+dropped. Each conversion is read back with this game's own layout and checked
+for polygon vertices and road-vector indices in range, and for the whole file
+fitting the arena the game reads a track into (`0x310000` bytes: the retail
+tracks take 34 to 65% of it), before it is written.
+
+**Three things had to be true of a ported file, each found by a crash
+(2026-11-18).** The sky: High Stakes' `SKY.QFS` stops the whole track's setup
+before the road is read — this game's horizon loader (`sub_478340`, on the way
+to `sub_41d960`) sets the loading screens' flag `[0x55e88c]`, the road is
+skipped, and the race starts on an empty track and faults on the way back to
+the menu. So `sky.fsh` stays the game's own unless `--sky` asks otherwise, and
+a port puts it back if an earlier one left High Stakes' there. The arena: it is
+3 211 264 bytes and the loader never gives any of it back, so past its end an
+allocation returns 0 and the read that follows copies into address 0 — the
+track loads a stub and the race dies later. High Stakes carries about ten times
+this game's road polygons (Park's *medium* set is 800 a block against Rocky
+Pass's 107), so `fit_arena` sheds detail until the file fits 85% of it: the
+levels this game's own tracks never use (1, 3, 5 and 7 to 10), then the high
+road set (4), then the coarsest (0), then the lanes (6), then the scenery, and
+it refuses a track that still does not fit. Park lands at 85%. The objects: the
+loader reads each one as three words, twelve more, then the *length* of a block
+of extra bytes and that block (an animated object's keyframes), then its
+vertices, colours and polygons — so a keyframe block written inline makes one
+object read as 196608 vertices. `loader_reads()` walks a ported file in exactly
+that order and refuses a file the game would not read whole; it reads all nine
+retail files to their last byte, which is what makes it trustworthy.
+
+    python3 tools/port_track.py --self-test
+
+runs both halves of that in memory — this game's nine tracks written back as
+they came, every High Stakes track converted and read back — and names what
+failed, writing nothing.
+
+**What is missing is collision.** High Stakes' tracks ship no `.col`; this game
+loads one (and a `.ccm`) beside the road. `--borrow N` takes both (and
+`speedsf.bin`/`speedsr.bin`, whose High Stakes layout differs) from the
+snapshot — the game's own files, not whatever the slot holds now — which for
+the nine shared tracks is right by construction: at the 1.3
+scale their road vectors agree to within the quantisation of the `.col`'s own
+fixed-point coordinates (100% of them within 1%), so the retail collision fits
+the ported road. The borrow is the default for those.
+
+For the ten tracks this game never had it can be **generated**: `trNN.col` is
+`COLL` version 11 — a texture table (8 bytes a texture id), a struct3D of
+collidable meshes, one or two object tables, and then a road-vector table of
+36-byte records, one per slice — 959 of them for Hometown, the same count and
+order as High Stakes' own road vectors, at 1.3× their coordinates. So the road
+half of it is a re-encoding of data the converter already reads:
+
+- `refPt` is 16.16 fixed (High Stakes' floats × 1.3, × 65536),
+- `normal`, `forward` and `right` are four signed bytes each, three of them the
+  vector × 128, the fourth unused (this game's own files have junk in it),
+- `leftWall`/`rightWall` are 16.16 too, but not High Stakes' walls × a factor:
+  measured over the nine shared tracks this game's is High Stakes' plus about
+  3.4 (± 0.7), so a generated track's walls want calibrating against the road's
+  own width rather than a constant,
+- the texture table names a texture id (the same numbers the road's polygons
+  carry) and the surface behind it, so it needs the same High Stakes-to-this
+  game's texture numbering the polygons do,
+- the struct3D meshes are the collidable scenery, which High Stakes' objects
+  could be built from — they are in its FRD, already read here.
+
+`OBJECT_KINDS` differ between the two games too: Hometown's first block asks
+for object kind 7 in High Stakes and 9 here, though the `.can` catalogues are
+byte for byte the same file, so a ported track's roadside objects may come out
+as the wrong ones.
+
+**What has been seen.** Aquatica was driven in this game's engine by hand
+(2026-11-18, at the 0x0135 header), so a shared track ported this way is a
+track one can race on: its road, its heights, its textures, its horizon. A race
+can also be driven without hands, from the port's own touch script — which is
+how the three crashes above were found and cleared:
+
+    SDL_VIDEODRIVER=offscreen NFS_SKIP_MOVIES=1 \
+    NFS_TOUCH_SCRIPT="8000@key:Return;11000@key:Return;15000@350,448" \
+    ./build/nfs3hp ./build/game
+
+(the intro film skipped, One Player, then a tap on the setup screen's RACE
+button — `NFS_TOUCH_SCRIPT` takes `<ms>@key:Name` and `<ms>@x,y` in the
+640x480 screen's own coordinates, and a `[TRACK] track N: …` line per step of
+the load says where it is).
+
+Park gets further than any other High Stakes-only track: its own 118 blocks
+load and the setup completes at 85% of the arena, and the race then faults in
+the collision code, because the `.col` in its slot is Rocky Pass's. Until a
+`.col` can be generated (below), only the nine shared tracks are drivable.
+
 ### Seeing and tuning a car's performance
 
 `carp.txt` is the whole physics of a car: 80 labelled fields, plain text, and

@@ -15,6 +15,16 @@ scrolls sideways with the arrow keys or the wheel over it, and pointing at a
 box brings up a note on what that value does to the car.  It needs a window
 (Tk or Qt for matplotlib).
 
+The torque curve is edited on its own chart: each of its 41 points is a mark
+there, and dragging one up or down sets that point -- the shape of the curve,
+not just the "Torque x" box's one number (CurveDrag).  The acceleration chart
+then carries two curves: the game's own table, and dashed over it what the
+tuned engine makes of the car, moving as a point is dragged -- which is what
+Save writes when the box below Save says "Rebuild AI tables on Save: yes" (the
+curve the AI drives to, carp.txt's ACC sections, which nothing else
+recomputes).  Its level stays the car's own, so an add-on car whose engine
+figures are optimistic does not hand the AI a table it cannot drive to.
+
 CARMODEL_DIR defaults to gamedata/carmodel.  Each car folder's performance
 data is its carp.txt -- loose in the folder, or packed in its car.viv (a BIGF
 archive) -- and its name comes from fedata.eng.  For each car OUT_DIR
@@ -237,10 +247,15 @@ def gear_label(car, g):
     return "%d" % (g - 1)
 
 
-def draw_torque(ax, car):
+def draw_torque(ax, car, handles=False):
+    """Torque against engine speed.  `handles`: the curve's own 41 points marked,
+    for the editor to drag (CurveDrag)."""
     style(ax, "Torque", "engine speed (rpm)", "torque (Nm)")
     rpms = car_rpms(car)
-    ax.plot(rpms, [car.torque_at(r) for r in rpms], color=SERIES[0], linewidth=2)
+    ax.plot(rpms, [car.torque_at(r) for r in rpms], color=SERIES[0], linewidth=2, label="torque")
+    if handles and car.torque:
+        ax.plot([i * 256.0 for i in range(len(car.torque))], list(car.torque), "o", color=SERIES[0],
+                markersize=3.5, markeredgecolor=SURFACE, markeredgewidth=1.0, alpha=0.85)
     peak_t, at_t = car.peak_torque()
     ax.plot([at_t], [peak_t], "o", color=SERIES[0], markersize=7, markeredgecolor=SURFACE, markeredgewidth=2)
     ax.annotate("%.0f Nm at %d rpm" % (peak_t, at_t), (at_t, peak_t), xytext=(6, 6),
@@ -305,15 +320,26 @@ def draw_push(ax, car):
     ax.legend(fontsize=8, frameon=False, labelcolor=INK, loc="upper right")
 
 
-def draw_accel(ax, car):
-    """The game's acceleration table by speed, with the times out of it."""
-    style(ax, "The game's acceleration by speed", "road speed (km/h)", "acceleration (m/s²)")
-    ax.plot([i * 3.6 for i in range(len(car.ai_accel))], car.ai_accel, color=SERIES[0], linewidth=2)
+def draw_accel(ax, car, estimate=None):
+    """The game's acceleration table by speed, with the times out of it.
+
+    `estimate`: the same curve as this car's tune makes it (what Save writes
+    with the AI tables rebuilt), drawn dashed over the table -- so the table the
+    AI drives to and the car the engine now describes are both there.
+    """
+    style(ax, "Acceleration by speed", "road speed (km/h)", "acceleration (m/s²)")
+    ax.plot([i * 3.6 for i in range(len(car.ai_accel))], car.ai_accel, color=SERIES[0], linewidth=2,
+            label="the game's table")
+    if estimate:
+        ax.plot([i * 3.6 for i in range(len(estimate))], estimate, color=MARK, linewidth=1.6,
+                linestyle=(0, (4, 3)), label="this tune (Save rebuilds it)")
+        ax.legend(loc="upper right", fontsize=7.5, frameon=False, labelcolor=INK_2)
     ax.set_xlim(0, max(top_kmh(car) * 1.02, 10))
     ax.set_ylim(bottom=0)
     times = [(k, car.time_to(k)) for k in (100, 160, 200)]
     note = "   ".join("0-%d: %s" % (k, "%.1f s" % t if t else "-") for k, t in times)
-    ax.text(0.98, 0.95, note, transform=ax.transAxes, ha="right", va="top", fontsize=9, color=INK)
+    ax.text(0.98, 0.80 if estimate else 0.95, note, transform=ax.transAxes, ha="right", va="top",
+            fontsize=8.5, color=INK_2)
 
 
 def car_rpms(car):
@@ -676,6 +702,69 @@ class Hints:
         self.shown, self.under = None, None
 
 
+class CurveDrag:
+    """The torque curve's own points, dragged on the torque chart.
+
+    carp.txt keeps the curve as 41 numbers, 256 rpm apart; typing them is
+    hopeless and the "Torque x" box only scales the whole thing.  Here each
+    point is a mark on the chart and a drag: the pointer within `TOLERANCE_PX`
+    of a mark picks it up, moving up and down sets its value -- 0 at the floor,
+    never below -- and letting go hands the finished curve on.  A press that is
+    not on a point is left for the rest of the window (a click on a box, a
+    button), which is why nothing is eaten here.
+
+    `value_at(index)` is the curve as it stands, `on_move(index, value)` is
+    called for every step of the drag so the chart can be painted again, and
+    `on_drop()` when it ends.
+    """
+
+    TOLERANCE_PX = 11.0
+
+    def __init__(self, fig, ax, value_at, on_move, on_drop, on_pick=None):
+        self.fig = fig
+        self.ax = ax
+        self.value_at = value_at        # index -> its torque now
+        self.on_move = on_move          # (index, value) -> None
+        self.on_drop = on_drop          # () -> None
+        self.on_pick = on_pick          # () -> None, as a point is taken hold of
+        self.active = None              # the point being dragged, or None
+        fig.canvas.mpl_connect("button_press_event", self._press)
+        fig.canvas.mpl_connect("motion_notify_event", self._move)
+        fig.canvas.mpl_connect("button_release_event", self._release)
+
+    def index_at(self, event):
+        """The point under the pointer, or None: the chart's x says which of the
+        41 it is, its y whether the pointer is on it."""
+        if event.inaxes is not self.ax or event.xdata is None or event.ydata is None:
+            return None
+        index = int(round(event.xdata / 256.0))
+        value = self.value_at(index)
+        if value is None:
+            return None
+        x, y = self.ax.transData.transform((index * 256.0, value))
+        if abs(float(event.y) - float(y)) > self.TOLERANCE_PX:
+            return None
+        return index
+
+    def _press(self, event):
+        index = self.index_at(event)
+        if index is not None:
+            self.active = index
+            if self.on_pick is not None:
+                self.on_pick()
+
+    def _move(self, event):
+        if self.active is None or event.ydata is None:
+            return
+        self.on_move(self.active, max(0.0, float(event.ydata)))
+
+    def _release(self, _event):
+        if self.active is None:
+            return
+        self.active = None
+        self.on_drop()
+
+
 # What the editor lets you change: its label, carp.txt's field number (or
 # "torque x", the whole torque curve scaled), how it is shown from the field's
 # value and read back.
@@ -705,11 +794,12 @@ SHORT = {2: "mass", 8: "ratios", 10: "torque", 11: "final", 12: "min rpm", 13: "
 HINTS = {
     "Mass (kg)":
         "What the engine has to move. The dashed estimate and the 0-100 / 400 m times are worked out with it, "
-        "so less is quicker off the line; the AI's acceleration table is separate and does not follow it.",
+        "so less is quicker off the line; the AI's acceleration table is separate and follows it only when Save "
+        "rebuilds the tables (the box below Save).",
     "Torque x":
         "The whole torque curve, scaled by one number. Power is torque against rpm, so this raises the pull in "
-        "every gear at once and leaves the curve's shape alone -- the quick way to a stronger engine without "
-        "editing 41 figures.",
+        "every gear at once and leaves the curve's shape alone -- the quick way to a stronger engine. For the "
+        "shape itself, drag the points on the torque chart: each is one of the curve's 41 figures.",
     "Redline (rpm)":
         "Where the engine is cut off, and where each line of the gearbox chart ends. Raising it lets the gears "
         "reach further, but past the curve's peak the pull is falling away already, so the last few hundred rpm "
@@ -783,6 +873,8 @@ def edit(carmodel, start=None):
         "fields": {},       # folder -> fields as edited
         "torque": {},       # folder -> the torque factor
         "radio": None,
+        "derive": False,    # rebuild the AI acceleration tables on Save
+        "anchor": {},       # folder -> (its table's 0-100, the model's of it untuned)
     }
     per_page = 22
     state["page"] = state["index"] // per_page
@@ -947,19 +1039,17 @@ def edit(carmodel, start=None):
     state["hints"] = Hints(fig, [box[0] for box in fields_ui.boxes],
                            [HINTS[label] for label, _field, _kind in EDITABLE])
 
-    def save(_):
-        folder = current()
-        if not changed(folder):
-            status.set_text("%s: nothing to save" % folder)
-            fig.canvas.draw_idle()
-            return
+    def pending_changes(folder):
+        """Every change waiting to be written, as car_perf.py's field=value
+        assignments: the specs' boxes, the automatic gearbox mirrored where it
+        was the same, and the torque curve -- its dragged points with the
+        "Torque x" factor over them (a factor is folded into the points when a
+        drag starts, so the two never bite each other).  Save writes these, and
+        the charts' estimate works out the car they describe."""
         original, fields = state["original"][folder], state["fields"][folder]
-        perf_car = car_perf.Car(car_perf.Path(os.path.join(carmodel, folder)))
-        carp = perf_car.carp
-        rolling = car_perf.rolling_circumference(carp)
         changes = []
         for field, short in SHORT.items():
-            if field in (77, 79) or field not in fields:
+            if field in (10, 77, 79) or field not in fields:
                 continue
             if fields[field] != original.get(field):
                 changes.append((short, fields[field]))
@@ -967,11 +1057,104 @@ def edit(carmodel, start=None):
                 mirror = {8: 77, 11: 79}.get(field)
                 if mirror and original.get(mirror) == original.get(field):
                     changes.append((SHORT[mirror], fields[field]))
-        if state["torque"][folder] != 1.0:
-            changes.append(("torque", [round(v * state["torque"][folder], 6) for v in original[10]]))
+        curve = [float(v) for v in fields.get(10, [])]
+        if curve and state["torque"][folder] != 1.0:
+            curve = [v * state["torque"][folder] for v in curve]
+        if curve and curve != [float(v) for v in original.get(10, [])]:
+            changes.append(("torque", [round(v, 6) for v in curve]))
+        return changes
+
+    def anchor_of(folder):
+        """(the 0-100 the car's own table gives, the 0-100 the model makes of its
+        untuned data): the ratio between them is how optimistic that data is,
+        and is what the rebuild takes out.  Read once a car, from the file."""
+        if folder not in state["anchor"]:
+            car = car_perf.Car(car_perf.Path(os.path.join(carmodel, folder)))
+            shipped = car_perf.table_time(car.accel_table(), 27.78)
+            _, _, _, raw = car_perf.derive_tables(car, 1.0, None, str(carmodel))
+            state["anchor"][folder] = (shipped, raw)
+        return state["anchor"][folder]
+
+    def estimate_of(folder):
+        """The acceleration curve this car's tune makes, as Save would write it
+        with the AI tables rebuilt -- carried through the same road as Save's:
+        the pending changes applied in memory to a copy of the car, then the
+        model's estimate for it, scaled so the untuned car keeps its own 0-100.
+
+        None for a car with nothing changed on it: the model's curve and the
+        game's table differ a little even on a car nobody has touched, and
+        drawing that as "this tune" made every car in the list look edited (the
+        dashes came up on all of them, and stayed up after Cancel).  Only the
+        car whose own boxes or curve have moved shows the second curve."""
+        if not changed(folder):
+            return None
+        try:
+            car = car_perf.Car(car_perf.Path(os.path.join(carmodel, folder)))
+            rolling = car_perf.rolling_circumference(car.carp)
+            touched = car_perf.apply_changes(car.carp, pending_changes(folder), quiet=True)
+            car_perf.sync_v2r(car.carp, touched, rolling)
+            samples, factor, _, raw_now = car_perf.derive_tables(car, 1.0, None, str(carmodel))
+        except Exception:
+            return None
+        shipped, raw_shipped = anchor_of(folder)
+        if shipped and raw_shipped and raw_now:
+            # Slower, not quicker: an acceleration curve scaled by k takes 1/k
+            # the time, so the model's optimism (raw 0-100 quicker than the
+            # table's) is divided out by multiplying by raw/table.
+            samples = [s * (raw_shipped / shipped) for s in samples]
+        # A tune that leaves the table where it is draws nothing: the dashed
+        # line would lie exactly on the solid one and only the legend would tell.
+        table = car.accel_table()
+        if table and len(table) == len(samples):
+            # (a percent of the curve's own size: a written table is rounded a
+            # little on its way through carp.txt, and a table just rebuilt is
+            # this estimate to within that)
+            slack = max(0.02 * max(table), 0.01)
+            if max(abs(a - b) for a, b in zip(samples, table)) <= slack:
+                return None
+        return samples
+
+    def save(_):
+        folder = current()
+        # With the AI tables to rebuild, Save does that even when nothing else
+        # changed: a car tuned before this box existed still drives to its
+        # donor's curve.
+        if not changed(folder) and not (state["derive"] and folder in state["fields"]):
+            status.set_text("%s: nothing to save" % folder)
+            fig.canvas.draw_idle()
+            return
+        original, fields = state["original"][folder], state["fields"][folder]
+        perf_car = car_perf.Car(car_perf.Path(os.path.join(carmodel, folder)))
+        carp = perf_car.carp
+        # The car as it was before this save, for the AI tables: what the model
+        # makes of its own untuned data tells how optimistic that data is.
+        before_car = car_perf.Car(car_perf.Path(os.path.join(carmodel, folder))) if state["derive"] else None
+        rolling = car_perf.rolling_circumference(carp)
+        changes = pending_changes(folder)
+        derived = ""
         try:
             touched = car_perf.apply_changes(carp, changes, quiet=True)
             car_perf.sync_v2r(carp, touched, rolling)
+            if state["derive"]:
+                # The AI's acceleration curve, from the engine, the gearing and
+                # the mass as they now stand (derive_tables reads the carp.txt
+                # this has just changed).
+                #
+                # Its level is anchored on the car's own data rather than taken
+                # from the model: the model has no clutch, tyre or traction loss
+                # in it, and on an add-on's figures it can be wildly out (clkg's
+                # engine data makes it 3.4 times quicker than the car actually
+                # is -- the AI would be given a 1.4 s table to drive to).  So
+                # the untuned car is worked out the same way, and the tune's own
+                # improvement -- how much quicker the model says this car now is
+                # than it was -- is the only part that is kept.
+                _, _, shipped, raw_before = car_perf.derive_tables(before_car, 1.0, None, str(carmodel))
+                _, _, _, raw_after = car_perf.derive_tables(perf_car, 1.0, None, str(carmodel))
+                aim = shipped * (raw_after / raw_before) if shipped and raw_before and raw_after else None
+                samples, factor, was, now = car_perf.derive_tables(perf_car, "auto", aim, str(carmodel))
+                car_perf.write_accel(carp, samples)
+                derived = "; AI tables rebuilt (0-100 %s -> %s)" % (
+                    "%.2f s" % was if was else "-", "%.2f s" % now if now else "-")
             written = carp.save()
         except Exception as error:   # the file's own complaint, shown, nothing lost
             status.set_text("not saved: %s" % error)
@@ -980,7 +1163,10 @@ def edit(carmodel, start=None):
         state["original"].pop(folder)
         state["fields"].pop(folder)
         state["torque"].pop(folder)
-        status.set_text("%s saved (%s)" % (folder, ", ".join(os.path.basename(w) for w in written)))
+        # The file has changed under the estimate's anchor: read it again, so
+        # that a rebuilt table and the dashed curve meet exactly.
+        state["anchor"].pop(folder, None)
+        status.set_text("%s saved (%s)%s" % (folder, ", ".join(os.path.basename(w) for w in written), derived))
         show_list()
         redraw()
 
@@ -989,7 +1175,11 @@ def edit(carmodel, start=None):
         state["original"].pop(folder, None)
         state["fields"].pop(folder, None)
         state["torque"].pop(folder, None)
-        status.set_text("%s: changes dropped" % folder)
+        # Only this car's: another car's edits wait for its own Save or Cancel
+        # (it is marked * in the list), so that switching about loses nothing.
+        pending = sum(1 for f in state["fields"] if changed(f))   # (a torque factor counts too)
+        status.set_text("%s: changes dropped%s" % (folder, "" if not pending else
+                        " (%d other car%s still marked * in the list)" % (pending, "" if pending == 1 else "s")))
         show_list()
         redraw()
 
@@ -1010,30 +1200,203 @@ def edit(carmodel, start=None):
 
     exhaust_button.on_clicked(exhausts)
 
+    painters = {
+        # the torque chart's own points are marked: they are what the pointer
+        # drags (CurveDrag, below)
+        "torque": lambda ax, car, est: draw_torque(ax, car, handles=True),
+        "power": lambda ax, car, est: draw_power(ax, car),
+        "gearbox": lambda ax, car, est: draw_gearbox(ax, car),
+        "push": lambda ax, car, est: draw_push(ax, car),
+        # the game's table, with this tune's estimate dashed over it
+        "accel": lambda ax, car, est: draw_accel(ax, car, est),
+    }
+
+    # While a point is dragged the torque curve and the acceleration estimate
+    # are drawn by hand over a frozen copy of their charts (see drag_move): a
+    # chart's own draw costs some tens of milliseconds, and a drag cannot wait
+    # for two of them.  These are the lines it draws with -- animated, so a
+    # whole draw of the window leaves them out and only the drag shows them.
+    live = {}
+
+    def live_line(name):
+        ax = chart_axes[name]
+        style_ = ({"color": SERIES[0], "linewidth": 2} if name == "torque"
+                  else {"color": MARK, "linewidth": 1.6, "linestyle": (0, (4, 3))})
+        line = ax.plot([], [], **style_)[0]
+        line.set_animated(True)
+        live[name] = line
+        if name == "torque":
+            # the point being dragged, marked as the chart's own points are
+            point = ax.plot([], [], "o", color=SERIES[0], markersize=6, markeredgecolor=SURFACE,
+                            markeredgewidth=2)[0]
+            point.set_animated(True)
+            live["point"] = point
+        return line
+
+    def paint(name, ax, car, estimate=None):
+        ax.clear()
+        painters[name](ax, car, estimate)
+        if name in ("torque", "accel"):
+            live_line(name)
+
     def redraw():
         folder = current()
         car = car_now()
+        estimate = estimate_of(folder)
         for name, ax in chart_axes.items():
-            ax.clear()
-            {"torque": draw_torque, "power": draw_power, "gearbox": draw_gearbox, "push": draw_push,
-             "accel": draw_accel}[name](ax, car)
+            paint(name, ax, car, estimate)
         readout.clear()
         readout.axis("off")
         readout.set_title("Worked out", loc="left", fontsize=11, color=INK, fontweight="bold", pad=8)
         rows = spec_rows(car)
         times = [(k, car.time_to(k)) for k in (100, 200)]
         rows = rows[:5] + [("0-100 / 0-200", " / ".join("%.1f s" % t if t else "-" for _, t in times))] + rows[5:10]
+        if estimate:
+            # What the engine now says, carried as Save writes it: the same
+            # curve the accel chart draws dashed.
+            model = [(k, car_perf.table_time(estimate, k / 3.6)) for k in (100, 200)]
+            rows.insert(6, ("  this tune", " / ".join("%.1f s" % t if t else "-" for _, t in model)))
+        step = 0.085 if len(rows) <= 11 else 0.075   # the tune's line needs the room
         for i, (k, v) in enumerate(rows):
-            y = 0.97 - i * 0.085
+            y = 0.97 - i * step
             readout.text(0.0, y, k, transform=readout.transAxes, fontsize=9, color=INK_2, va="top")
             readout.text(0.42, y, v, transform=readout.transAxes, fontsize=9, color=INK, va="top")
         title.set_text(car.name + ("  (changed, not saved)" if changed(folder) else ""))
-        subtitle.set_text("%s  -  carp.txt  -  the acceleration table is the game's own, unchanged by "
-                          "these edits (car_perf.py derive rebuilds it)" % folder)
+        subtitle.set_text("%s  -  drag the torque chart's points  -  dashed: what this tune makes; AI tables %s"
+                          % (folder, "rebuilt on Save" if state["derive"] else "only by the box below"))
         fields = load(folder)
         for n, (label, field, kind) in enumerate(EDITABLE):
             fields_ui.set(n, shown(field, kind, fields, folder))
         fig.canvas.draw_idle()
+
+    def curve_value(index):
+        """Point `index` of the curve as it is being edited, or None where there
+        is no such point."""
+        folder = current()
+        curve = load(folder).get(10) or []
+        if not 0 <= index < len(curve):
+            return None
+        return float(curve[index]) * state["torque"][folder]
+
+    # What the two moving charts looked like as the drag began: their pixels and
+    # the curves that are about to move, left in faintly (the ghosted original,
+    # so what it is changing from stays in sight).
+    GHOST = {"torque": ("torque",), "accel": ("this tune (Save rebuilds it)",)}
+    GHOST_ALPHA = 0.35
+    frozen = {"bg": {}, "area": {}, "ghosted": []}
+
+    def drag_freeze():
+        """Keep the two charts as they stand, the curves that the drag moves left
+        in faintly, so that a drag can put those pixels back and draw just the
+        moving curve over them -- the original still there to compare against."""
+        canvas = fig.canvas
+        if not hasattr(canvas, "copy_from_bbox") or not hasattr(canvas, "copy_from_bbox"):
+            return False
+        if getattr(canvas, "renderer", None) is None:
+            canvas.draw()
+        renderer = canvas.get_renderer()
+        frozen["bg"], frozen["area"], frozen["ghosted"] = {}, {}, []
+        for name in ("torque", "accel"):
+            ax = chart_axes[name]
+            for artist in ax.lines:
+                if artist.get_label() in GHOST[name] and artist.get_visible():
+                    frozen["ghosted"].append((artist, artist.get_alpha()))
+                    artist.set_alpha(GHOST_ALPHA)
+            ax.draw(renderer)
+            box = ax.bbox.padded(24)
+            present(canvas, box)
+            frozen["bg"][name] = canvas.copy_from_bbox(box)
+            frozen["area"][name] = box
+        return True
+
+    def drag_thaw():
+        for artist, alpha in frozen["ghosted"]:
+            artist.set_alpha(alpha)
+        frozen["bg"], frozen["area"], frozen["ghosted"] = {}, {}, []
+
+    def drag_show():
+        """The torque curve as it now is, and the acceleration it makes of the
+        car, drawn over the frozen charts -- a couple of lines, not two charts.
+        Should the quick way not be available (a backend with no pixels to copy),
+        the two charts are simply drawn again."""
+        canvas = fig.canvas
+        folder = current()
+        car = car_now()
+        estimate = estimate_of(folder)
+        try:
+            if not frozen["bg"] or getattr(canvas, "renderer", None) is None:
+                raise RuntimeError("no frozen charts")
+            renderer = canvas.get_renderer()
+            rpms = car_rpms(car)
+            live["torque"].set_data(rpms, [car.torque_at(r) for r in rpms])
+            held = state["drag"].active
+            curve = load(folder).get(10) or []
+            if held is not None and held < len(curve):
+                live["point"].set_data([held * 256.0], [float(curve[held]) * state["torque"][folder]])
+            else:
+                live["point"].set_data([], [])
+            if estimate:
+                live["accel"].set_data([i * 3.6 for i in range(len(estimate))], estimate)
+            else:
+                live["accel"].set_data([], [])
+            for name in ("torque", "accel"):
+                canvas.restore_region(frozen["bg"][name])
+                live[name].draw(renderer)
+                if name == "torque":
+                    live["point"].draw(renderer)
+                present(canvas, frozen["area"][name])
+        except Exception:
+            # Nothing frozen to draw over: paint the charts themselves, which is
+            # slower but always right (the curves are never left hidden).
+            for name in ("torque", "accel"):
+                paint(name, chart_axes[name], car, estimate)
+            canvas.draw_idle()
+
+    def curve_move(index, value):
+        """One step of a drag: the point takes the pointer's height, and what
+        follows it -- the curve, and the acceleration that makes of the car --
+        is drawn over the charts again.  The rest of the window waits for the
+        drag to end."""
+        folder = current()
+        fields = load(folder)
+        if state["torque"][folder] != 1.0:      # a typed factor folded into the points
+            fields[10] = [float(v) * state["torque"][folder] for v in fields[10]]
+            state["torque"][folder] = 1.0
+        if not 0 <= index < len(fields.get(10, [])):
+            return
+        fields[10] = list(fields[10])
+        fields[10][index] = round(value, 2)
+        drag_show()
+        status.set_text("%s: %d rpm -> %.1f Nm" % (folder, index * 256, float(fields[10][index])))
+
+    def curve_pick():
+        drag_freeze()
+
+    def curve_drop():
+        drag_thaw()
+        redraw()                                # everything that follows the curve, once
+
+    state["drag"] = CurveDrag(fig, chart_axes["torque"], curve_value, curve_move, curve_drop, curve_pick)
+
+    # The AI acceleration tables: Save rebuilds them from the engine, the
+    # gearing and the mass (car_perf.py derive), or leaves the donor's.
+    derive_button = hovering(fig, Button(fig.add_axes((0.635, 0.06, 0.18, 0.04)), "", color=GRID,
+                                         hovercolor="#d4d3cf"))
+    derive_button.label.set_fontsize(8.5)
+
+    def show_derive():
+        derive_button.label.set_text("Rebuild AI tables on Save: %s" % ("yes" if state["derive"] else "no"))
+
+    def toggle_derive(_):
+        state["derive"] = not state["derive"]
+        show_derive()
+        status.set_text("Save will %s the cars' AI acceleration tables from what you tuned" %
+                        ("rebuild" if state["derive"] else "leave"))
+        redraw()
+
+    show_derive()
+    derive_button.on_clicked(toggle_derive)
+    state["derive_button"] = derive_button
 
     def pick(index):
         state["index"] = index

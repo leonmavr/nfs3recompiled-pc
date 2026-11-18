@@ -15,6 +15,11 @@
 #include "dynamic_fullscreen.h"
 #include <SDL3/SDL.h>
 #include <algorithm>
+#ifndef _WIN32
+#include <csignal>
+#include <execinfo.h>
+#include <unistd.h>
+#endif
 #include <array>
 #include <atomic>
 #include <string>
@@ -3211,6 +3216,56 @@ static void patchCarListDescriptors(win32::WinApplication& app)
     }
 }
 
+#ifndef _WIN32
+/* A crash that says where it was.  The frames name the function that faulted,
+ * and for a fault in the game's own code that is the `sub_xxxx` standing for
+ * it, which is what there is to go on when no core is kept.
+ * NFS_CRASH_GUARD=0 turns it off.  Nothing is recovered: the frames are written
+ * to stderr, and the process ends as it would have. */
+static volatile sig_atomic_t g_crashing = 0;
+
+static void crashGuard(int signal, siginfo_t* info, void*)
+{
+    if (g_crashing)
+        _exit(128 + signal);
+    g_crashing = 1;
+    char text[1024];
+    int at = SDL_snprintf(text, sizeof text,
+                          "\n[CRASH] signal %d (%s) at %p\n",
+                          signal,
+                          signal == SIGSEGV ? "SIGSEGV" : signal == SIGBUS ? "SIGBUS"
+                          : signal == SIGFPE ? "SIGFPE" : signal == SIGILL ? "SIGILL" : "SIGABRT",
+                          info ? info->si_addr : nullptr);
+#if defined(__GLIBC__)
+    void* frames[40];
+    const int count = backtrace(frames, 40);
+    at += SDL_snprintf(text + at, sizeof text - std::size_t(at), "[CRASH] %d native frames (offsets from the binary):\n", count);
+    char** names = backtrace_symbols(frames, count);
+    for (int i = 0; i < count && at < int(sizeof text) - 80; ++i)
+    {
+        at += SDL_snprintf(text + at, sizeof text - std::size_t(at), "[CRASH]   %s\n",
+                           names ? names[i] : "?");
+    }
+#endif
+    if (at > 0)
+        (void)!write(2, text, std::size_t(at));
+    _exit(128 + signal);
+}
+
+static void installCrashGuard()
+{
+    const char* off = SDL_getenv("NFS_CRASH_GUARD");
+    if (off && *off == '0')
+        return;
+    struct sigaction action = {};
+    action.sa_sigaction = crashGuard;
+    action.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESETHAND;
+    sigemptyset(&action.sa_mask);
+    for (const int signal : { SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGABRT })
+        sigaction(signal, &action, nullptr);
+}
+#endif
+
 int main(int argc, char* argv[])
 {
     std::string dataRoot;
@@ -3256,6 +3311,9 @@ int main(int argc, char* argv[])
 #endif
     /* The switches: `nfs3hp.ini` beside the game data, set one and all, before
      * anything asks the environment for one (native_settings.cpp). */
+#ifndef _WIN32
+    installCrashGuard();
+#endif
     nfs3hp::settingsLoad(dataRoot);
     win32::FileEnumerator::setListingOrder(carFolderOrder);
     /* NFS_EXHAUSTS_TRACE: every car's exhausts, and the colour its flames burn,

@@ -251,7 +251,17 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   /other shapes. Please don't make them look cheap. They should have various sizes. 
   and there's no need for refraction on them - only semi-transparency.
   There are mostly transparent - towards the edges they're more transparent but
-  their main lines are less transparent.
+  their main lines are less transparent. Note that snow particles will be
+  pre-rendered assets that just fall onto the windshield at different sizes.
+- [ ] BUG: exhaust flames: they are visible from the front of the car too (e.g. 
+  if you look back or change replay camera). The bug here is that exhaust flame
+  does not get occluded by driver's car (get occluded by other objects though). 
+  This way also side exhaust flames ghost through the rear bumper..
+- [ ] BUG: when press b to look back in rainy weather, the rain drops appear as
+  lines (possibly due to rotation of camera view) - fix it.
+- [ ] After extracting assets, make 3d models such as cops animating (e.g when
+  fined/arrested) or be able to add custom model in whatever format the game
+  uses (e.g. girls/crowd before race begins)
 
 ### Races/locations
 
@@ -263,8 +273,64 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   - [x] Next: light on trackside objects (fences, walls) from the headlights.
     - Done: walls, fences, trees, buildings lit by the player's headlights in
       the shader (`NFS_HEADLIGHT_OBJECTS`, 1.6).
+- [x] BUG: exhaust flames visible through the player's own car (from in front of
+  it, or ghosting through the rear bumper). Nothing to do with the car's depth
+  at all: **the particle shader read the depth buffer upside down.** This port
+  draws the picture turned over, so its depth rows run from the top while
+  `gl_FragCoord` runs from the bottom; every particle was therefore cut against
+  the surface mirrored across the middle of the picture. High up that is nearly
+  the same thing (so opponents' flames *were* being cut off, which is what made
+  it look like a car-only problem); low down, behind your own car, it compared
+  against the sky, which holds no depth, so nothing ever cut them. Fixed by
+  turning the row over where the particles read the depth. Measured with
+  `NFS_FLAME_DEPTH_TRACE` (the flame at 5.88 m, the car's rear at 4.89 m: cut).
+  A separate switch, `NFS_CAR_DEPTH` (off), can make cars write depth where the
+  game leaves the mask off -- kept for a look at cars that overlap, not needed
+  for this.
 - [ ] Emissive light from environmental models that emit light. Note that this
   is partially implementned by the original game but check if it can improved
+- [ ] High Stakes-only tracks (Park, UK, GT1-3): the road loads now, the race
+  then faults in the collision code because the `.col` is another place's.
+  Found and fixed on 2026-11-18, in this order, with `tools/port_track.py` and a
+  race driven from the frontend by `NFS_TOUCH_SCRIPT` (which makes this
+  testable without a pair of hands):
+  - **High Stakes' `SKY.QFS` stops the whole track's setup**, silently: this
+    game's horizon loader (`sub_478340`, before `sub_41d960`) sets the load's
+    flag `[0x55e88c]` and the road is never read at all -- `[VIEW] 1 blocks`,
+    then the frontend faults on the way back.  The port now keeps the game's
+    own `sky.fsh` and puts it back if an earlier run left High Stakes' there
+    (`--sky` still asks for High Stakes').
+  - **The track arena overflows.** `sub_419bc0` returns 0 past the end of the
+    3 211 264-byte arena and the read that follows copies into address 0:
+    `[FRD] the arena is full: 10920 wanted with 3200428 used of 0x310000`, and
+    the game runs a race with no track in it.  High Stakes carries ~10x this
+    game's road polygons (Park's medium set alone is 800 a block against Rocky
+    Pass's 107), so `port_track.py` now sheds detail until the track fits 85%
+    of the arena -- the levels this game never uses (1, 3, 5, 7..10), then the
+    high road set (4), then the coarsest (0), then the lanes (6), then the
+    scenery.  Park lands at 85% with its medium road and lanes.
+  - **Animated objects were written in a layout the loader cannot read**: the
+    keyframes have to sit in the length-prefixed block the loader reads
+    (`sub_4198e0`), not inline.  One mis-framed object read as 196608 vertices.
+    The tool now reads and writes objects in the loader's own order and
+    `loader_reads()` walks a ported file exactly as the game will, refusing one
+    it would not read whole (all nine retail files read exactly, so the walk is
+    known good).
+  - **`--borrow` takes the .col from the snapshot**, not from the slot, which
+    may already hold a ported track.
+  - **The road's positions are the next thing.** Every retail block carries
+    exactly eight `posData` records (8 bytes each) and a `start_positions`, and
+    `port_track.py` writes 0 for both: HS's block header has a `positions` count
+    but its block data has no such array where the reader looks, so the
+    converter has nothing to copy.  With a ported road and *nothing else of
+    Park's* (`--road-only`) the race still faults in the drawing, in
+    `sub_41e6a0` — the function that turns a road polygon's four u16 corner
+    indices into pointers into the block's 12-byte vertex records — which is
+    what an empty positions array looks like once it is used as one.
+- [ ] The `.col` of an HS-only track has to be generated (its vroad block
+    is one 36-byte record a slice, in the road vectors' order at 1.3x, so it is
+    mechanical; the walls are not).  Until then the port says so and the race
+    faults where the road and the borrowed collision meet.
 - [ ] Track editor. Tool to copy, edit, add new tracks with custom terrain and
   environemtn too.
 - [ ] Replace the 3,2,1,GO spinning text when race is beginning with a move race-relaced UI,
@@ -367,12 +433,14 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   heat levels, e.g. pursuit McLaren, Corvette, or Diablo. -> partly done by
   marking each slot with a car. However they never deploy McLaren (it's an added
   cop car).
-- [x] SERIOUS BUG: in the rain, opponents often lose control on turnining
+- [ ] SERIOUS BUG: in the rain, opponents often lose control on turnining
   (possibly when braking, not sure?) causing them to turn 90 or even 180
   degrees, slow down dramatically, and then they have to re-align with their trajectory.
   Then they essentially lose the race as they have to spend entire seconds
   restarting from near-zero speed. Opponents should know better how to drive in rain and avoid such blunders.
   - No longer seen (Leo, 2026-11-14), after the AI and cop pace changes.
+  - Re-opening this: happens only at beginner difficulty. Happens on weather=on.
+  However still needs fixing.
 - [x] Traffic: for each traffic car, halve its weight. This way they don't
   complely slow you down when crashing.
   - Done: mass and inertia halved (`NFS_TRAFFIC_WEIGHT`, 0.5).
@@ -409,6 +477,11 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 - [ ] In performance view/head to head comparison of each car, have an
   'Advanced...' option which shows acceleration curve, top speed and 0-100
   acceleration for each car (like car_perf.py tool does but in game's UI).
+- [ ] Minimap: instead of showing opponents/cops as big blobs, show them as                                                                  
+  pseudo-voxel triangles, i.e. they consist of an invest Y shape with the bottom                                                             
+  of Y as the top and lines that connect the tips. Note just flat single-color 
+  triangles but pseudo-shaded. Cop triangles should ofc pulse in cop light color 
+  scheme (red and blue).
 
 ### Driving/Gameplay
 - [x] Tire grip by surface: less on snow, sand and grass than on asphalt. Each
@@ -432,6 +505,16 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   meter as a vertical  bottle-shaped bar if gauge is selected to be on the top part of screen,
   else as an outer circle around it.
 - [ ] More means/more effective stratgies of police to chase you; e.g. at higher heat levels; helicopter
+- [x] Mark exhausts in the side view too (some cars have side exits).
+  - Done: `tools/car_exhausts.py` marks in any of its three views -- from
+    behind, from the side and from above -- each picking the body's surface along
+    the axis it looks down (`pick`), with mirroring and middle-click removal
+    working in all of them. (`pick` was also wrong before: it mixed the corners
+    up, so a click only landed by luck.)
+- [x] Torque drag: the curve under the pointer disappeared; it is a ghost now.
+  - Done: while a point is dragged the original curve stays drawn faintly
+    (`GHOST_ALPHA`) so what it is changing from is in sight, and the new curve
+    is drawn over it.
 - [ ] Car visual customization; vinyls (at least some simple ones, like stripes,
   stars, checkflag flags, tribals)
 - [ ] Car visual customization; bodykits and spoiler and side vents, rims etc - these
@@ -531,7 +614,9 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   engine on the front so most of the weight (consider 3/4?) is distributed on the
   front. Some higher-class cars like ferraris and lambos and the A-class jaguar,
   the clk gtr etc have the engine on theback so it's the opposite. Traffic cars
-  also have engine on the front.
+  also have engine on the front. Question: should this only apply to cops? Would
+  it cause too much cause on regular players (opponents ramming each other like
+  crazy). Maybe we need a NFS_ switch for each?
 - [x] Better control in the air - at least be able to turn left right slightly
   (not with as much control as the ground, with some damping)
   - Done (`NFS_AIR_STEER`, `airSteer` in `native_surface.cpp`): the player's
@@ -544,7 +629,12 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 - [ ] misbehavior: since air control got better, now when a car is toppled
   sideways, is still drives but very slow, doesn't reset but keep driving. i
   know it's against physics but when a car is in two sideways wheels, it should
-  have some artificial gravity to bring it back to 4 wheels.
+  have some artificial gravity to bring it back to 4 wheels. To be more precise:
+  if two or more wheels lose contact with ground and the sideways tilt is close to 90 degrees
+  (around 70 to 90) roll it back to the ground smoothy so all 4 wheels make
+  contact. If it is moving too slow (<60kph) on two or more wheels of contact and it's toppling ( >
+  90 degrees between base of car and horizon) for more than 0.5 sec, auto-reset
+  it (like pressing r key).
 
 ### Music/Sound
 - [x] Sound quality is great and sound works well but volume is still too
@@ -616,3 +706,78 @@ Obviously this effect depends on speed.
   - Done: `tools/car_perf.py report` (`tools/car_report.py`): a sheet per car
     (torque/power, gearbox, push in each gear, acceleration, specs), every car
     compared, and a CSV.
+
+- [x] Port tracks from Need For Speed: High Stakes (`nfshs/.../data/TRACKS`).
+  - Done: `tools/port_track.py NAME [--slot N] [--out DIR] [--borrow N]
+    [--force]`. The FRD is converted (High Stakes' layout read, this game's
+    written: road vectors, block headers and payloads reordered, 13-byte
+    polygons to 14, per-polygon road vectors collected into each block's list);
+    the road's objects (`.CAN`), heights (`HEIGHTS.SIM`), textures (`TR0.QFS`)
+    and sky (`SKY.QFS`) are the same formats and are copied; the four `TR*.INI`
+    become the four `.hrz` files, key for key -- Hometown's horizon comes out
+    with this game's own numbers. Nine of High Stakes' nineteen tracks are this
+    game's own (`trk000` home, `trk005` Lost Canyons, `trk006` Aquatica, ...;
+    the art table at `0x559620` and one-for-one road-vector counts), so
+    `--slot N --force` replaces the retail track in place. Every conversion is
+    read back with this game's layout and index-checked.
+  - Fixed on the way: **High Stakes' world is this game's divided by 1.3**. The
+    same road vectors in the same order, the same block centres, heights 1/1.3
+    -- `HEIGHTS.SIM` x 1.3 is `simhts.dat` to float noise on all nine shared
+    tracks. Everything converted is scaled by `SCALE` now; before that the
+    ported tracks sat 23% small under this game's cars.
+  - Undone by the tool itself: the first write into `gamedata/tracks` takes
+    `gamedata/tracks-default.tar.gz` (the tracks as shipped, verified byte for
+    byte against the copy taken before any port) and `--reset [SLOT ...]` puts
+    them back -- every file of every slot, and away with any track that is not
+    the game's -- with `--status` to see how each slot stands and `--dry-run`
+    to look first.
+  - Left: **collision**, and it is portable. `trNN.col` is `COLL` v11: a texture
+    table, a struct3D of collidable meshes, object tables, and a road-vector
+    table -- 36-byte records, one per slice, the same count and order as High
+    Stakes' own road vectors at 1.3x (959 for Hometown). The road half is
+    therefore a re-encoding: `refPt` as 16.16 fixed, the three vectors as
+    signed bytes x128, `leftWall`/`rightWall` as 16.16 but *not* High Stakes'
+    walls x a factor (this game's is High Stakes' + about 3.4, +-0.7, so a
+    generator wants the road's own width instead). Still to do: calibrate the
+    walls, map the texture ids in the texture table (same numbering the
+    polygons need), and build struct3D meshes from High Stakes' FRD objects.
+    For the nine shared tracks `--borrow` is exact and is the default.
+  - Left: the ten tracks this game never had (Coastal, Snowy, Hills, Park,
+    France, Germany, UK, GT1-3) have no slot the menus offer: slots 9 to 13 are
+    empty in the exe's art/place tables, but `location.mnu`'s `tracks` list is
+    filled for nine, so showing a tenth needs the menu and its art.
+  - **Fixed (2026-11-18): the FRD's opening word.** Every retail track opens
+    `0x0135` then `0xbeef`; every High Stakes one `0x0058` then `0xbeef`. Keeping
+    High Stakes' made the game load *no* track at all -- a race that came up
+    with `[VIEW] 1 blocks`, default fog, every bot `d0`, then fell back to the
+    menu and crashed there on `slides/-1_00.qfs`. The converter now writes
+    `0x0135`.
+  - **Crashed (2026-11-18)** on the first drive of ported Aquatica, and the
+    likely cause is found: High Stakes' repeated objects (its per-block
+    `polyobj` list) index the polygon banks that are HS's *extra* chunks 7 to
+    10 -- which this game keeps as the four `polyobj` chunks per block, and the
+    counts match exactly (HS `[28, 0, 10, 0]` to this game's 28, 10) -- and the
+    converter was writing those banks empty while keeping the indices. Left out
+    by default now (`--repeated-objects` to put them back); what is still
+    missing is how HS splits a bank between its objects.
+    `--road-only` / `--skip objects,textures,sky,heights,hrz` bisect a port that
+    will not load. Ruled out on the way: texture ids (HS and retail Aquatica
+    use the same 93, max 147), the polygon filler byte (retail's is 0xF9
+    throughout, which is what is written), the polyobj record stride (20 bytes:
+    all 120 block centres of the converted track land on the retail ones).
+  - Unverified: no race has been driven on a ported track yet -- whether the
+    renderer wants High Stakes' four dropped scenery chunks, whether its texture
+    numbers land on the right pictures, and whether its roadside objects come
+    out as the right ones: Hometown's first block asks for object kind 7 in High
+    Stakes and 9 here, though the `.can` catalogues are the same file byte for
+    byte.
+
+- [x] The exhaust marker crawling on a heavy car -- the Chevrolet Corvette C5R
+      (`chev`, 5282 faces) of a car that answered quickly (2026-11-18).
+  - Done: a car of more than `HEAVY_FACES` (1200) is drawn as **one picture a
+    view** instead of a `PolyCollection` of every face, the colours off
+    included (`textured_view` takes `texture=None` and fills the body's grey a
+    face at a time). The Diablo's 720 faces still go face by face, edges and
+    all.
+  - `NFS_TOOL_HANG=10 python3 tools/car_exhausts.py chev` dumps a stack every
+    ten seconds if it still stops answering, so the next report says where.

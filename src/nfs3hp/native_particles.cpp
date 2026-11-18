@@ -1511,6 +1511,23 @@ void projectParticles(win32::WinApplication* app, x86::reg32 view)
      * the ball is big and as bright as it burns. */
     for (const Flame& flame : s_flames)
     {
+        /* A flame on the far side of its own car is behind the car's body, and
+         * the body's far side faces away from the view and is never drawn --
+         * so it leaves no depth for the cut to find and both pipes' flames
+         * showed from the side (2026-11-18).  The tip's way out along the car's
+         * right, against the camera's: opposite sides, and the camera clear of
+         * the pipe, is a flame the car stands in front of. */
+        {
+            float side = 0.0f, cam = 0.0f;
+            for (int i = 0; i < 3; ++i)
+            {
+                const x86::reg32 k = 4 * x86::reg32(i);
+                side += flame.at[0] * f(flame.car + 0xc0 + k);
+                cam += (t[i] - f(flame.car + 0x98 + k)) * f(flame.car + 0xc0 + k);
+            }
+            if (side * cam < 0.0f && SDL_fabsf(cam) > SDL_fabsf(side) + 0.2f)
+                continue;
+        }
         EffectParticle e{};
         float z = 0.0f;
         /* Where it burns: the car's own space, turned into the world as the car
