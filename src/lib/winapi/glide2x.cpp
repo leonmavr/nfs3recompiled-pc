@@ -21,6 +21,7 @@ static GlideBackend* s_glideRenderer;
 /* The native THRASH driver draws through its own renderer (useThrashRenderer). */
 static bool s_thrashRenderer = false;
 static SwapObserver s_swapObserver;
+static SwapGuestObserver s_swapGuestObserver;
 static x86::reg32 s_preferredAtlasSize = 2048;
 
 void useThrashRenderer(bool on)
@@ -214,6 +215,11 @@ bool screenRect(int& x, int& y, int& w, int& h, int& pictureWidth, int& pictureH
 void setSwapObserver(SwapObserver observer)
 {
     s_swapObserver = observer;
+}
+
+void setSwapGuestObserver(SwapGuestObserver observer)
+{
+    s_swapGuestObserver = observer;
 }
 
 bool atlasFreeSpace(x86::reg32& freeTexels, x86::reg32& freeTiles, x86::reg32& totalTexels)
@@ -819,6 +825,8 @@ static void grBufferSwap(WinApplication* app, x86::CPU& cpu, x86::reg32 swapInte
     app->lockContext(cpu);
     if (s_swapObserver)
         s_swapObserver(app);
+    if (s_swapGuestObserver)
+        s_swapGuestObserver(app, cpu);
 }
 
 static void grSstIsBusy(WinApplication* app, x86::CPU& cpu)

@@ -561,6 +561,9 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     (`cp16bi.ffn`) -- stays 5 s and slides out (`NFS_NOW_PLAYING`,
     `native_now_playing.cpp`, `ThrashRenderer::drawOverlay`).
 - [ ] Music control: what tracks play in game, skip current track button.
+  - Done: skip to the next song, `]` by default, bound under Controls (Next
+    song; the list scrolls now, a triangle at either end), the panel showing
+    it (`NFS_NEXT_SONG_KEY`).
 - [ ] Radio: be able to add your own tracks.
 - [x] Crash sounds by how hard the hit was; metal scraping rising with speed.
 - [ ] Doppler Effect: Passing rival cars, tunnel walls, and roadside barriers 
@@ -599,7 +602,9 @@ Obviously this effect depends on speed.
     a whole 98-sample curve -- `clkg`'s is), so `write_accel` now fills each
     section to its own length.
   - The acceleration chart shows the game's table solid and the tune's own curve
-    dashed over it, live while a point is dragged (the two charts are frozen and
+    dashed over it -- for a car with unsaved edits only, since the model's curve
+    and EA's differ even on an untouched car and drew dashes on every car in the
+    list (and left them after Cancel) -- live while a point is dragged (the two charts are frozen and
     the moving curves drawn over them -- under 5 ms a step, where drawing the
     charts again was over 100). Both meet exactly after a rebuild, which is also
     the check that the preview and Save agree.

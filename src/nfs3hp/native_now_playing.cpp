@@ -1,4 +1,6 @@
 #include <nfs3hp.h>
+#include "native_guest.h"
+#include "native_settings.h"
 #include <lib/file.h>
 #include <lib/overlay.h>
 #include <winapi/glide2x.h>
@@ -34,7 +36,19 @@
  * (gamedata/dashhud/cp16bi.ffn -- a 4-bit picture of every character, the
  * edges dark) and the emblem (gamedata/dashhud/hud98.fsh, the picture "4444",
  * cut out round).  The renderer draws the panel over the finished frame,
- * HUD and all (ThrashRenderer::drawOverlay; include/lib/overlay.h). */
+ * HUD and all (ThrashRenderer::drawOverlay; include/lib/overlay.h).
+ *
+ * The next song (NFS_NEXT_SONG_KEY, ] by default; Controls lists it as Next
+ * Song, native_frontend_controls.cpp): pressed in a race, its music stops and
+ * the next of the ten starts from the top, as the game starts a race's music
+ * -- faded out over the frames that follow, sub_4109d0 then, and
+ * sub_4107c0 with the track, the race music's volume and its form, as the
+ * audio screen does when it turns the music back up -- and
+ * the name it builds is that song's instead of the track's own
+ * (nowPlayingOverride, read by musicIndexOpened): its index file and its
+ * stream both.  The panel shows it at once.  Calling the game needs the
+ * guest's own stack: done right after a frame's swap, from the swap's call
+ * (glide2x::setSwapGuestObserver), every register put back after. */
 namespace nfs3hp
 {
 
@@ -71,6 +85,21 @@ constexpr float kOpacity = 0.7f;   // all of it -- panel, glow, emblem, text -- 
 // The race.
 constexpr x86::reg32 kRaceClock = 0x7d3684;
 constexpr float kTicksPerSecond = 64.0f;
+// The next song.
+constexpr x86::reg32 kKeys = 0x564818;          // a byte a scan code: held
+constexpr x86::reg32 kTrack = 0x6fd4ac;
+constexpr x86::reg32 kRaceMusicVolume = 0x6fbbf0;
+constexpr x86::reg32 kSoundOutput = 0x6fbbe4;   // above 2, the race's music in its other form
+constexpr x86::reg32 kMusicStreaming = 0x5525a0;   // set by sub_4107c0, cleared by sub_4109d0
+constexpr x86::reg32 kStopMusic = 0x4109d0;
+constexpr x86::reg32 kStartRaceMusic = 0x4107c0;   // eax the track, edx the volume, ebx the form
+constexpr x86::reg32 kStreamVolume = 0x4e7470;     // SNDstreamautovol: eax the stream, edx the volume, faded to
+constexpr x86::reg32 kStreamLevel = 0x4e74f0;      // the music's volume as it fades; 0 or less when out
+constexpr x86::reg32 kMusicStream = 0x64;          // the race music's stream, as sub_4109d0 names it
+constexpr Uint64 kFadeMostNs = 3 * SDL_NS_PER_SECOND;   // a fade not done by then, cut
+constexpr x86::reg32 kKeyboard = 4;             // a binding's low byte: the keyboard's
+constexpr x86::reg32 kDefaultKey = 0x5d001b04;  // ']': its character, its scan code, the keyboard
+constexpr const char* kKeySetting = "NFS_NEXT_SONG_KEY";
 // The pictures.
 constexpr const char* kFontFile = "gamedata/dashhud/cp16bi.ffn";
 constexpr const char* kHudFile = "gamedata/dashhud/hud98.fsh";
@@ -133,6 +162,10 @@ struct Art
 };
 
 const Song* s_song = nullptr;     // the race's, from its stream's name
+const char* s_override = nullptr; // the next song's file, for the one start of the music that asks for it
+bool s_keyHeld = false;           // the next song's key, as last seen
+int s_skips = 0;                  // songs on from this one, the music fading out meanwhile
+Uint64 s_fadeStartNs = 0;
 bool s_armed = false;             // to be shown when the clock gets to kDelay
 bool s_clockReset = false;        // the clock seen under kDelay since armed: this race's, not the last's
 bool s_showing = false;
@@ -371,7 +404,111 @@ void show(const Art& a, const Song& song, float shown)
     s_overlaySet = true;
 }
 
+/* The binding, as the game writes one: the character, the scan code, the device. */
+x86::reg32 readKey()
+{
+    const char* value = SDL_getenv(nowplaying::kKeySetting);
+    if (!value || !*value)
+        return nowplaying::kDefaultKey;
+    return x86::reg32(SDL_strtoul(value, nullptr, 0));
+}
+
+x86::reg32 s_key = 0;
+bool s_keyRead = false;
+
 }  // namespace
+
+x86::reg32 nextSongKey()
+{
+    if (!s_keyRead)
+    {
+        s_key = readKey();
+        s_keyRead = true;
+    }
+    return s_key;
+}
+
+void setNextSongKey(x86::reg32 code)
+{
+    s_key = code;
+    s_keyRead = true;
+    char text[16];
+    SDL_snprintf(text, sizeof text, "0x%08x", unsigned(code));
+    settingsSet(nowplaying::kKeySetting, text);
+    settingsSave();
+}
+
+/* The song to open instead of the track's, while the next one starts. */
+const char* nowPlayingOverride()
+{
+    return s_override;
+}
+
+/* Right after a frame's swap, from the swap's call into the port: the next
+ * song's key pressed in a race whose clock runs, its music on, fades the
+ * music out over the next frames -- the game's own stop waits for that fade
+ * (sub_4109d0: SNDstreamautovol to nothing, then the timers run until it is
+ * done), which held the game a second -- and once it is out stops it, the
+ * wait done with, and starts the next song.  Pressed again meanwhile, the
+ * song after that. */
+void nowPlayingSwap(win32::WinApplication* app, x86::CPU& cpu)
+{
+    using namespace nowplaying;
+    const x86::reg32 key = nextSongKey();
+    const bool keyboard = (key & 0xff) == kKeyboard;
+    const bool held = keyboard && app->getMemory<x86::reg8>(kKeys + ((key >> 8) & 0xff)) != 0;
+    const bool pressed = held && !s_keyHeld;
+    s_keyHeld = held;
+    if (!raceIsRunning() || !s_song || app->getMemory<x86::reg32>(kMusicStreaming) == 0)
+    {
+        s_skips = 0;
+        return;
+    }
+    const bool paused = SDL_GetTicksNS() - s_clockMovedNs > kPausedNs;
+    const x86::CPU kept = cpu;
+    if (pressed && !paused)
+    {
+        if (s_skips == 0)
+        {
+            cpu.eax = kMusicStream;
+            cpu.edx = 0;
+            if (!guest::call(app, cpu, kStreamVolume))
+                return;   // the game stopped in it: as it is
+            cpu = kept;
+            s_fadeStartNs = SDL_GetTicksNS();
+        }
+        ++s_skips;
+    }
+    if (s_skips == 0)
+        return;
+    // Faded out yet?  The stream's volume, as the game's stop reads it.
+    if (!guest::call(app, cpu, kStreamLevel))
+        return;
+    const bool out = x86::sreg32(cpu.eax) <= 0 || SDL_GetTicksNS() - s_fadeStartNs > kFadeMostNs;
+    cpu = kept;
+    if (!out)
+        return;
+    std::size_t at = 0;
+    for (std::size_t k = 0; k < std::size(kSongs); ++k)
+        if (&kSongs[k] == s_song)
+            at = k;
+    s_override = kSongs[(at + std::size_t(s_skips)) % std::size(kSongs)].file;
+    s_skips = 0;
+    const x86::reg32 otherForm = x86::sreg32(app->getMemory<x86::reg32>(kSoundOutput)) > 2 ? 1 : 0;
+    bool ok = guest::call(app, cpu, kStopMusic);
+    if (ok)
+    {
+        cpu.eax = app->getMemory<x86::reg32>(kTrack);
+        cpu.edx = app->getMemory<x86::reg32>(kRaceMusicVolume);
+        cpu.ebx = otherForm;
+        ok = guest::call(app, cpu, kStartRaceMusic);
+    }
+    s_override = nullptr;
+    if (!ok)
+        return;
+    cpu = kept;
+    s_clockReset = true;   // shown now, not at the next race's start
+}
 
 /* The stream's file as the game names it (musicStreamFile): which song. */
 void nowPlayingStream(const char* path)
@@ -401,10 +538,19 @@ void nowPlayingTick(win32::WinApplication* app)
     using namespace nowplaying;
     const float hold = holdSeconds();
     const bool running = raceIsRunning();
+    if (running)
+    {
+        // Whether the race's clock runs (the next song waits out a pause too).
+        const x86::sreg32 clock = x86::sreg32(app->getMemory<x86::reg32>(kRaceClock));
+        if (clock != s_lastClock)
+            s_clockMovedNs = SDL_GetTicksNS();
+    }
     if (hold <= 0.0f || !running)
     {
         if (!running)
             s_showing = false;
+        else
+            s_lastClock = x86::sreg32(app->getMemory<x86::reg32>(kRaceClock));
         s_wasRunning = running;
         hide();
         return;
@@ -419,8 +565,6 @@ void nowPlayingTick(win32::WinApplication* app)
     s_wasRunning = true;
     const x86::sreg32 clock = x86::sreg32(app->getMemory<x86::reg32>(kRaceClock));
     const Uint64 now = SDL_GetTicksNS();
-    if (clock != s_lastClock)
-        s_clockMovedNs = now;
     if (clock < s_lastClock && s_song)
     {
         s_armed = true;   // restarted

@@ -2,6 +2,7 @@
 #define glide2x_H_
 
 #include <x86.h>
+#include <cpu.h>
 #include <winapi/types.h>
 #include <vector>
 #include <lib/effectparticle.h>
@@ -28,6 +29,10 @@ extern Library* s_glide2xRegistry;
  * without this one knowing anything about it.  One observer; null removes it. */
 using SwapObserver = void (*)(WinApplication* app);
 void setSwapObserver(SwapObserver observer);
+/* The same moment, with the guest's registers: an observer that calls into
+ * the game (below esp, every register put back after) does it here. */
+using SwapGuestObserver = void (*)(WinApplication* app, x86::CPU& cpu);
+void setSwapGuestObserver(SwapGuestObserver observer);
 
 /* Where the game's picture sits inside the window, in window pixels, and the
  * size of the picture itself.  This is the letterbox rectangle the renderer

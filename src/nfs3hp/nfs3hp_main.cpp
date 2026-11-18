@@ -1071,6 +1071,8 @@ void hudLayoutsDrawn(win32::WinApplication* app, x86::CPU& cpu, bool drawn)
 static char s_musicIndex[256];
 void nowPlayingStream(const char* path);              // native_now_playing.cpp
 void nowPlayingTick(win32::WinApplication* app);      // and the panel that shows it
+const char* nowPlayingOverride();                     // and the next song, while it starts
+void nowPlayingSwap(win32::WinApplication* app, x86::CPU& cpu);
 
 void musicIndexOpened(win32::WinApplication* app, x86::reg32 path)
 {
@@ -1081,7 +1083,22 @@ void musicIndexOpened(win32::WinApplication* app, x86::reg32 path)
         s_musicIndex[i] = letter;
         s_musicIndex[i + 1] = '\0';
         if (!letter)
+        {
+            /* The next song asked for (native_now_playing.cpp): its name for
+             * the track's, between the folder and the extension, in the
+             * game's buffer too -- 0x100 bytes, a name the same length. */
+            const char* other = nowPlayingOverride();
+            char* slash = SDL_strrchr(s_musicIndex, '\\');
+            char* stem = slash ? slash + 1 : s_musicIndex;
+            char* dot = SDL_strrchr(stem, '.');
+            if (other && dot && size_t(dot - stem) == SDL_strlen(other))
+            {
+                SDL_memcpy(stem, other, SDL_strlen(other));
+                for (size_t k = 0; s_musicIndex[k]; ++k)
+                    app->getMemory<x86::reg8>(path + x86::reg32(k)) = x86::reg8(s_musicIndex[k]);
+            }
             return;
+        }
     }
     /* Longer than any name of the game's: keep none rather than half of one. */
     s_musicIndex[0] = '\0';
@@ -3407,6 +3424,7 @@ int main(int argc, char* argv[])
         loadTouchScript();
 #endif
         win32::glide2x::setSwapObserver(onSwap);
+        win32::glide2x::setSwapGuestObserver(nfs3hp::nowPlayingSwap);
         SDL_AddEventWatch(backgroundWatch, static_cast<win32::WinApplication*>(&app));
 #ifndef __ANDROID__
         SDL_AddEventWatch(movieKeyWatch, nullptr);

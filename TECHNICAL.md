@@ -1057,6 +1057,34 @@ frame, HUD and all (`ThrashRenderer::drawOverlay`, `include/lib/overlay.h`:
 quads in HUD units, 480 to the picture's height). `NFS_NOW_PLAYING` (on, five
 seconds; a number for how many, up to 30; `0`/`off` never).
 
+**The next song.** In a race, `]` stops the music and starts the next of the
+ten songs from its beginning (in the order homerock, hometech, lostrock, ...,
+emprtech, round again), and the panel shows it at once. The key is bound under
+Options -> Controls, a row of its own at the foot of the list, **Next song**,
+bound as any other: Enter, then the key. The game's list already filled the
+screen with its thirteen rows, so it scrolls now: thirteen show, up or down
+past either end moves it a row, and a small yellow triangle of the menus' own
+(`yup1`, `ydn1`) just right of the first or last row says there is more that
+way (`src/nfs3hp/native_frontend_controls.cpp`: the list's drawing,
+`sub_43c900`, and its keys, `sub_43cf80`, decompiled with the extra row; with
+two players' columns, split screen, the game's own list as it was). The
+binding is kept in `nfs3hp.ini` as the game writes one -- the key's
+character, its scan code, 4 for the keyboard: `NFS_NEXT_SONG_KEY =
+0x5d001b04` is `]` -- and the key is read from the game's own table of keys
+held (`[0x564818 + scan code]`). Starting a song is the game's own, as its
+audio screen does when the music is turned back up: `sub_4109d0` stops the
+music, `sub_4107c0` starts the track's with the race music's volume, and the
+name it builds -- folder, track, rock or tech, then the index's extension and
+the stream's -- carries the next song's instead (`musicIndexOpened`). Calling
+the game needs the guest's own stack, so it is done right after a frame's
+swap, from the swap's call (`glide2x::setSwapGuestObserver`), every register
+put back after. The game's stop fades the music out and then waits for the fade
+(SNDstreamautovol to nothing, the sound's timers run until its level is 0),
+which held the game a second; so the fade is started on the key, left to run
+over the frames that follow, and the stop and the start come once it is out
+(at most 3 s) -- the old song fading, the game never held. Pressed again
+meanwhile, it goes a song further. Not while paused, nor with the music off.
+
 ### Reading the game's UI art
 
 What the port draws in the game's own style it takes from the game's files,
@@ -1092,6 +1120,23 @@ folder per file, to look for one. Found that way:
 | Small triangles, 12 square: yellow up and down, blue up and down | `fedata/art/mmnu.qfs`: `yup1`, `ydn1`, `bup1`, `bdn1` |
 | The menus' glowing yellow outlines (a square, triangles each way) | `mmnu.qfs`: `int2`..`int9`, `inta`.. |
 | The HUD's bars (navy, a grey bevel) | `hud98.fsh`, `4444` from y 128 |
+| The Controls list's row bar, and its blink while a key is waited for | `mmnu.qfs`: `con2`, `con1` |
+
+**The Controls list.** A menu file's sections are typed by name (`button`,
+`slider`, `cascade`, ... `controls`); the table at `0x557b6c` gives each type
+its number, name and handlers -- `controls` is 0x14, its handlers
+`sub_43d310` (made: the layout's globals -- row height `[0x555608]`, 25 or
+22 in a race, the key column `[0x5f3d9c]` -- and the bars' images), `sub_43c900`
+(drawn), `sub_43cf80` (a key) and `sub_43d2b0` (its box: 13 rows high). Its
+thirteen rows are each player's control set (`sub_4904d0`: 13 dwords a
+player, the second player's 0x34 on), named by lines 0x46 to 0x51 and 0x1bc of
+the language's text in an order of their own, each row indented by the curve
+at `[0x55560c]`; the selection is the row under the menus' pointer
+(`sub_49c1c0`), and up and down move the pointer. A binding as the game keeps
+it: a key's character << 24, its scan code << 8, 4 for the keyboard
+(`sub_43cda0` makes one of a key; `sub_43c110` draws its name). The port draws
+and keys the list itself, a row more and scrolling
+(`native_frontend_controls.cpp`; The next song, above).
 
 ### Network races
 
@@ -1849,6 +1894,46 @@ is left alone and becomes the speed held from then on -- a wall in the air is a
 hit, and a hit is meant -- and a car back on its wheels holds nothing.
 `NFS_AIR_SPEED` (`0`/`off` for the game's).
 
+### What the effects cost, and keeping frames even
+
+Measured on the weakest GPU at hand -- Intel UHD (Comet Lake GT2), Mesa, 1080p,
+a race in the rain -- with `NFS_PERF_TRACE=2`, which leaves each costly effect
+out in turn for two seconds and logs the frame's GPU time without it
+(2026-11-18). Roughly, each effect's share of a frame:
+
+| Effect | ms | Switch |
+|---|---|---|
+| Bicubic (Catmull-Rom) magnification of the game's textures | 3 to 4 (5 to 6 before the 5-tap form) | `NFS_TEXTURE_SHARP` |
+| The lamps' light trails | ~3 | `NFS_LIGHT_TRAILS` |
+| Grain on the road, the ground and the world | 1.5 to 2 | `NFS_ROAD_DETAIL`, `NFS_OBJECT_DETAIL` |
+| Rain on the lens | 1.5 to 2 | `NFS_LENS_RAIN` |
+| Haze | 1 to 2 | `NFS_HAZE` |
+| The wet road's reflection | ~1 | `NFS_WET_ROADS` |
+| The port's particles, with the soft ones at half size | ~2 (5 to 18 full size, near the lens in the rain) | `NFS_PARTICLES_HALF` |
+
+What was done about the slow frames:
+
+- **The particle pool** moved a third of a megabyte for each particle added to
+  a full one (see A full pool, above); now one is replaced where it stands.
+- **The soft particles at half size** (above): the spray's mist and the smoke,
+  a quarter of the pixels.
+- **Bicubic in 5 taps.** The Catmull-Rom magnification (`sharpTexture`) took
+  9 bilinear taps a pixel, the 16 texels' weights folded into the filter's
+  own; it takes 5 now -- the middle and the four sides, the corners' weights,
+  the smallest, left out -- for a picture the eye cannot tell apart; and
+  the GPU's own filtered read (the dearest, at 16x anisotropic) is made only
+  where it is blended in, not under every magnified pixel: about 1.5 ms less.
+- **Adaptive vsync.** What looked like 40 to 50 ms spikes were frames a little
+  over 33 ms: with plain vsync a frame that misses a refresh waits for the
+  next, and a 35 ms frame is shown at 50. The swap interval is -1 now
+  (`Renderer`, `SDL_GL_SetSwapInterval(-1)`): a late frame goes out at once,
+  torn for that frame, rather than held; where the driver has no adaptive
+  vsync it falls back to 1. `NFS_VSYNC=strict` keeps plain vsync.
+- **What the game uploads** is timed too: `NFS_PERF_TRACE=1` logs any frame
+  over 35 ms on the game thread with the textures uploaded in it, their size
+  and the time they took (`uploadTexture`, split out of `setTextureData` for
+  it), to tell a GPU spike from a loading one.
+
 ### A race loads in a moment
 
 Most of a race's loading time was waiting: the game flips its loading picture
@@ -2253,11 +2338,15 @@ hands the curve on (`CurveDrag`). The "Torque x" box still scales the whole
 curve at once, and a factor typed there is folded into the points when the next
 drag starts, so the two never bite each other.
 
-**The acceleration chart shows both curves**: the game's own table, and dashed
-over it what the engine as tuned now makes of the car -- the same curve Save
-writes when it rebuilds the tables, carried through the same road (the pending
-changes applied to a copy of the car, the model's estimate for it, scaled to the
-car's own level), so the two meet exactly after a rebuild. The "Worked out"
+**The acceleration chart shows both curves**: the game's own table, and -- for a
+car with unsaved edits on it -- dashed over it what the engine as tuned now
+makes of the car: the same curve Save writes when it rebuilds the tables,
+carried through the same road (the pending changes applied to a copy of the
+car, the model's estimate for it, scaled to the car's own level), so the two
+meet exactly after a rebuild. A car nobody has touched shows only the game's
+table: the model's curve and EA's differ a little even there, and drawing that
+as "this tune" made every car in the list look edited -- the dashes came up on
+all of them, and stayed up after Cancel. The "Worked out"
 column has the times out of each. Both move *while* a point is dragged: a chart
 of its own costs tens of milliseconds to draw, so instead of drawing it again
 the drag freezes the two charts as they are -- their curves hidden, their pixels
@@ -2597,6 +2686,7 @@ the next time the game starts.
 | `NFS_AUDIO_RATE` | unset | The output's own sample rate. The game mixes at 22050 Hz and SDL converts to this; a device opened at any other rate is resampled by Android, off its low-latency path. Unset, the device opens at SDL's default. |
 | `NFS_VOLUME` | `1.8` | How far the game's sound is lifted on its way to the device (`include/lib/loudness.h`, applied in `src/nfs3hp/native_sound.cpp`), 0.1 to 8. Above -2.5 dBFS the lifted sound's peaks are rounded off (a soft saturator), and a limiter that looks 3 ms ahead holds what is left under -1 dBFS; `1` leaves the mix as the game made it. Higher is louder but rounds off more of the sound. The Audio screen's own sliders start at 50%, and raising them is the other way up. |
 | `NFS_NOW_PLAYING` | on | `0`/`off`: no panel naming the song as a race starts. `1`/`on`: it stays five seconds; another number up to 30: that many (The song now playing). |
+| `NFS_NEXT_SONG_KEY` | `0x5d001b04` (`]`) | The key that starts the next song in a race, as the game writes a binding: its character << 24, its scan code << 8, 4 for the keyboard. Set from Controls (Next song); `0` for none (The song now playing). |
 | `NFS_HEADLIGHT_OBJECTS` | on (`1.6`) | `0`/`off`: the player's headlights light only the road, as the game has them. A number: how bright they are on the walls, fences, trees and buildings (Headlights on what stands by the road). |
 | `NFS_MOTION_BLUR` | on (`2`) | `0`/`off`: no motion blur. A number: how long the shutter, times a ninetieth of a second (Speed you can feel). |
 | `NFS_LIGHT_GLOW` | on (`1`) | `0`/`off`: the lamps' glow as the game has it, a star of spikes. A number up to 3: how strong the halo round the soft glow (The lamps' glow, and their trails). |

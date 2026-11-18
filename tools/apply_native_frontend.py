@@ -36,6 +36,7 @@ DIALOG_HEADER = "// Port (tools/apply_native_frontend.py): defined in native_fro
 OPTIONS_HEADER = "// Port (tools/apply_native_frontend.py): defined in native_frontend_options.cpp.\n"
 CARS_HEADER = "// Port (tools/apply_native_frontend.py): defined in native_frontend_cars.cpp.\n"
 TRACKS_HEADER = "// Port (tools/apply_native_frontend.py): defined in native_frontend_tracks.cpp.\n"
+CONTROLS_HEADER = "// Port (tools/apply_native_frontend.py): defined in native_frontend_controls.cpp.\n"
 
 # (module, function, decompiled stand-in)
 # The menu engine: the .MNU loader and what it reads with.
@@ -242,6 +243,13 @@ TRACKS_SITES = [
     ("nfs3hp", "sub_4c9590", "infoStopSpeaking"),
 ]
 
+# The Controls screen's list of keys (a "controls" widget): drawn and keyed
+# with a row of the port's more, scrolling.
+CONTROLS_SITES = [
+    ("nfs3hp", "sub_43c900", "controlsDraw"),
+    ("nfs3hp", "sub_43cf80", "controlsKey"),
+]
+
 
 def apply(root):
     apply_sites(root, MENUS_SITES, MENUS_HEADER, "tools/apply_native_frontend.py")
@@ -250,6 +258,7 @@ def apply(root):
     apply_sites(root, OPTIONS_SITES, OPTIONS_HEADER, "tools/apply_native_frontend.py")
     apply_sites(root, CARS_SITES, CARS_HEADER, "tools/apply_native_frontend.py")
     apply_sites(root, TRACKS_SITES, TRACKS_HEADER, "tools/apply_native_frontend.py")
+    apply_sites(root, CONTROLS_SITES, CONTROLS_HEADER, "tools/apply_native_frontend.py")
 
 
 if __name__ == "__main__":

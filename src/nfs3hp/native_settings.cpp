@@ -122,6 +122,7 @@ each one does.
 # NFS_GRIP_ON_OPPONENTS = 1
 # NFS_VOLUME = 1.8
 # NFS_NOW_PLAYING = on
+# NFS_NEXT_SONG_KEY = 0x5d001b04
 
 [The opponents, the cops and the traffic]
 # NFS_AI_TUNE = on
