@@ -1069,6 +1069,8 @@ void hudLayoutsDrawn(win32::WinApplication* app, x86::CPU& cpu, bool drawn)
  * leaves the game's own name alone, and the stream finds no file where the copy
  * used to be: a race without music rather than a race with the wrong one. */
 static char s_musicIndex[256];
+void nowPlayingStream(const char* path);              // native_now_playing.cpp
+void nowPlayingTick(win32::WinApplication* app);      // and the panel that shows it
 
 void musicIndexOpened(win32::WinApplication* app, x86::reg32 path)
 {
@@ -1094,6 +1096,7 @@ void musicStreamFile(win32::WinApplication* app, x86::reg32 path)
     for (size_t i = 0; i <= length; ++i)
         app->getMemory<x86::reg8>(path + x86::reg32(i)) = x86::reg8(s_musicIndex[i]);
     SDL_Log("[MUSIC] streaming %s", s_musicIndex);
+    nowPlayingStream(s_musicIndex);
 }
 
 /* A new player's settings (tools/apply_first_settings.py).  With no settings
@@ -2627,6 +2630,7 @@ void onSwap(win32::WinApplication* app)
     nfs3hp::headlightsFrameDone();
     wetRoadTick(app);
     colourGradeTick(app);
+    nfs3hp::nowPlayingTick(app);
 #ifndef __ANDROID__
     scriptTick();
 #endif

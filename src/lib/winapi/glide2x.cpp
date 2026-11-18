@@ -183,6 +183,12 @@ bool effectParticlesDrawn()
     return s_directRenderer && s_directRenderer->particlesDrawn();
 }
 
+void overlay(std::shared_ptr<const Overlay> overlay)
+{
+    if (s_directRenderer)
+        s_directRenderer->setOverlay(std::move(overlay));
+}
+
 void motion(float speed)
 {
     if (s_directRenderer)

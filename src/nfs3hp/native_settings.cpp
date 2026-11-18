@@ -121,6 +121,7 @@ each one does.
 # NFS_SURFACE_GRIP = 1
 # NFS_GRIP_ON_OPPONENTS = 1
 # NFS_VOLUME = 1.8
+# NFS_NOW_PLAYING = on
 
 [The opponents, the cops and the traffic]
 # NFS_AI_TUNE = on

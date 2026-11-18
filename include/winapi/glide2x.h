@@ -5,6 +5,8 @@
 #include <winapi/types.h>
 #include <vector>
 #include <lib/effectparticle.h>
+#include <lib/overlay.h>
+#include <memory>
 
 namespace win32
 {
@@ -52,6 +54,9 @@ void motion(float speed);
  * game's own are kept then). */
 bool effectParticles(std::vector<EffectParticle>&& particles);
 bool effectParticlesDrawn();
+/* The port's overlay over the race's finished frames (lib/overlay.h): from
+ * the next frame on what to draw, null for nothing. */
+void overlay(std::shared_ptr<const Overlay> overlay);
 void colourGrade(float red, float green, float blue, float saturation, float contrast);
 /* The player's headlights in the view (origin, direction, the car's up) and the
  * projection's scale and centre, for lighting what stands beside the road. */

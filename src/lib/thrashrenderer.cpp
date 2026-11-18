@@ -3149,6 +3149,204 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
     glBindSampler(0, 0);
 }
 
+/* The port's overlay (lib/overlay.h), over a race's finished frame, HUD and
+ * all: quads in the picture's pixels, each a panel worked out here, a
+ * character of the HUD's font or the emblem.  The panel: the HUD's navy,
+ * darker to its foot, its corners rounded, a yellow line round it and a glow
+ * fading out from that (u_panel: half its width and height, the corners'
+ * radius and the glow's reach, HUD units; u_unit: pixels a unit).  The
+ * pictures are premultiplied, and so is what comes out. */
+static const char g_overlayVertexShader[] =
+"layout (location=0) in vec2 a_position;"
+"layout (location=1) in vec2 a_uv;"
+"layout (location=2) in vec4 a_color;"
+"layout (location=3) in float a_kind;"
+"out vec2 v_uv;"
+"out vec4 v_color;"
+"flat out int v_kind;"
+"uniform vec2 u_size;"
+"void main()"
+"{"
+"    v_uv = a_uv;"
+"    v_color = a_color;"
+"    v_kind = int(a_kind + 0.5);"
+"    gl_Position = vec4(a_position / u_size * 2.0 - 1.0, 0.0, 1.0);"
+"}";
+
+static const char g_overlayShader[] =
+"in vec2 v_uv;"
+"in vec4 v_color;"
+"flat in int v_kind;"
+"uniform sampler2D u_font;"
+"uniform sampler2D u_icon;"
+"uniform vec4 u_panel;"
+"uniform vec3 u_glow;"
+"uniform float u_unit;"
+"out vec4 o_color;"
+"void main()"
+"{"
+"    if (v_kind == 1)"
+"    {"
+"        vec4 t = texture(u_font, v_uv);"
+"        o_color = vec4(t.rgb * v_color.rgb, t.a) * v_color.a;"
+"        return;"
+"    }"
+"    if (v_kind == 2)"
+"    {"
+"        o_color = texture(u_icon, v_uv) * v_color.a;"
+"        return;"
+"    }"
+"    vec2 q = abs(v_uv) - (u_panel.xy - u_panel.z);"
+"    float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - u_panel.z;"
+"    float down = clamp(v_uv.y / (2.0 * u_panel.y) + 0.5, 0.0, 1.0);"
+"    vec3 fill = v_color.rgb * mix(1.0, 0.45, down);"
+"    float fillA = clamp(0.5 - d * u_unit, 0.0, 1.0) * 0.78;"
+"    float line = clamp(1.0 - (abs(d + 0.45) - 0.45) * u_unit, 0.0, 1.0);"
+"    float glow = d > -0.5 ? exp(-max(d, 0.0) / (u_panel.w * 0.45)) * 0.55 : 0.0;"
+"    float edge = clamp(line * 0.95 + glow, 0.0, 1.0);"
+"    o_color = (vec4(fill * fillA, fillA) * (1.0 - edge) + vec4(u_glow * edge, edge)) * v_color.a;"
+"}";
+
+static unsigned int overlayTexture(int width, int height, const std::vector<std::uint8_t>& texels)
+{
+    GLuint texture = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    int levels = 1;
+    for (int size = SDL_max(width, height); size > 1; size >>= 1)
+        ++levels;
+    glTexStorage2D(GL_TEXTURE_2D, levels, GL_RGBA8, width, height);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, texels.data());
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    return texture;
+}
+
+/* Into the framebuffer as the frame left it (its picture bound); every state
+ * touched put back as it was, the next frame's drawing assuming its own. */
+void ThrashRenderer::drawOverlay(const Overlay& overlay, int width, int height)
+{
+    const std::shared_ptr<const OverlayArt>& art = overlay.art;
+    constexpr GLint kFontUnit = 9, kIconUnit = 10;   // clear of every unit the frame uses
+    if (m_overlayFailed || !art || overlay.quads.empty() || width <= 0 || height <= 0)
+        return;
+    if (!m_overlayProgram)
+    {
+        const GLuint vertex = compileShader(GL_VERTEX_SHADER, "", g_overlayVertexShader);
+        const GLuint fragment = compileShader(GL_FRAGMENT_SHADER, "", g_overlayShader);
+        m_overlayProgram = glCreateProgram();
+        glAttachShader(m_overlayProgram, vertex);
+        glAttachShader(m_overlayProgram, fragment);
+        glLinkProgram(m_overlayProgram);
+        glDeleteShader(vertex);
+        glDeleteShader(fragment);
+        GLint linked = 0;
+        glGetProgramiv(m_overlayProgram, GL_LINK_STATUS, &linked);
+        if (!linked)
+        {
+            SDL_LogError(SDL_LOG_CATEGORY_RENDER, "[GFX] overlay: its shader did not link; none drawn");
+            m_overlayFailed = true;
+            return;
+        }
+        glGenVertexArrays(1, &m_overlayArray);
+        glGenBuffers(1, &m_overlayBuffer);
+    }
+    GLint activeTexture = 0, program = 0, array = 0, buffer = 0, fontWas = 0, iconWas = 0;
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &activeTexture);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &array);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &buffer);
+    glActiveTexture(GL_TEXTURE0 + kFontUnit);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &fontWas);
+    glActiveTexture(GL_TEXTURE0 + kIconUnit);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &iconWas);
+    if (m_overlayUploaded != art.get())
+    {
+        if (m_overlayFont)
+            glDeleteTextures(1, &m_overlayFont);
+        if (m_overlayIcon)
+            glDeleteTextures(1, &m_overlayIcon);
+        m_overlayFont = overlayTexture(art->fontW, art->fontH, art->font);
+        m_overlayIcon = overlayTexture(art->iconW, art->iconH, art->icon);
+        m_overlayUploaded = art.get();
+    }
+    glActiveTexture(GL_TEXTURE0 + kFontUnit);
+    glBindTexture(GL_TEXTURE_2D, m_overlayFont);
+    glActiveTexture(GL_TEXTURE0 + kIconUnit);
+    glBindTexture(GL_TEXTURE_2D, m_overlayIcon);
+    GLboolean mask[4] = { GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE };
+    glGetBooleanv(GL_COLOR_WRITEMASK, mask);
+    GLint blendSrc = 0, blendDst = 0, blendSrcA = 0, blendDstA = 0;
+    glGetIntegerv(GL_BLEND_SRC_RGB, &blendSrc);
+    glGetIntegerv(GL_BLEND_DST_RGB, &blendDst);
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &blendSrcA);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &blendDstA);
+    const GLboolean depth = glIsEnabled(GL_DEPTH_TEST), cull = glIsEnabled(GL_CULL_FACE),
+                    blend = glIsEnabled(GL_BLEND), scissor = glIsEnabled(GL_SCISSOR_TEST);
+
+    // Six corners a quad: position (pixels), uv, colour, kind.
+    const float unit = float(height) / kOverlayUnits;
+    std::vector<float> corners;
+    corners.reserve(overlay.quads.size() * 6 * 9);
+    for (const OverlayQuad& q : overlay.quads)
+    {
+        const float xs[2] = { q.x0 * unit, q.x1 * unit }, ys[2] = { q.y0 * unit, q.y1 * unit };
+        const float us[2] = { q.u0, q.u1 }, vs[2] = { q.v0, q.v1 };
+        static const int order[6][2] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 0 }, { 1, 1 }, { 0, 1 } };
+        for (const auto& c : order)
+        {
+            const float corner[9] = { xs[c[0]], ys[c[1]], us[c[0]], vs[c[1]], q.r, q.g, q.b, q.a, float(q.kind) };
+            corners.insert(corners.end(), corner, corner + 9);
+        }
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_renderer->m_texture, 0);
+    glViewport(0, 0, width, height);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_SCISSOR_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);   // the picture's alpha is the frame's own
+    glUseProgram(m_overlayProgram);
+    glUniform2f(glGetUniformLocation(m_overlayProgram, "u_size"), float(width), float(height));
+    glUniform1i(glGetUniformLocation(m_overlayProgram, "u_font"), kFontUnit);
+    glUniform1i(glGetUniformLocation(m_overlayProgram, "u_icon"), kIconUnit);
+    glUniform4f(glGetUniformLocation(m_overlayProgram, "u_panel"), overlay.panelHalfW, overlay.panelHalfH,
+                overlay.panelRadius, SDL_max(overlay.panelGlow, 0.01f));
+    glUniform3f(glGetUniformLocation(m_overlayProgram, "u_glow"), overlay.glowR, overlay.glowG, overlay.glowB);
+    glUniform1f(glGetUniformLocation(m_overlayProgram, "u_unit"), unit);
+    glBindVertexArray(m_overlayArray);
+    glBindBuffer(GL_ARRAY_BUFFER, m_overlayBuffer);
+    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(corners.size() * sizeof(float)), corners.data(), GL_STREAM_DRAW);
+    const GLsizei stride = 9 * sizeof(float);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, (const void*)0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, (const void*)(2 * sizeof(float)));
+    glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, stride, (const void*)(4 * sizeof(float)));
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, stride, (const void*)(8 * sizeof(float)));
+    for (GLuint k = 0; k < 4; ++k)
+        glEnableVertexAttribArray(k);
+    glDrawArrays(GL_TRIANGLES, 0, GLsizei(corners.size() / 9));
+
+    glColorMask(mask[0], mask[1], mask[2], mask[3]);
+    glBlendFuncSeparate(GLenum(blendSrc), GLenum(blendDst), GLenum(blendSrcA), GLenum(blendDstA));
+    (blend ? glEnable : glDisable)(GL_BLEND);
+    (depth ? glEnable : glDisable)(GL_DEPTH_TEST);
+    (cull ? glEnable : glDisable)(GL_CULL_FACE);
+    (scissor ? glEnable : glDisable)(GL_SCISSOR_TEST);
+    glBindBuffer(GL_ARRAY_BUFFER, GLuint(buffer));
+    glBindVertexArray(GLuint(array));
+    glUseProgram(GLuint(program));
+    glActiveTexture(GL_TEXTURE0 + kIconUnit);
+    glBindTexture(GL_TEXTURE_2D, GLuint(iconWas));
+    glActiveTexture(GL_TEXTURE0 + kFontUnit);
+    glBindTexture(GL_TEXTURE_2D, GLuint(fontWas));
+    glActiveTexture(GLenum(activeTexture));
+}
+
 void ThrashRenderer::swap()
 {
     /* NFS_PERF_TRACE: a frame slower than kSlowFrameMs on the game thread, said
@@ -3199,7 +3397,9 @@ void ThrashRenderer::swap()
     m_renderer->paceFrame();
     const bool keepFrame = m_wetness > 0.0f && m_detailTexture;
     const int frameW = int(m_renderer->m_width), frameH = int(m_renderer->m_height);
-    glthread::post(m_renderer, [this, keepFrame, frameW, frameH]() {
+    // The port's overlay, over a race's frame alone (setOverlay).
+    std::shared_ptr<const Overlay> overlay = m_raceView ? m_overlay : nullptr;
+    glthread::post(m_renderer, [this, keepFrame, frameW, frameH, overlay]() {
         /* The texture the next frame's wet road reflects (only while the road
          * is wet); drawPending fills it as the HUD begins. */
         if (keepFrame)
@@ -3232,6 +3432,9 @@ void ThrashRenderer::swap()
         {
             m_reflectionValid = false;
         }
+        // Over the HUD, after the reflection was taken of the frame without it.
+        if (overlay && m_sceneDrawn)
+            drawOverlay(*overlay, frameW, frameH);
         /* NFS_FRAME_DUMP: NFS_FRAME_DUMP_COUNT race frames in a row (90, three
          * seconds) from the NFS_FRAME_DUMP_AT'th (600: past the countdown, the
          * car on its way), each with a line of how it was drawn.  A race's

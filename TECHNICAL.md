@@ -1036,6 +1036,27 @@ that down for the mirror (a reach of 100 against 500, the far track model, cars
 at 0.6 of their size, a flat sky). There is no menu option;
 `NFS_MIRROR_FULL=0` brings the original's mirror back (`tools/apply_mirror_detail.py`).
 
+### The song now playing
+
+A second into every race, a small panel slides in at the bottom left: the artist
+in yellow and the song in white, in the HUD's own font, on the HUD's navy with
+a yellow glow round its edge and the NFS emblem at its left. It stays five
+seconds and slides back out; again if the race is restarted; a pause hides it
+where it is. Which song is the file the race streams
+(`gamedata/audio/pc/<track><rock|tech>.mus`, named by the game itself as it
+opens it, `musicStreamFile`): the ten files are the game's ten race songs,
+their titles the game's own (`text.eng`), their artists the soundtrack's. The
+last song named is kept from race to race: a race on the track just raced may
+not open its file again, and it still shows its song. The whole panel, glow
+and emblem and all, is 70% opaque (`kOpacity`). The font is `gamedata/dashhud/cp16bi.ffn`
+(4 bits a texel, the high half first; the low values are the characters' dark
+edges, so it is drawn white with them kept), the emblem cut round out of
+`hud98.fsh`'s picture `4444`, both read once
+(`src/nfs3hp/native_now_playing.cpp`). The renderer lays it over the finished
+frame, HUD and all (`ThrashRenderer::drawOverlay`, `include/lib/overlay.h`:
+quads in HUD units, 480 to the picture's height). `NFS_NOW_PLAYING` (on, five
+seconds; a number for how many, up to 30; `0`/`off` never).
+
 ### Network races
 
 The game's Connection screen offers IPX and TCP/IP; RaceNet, Modem and Serial
@@ -2539,6 +2560,7 @@ the next time the game starts.
 | `NFS_NATIVE_CHECK` | off | `1` runs each native stand-in against the generated code and logs any difference (`[NATIVE]`). The polygon and car loops are compared over all of guest memory once a second. Slow, and draws some triangles twice. `clip` checks only the stand-ins of the clipping (both ways to the screen, the car's quad mesh included), the track, the effects, the car lights and detail, the objects and the vector math, every call; the small helpers called from hundreds of places are checked on every 64th call. |
 | `NFS_AUDIO_RATE` | unset | The output's own sample rate. The game mixes at 22050 Hz and SDL converts to this; a device opened at any other rate is resampled by Android, off its low-latency path. Unset, the device opens at SDL's default. |
 | `NFS_VOLUME` | `1.8` | How far the game's sound is lifted on its way to the device (`include/lib/loudness.h`, applied in `src/nfs3hp/native_sound.cpp`), 0.1 to 8. Above -2.5 dBFS the lifted sound's peaks are rounded off (a soft saturator), and a limiter that looks 3 ms ahead holds what is left under -1 dBFS; `1` leaves the mix as the game made it. Higher is louder but rounds off more of the sound. The Audio screen's own sliders start at 50%, and raising them is the other way up. |
+| `NFS_NOW_PLAYING` | on | `0`/`off`: no panel naming the song as a race starts. `1`/`on`: it stays five seconds; another number up to 30: that many (The song now playing). |
 | `NFS_HEADLIGHT_OBJECTS` | on (`1.6`) | `0`/`off`: the player's headlights light only the road, as the game has them. A number: how bright they are on the walls, fences, trees and buildings (Headlights on what stands by the road). |
 | `NFS_MOTION_BLUR` | on (`2`) | `0`/`off`: no motion blur. A number: how long the shutter, times a ninetieth of a second (Speed you can feel). |
 | `NFS_LIGHT_GLOW` | on (`1`) | `0`/`off`: the lamps' glow as the game has it, a star of spikes. A number up to 3: how strong the halo round the soft glow (The lamps' glow, and their trails). |

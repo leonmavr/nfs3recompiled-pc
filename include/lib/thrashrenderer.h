@@ -3,6 +3,7 @@
 
 #include <lib/gliderenderer.h>
 #include <lib/effectparticle.h>
+#include <lib/overlay.h>
 #include <memory>
 #include <string>
 #include <array>
@@ -129,6 +130,9 @@ public:
     }
     // Whether the whole-picture pass is on to draw them (initPost).
     bool particlesDrawn() const { return m_particlesOn; }
+    /* The port's overlay (glide2x::overlay): what the race's frames show from
+     * the next on, over the HUD (drawOverlay). */
+    void setOverlay(std::shared_ptr<const Overlay> overlay) { m_overlay = std::move(overlay); }
     void setColourGrade(float red, float green, float blue, float saturation, float contrast)
     {
         m_grade[0] = red; m_grade[1] = green; m_grade[2] = blue; m_grade[3] = saturation; m_grade[4] = contrast;
@@ -280,6 +284,7 @@ private:
     void takeSky(int width, int height);
     void allocateLightLayer(int width, int height);
     void drawParticles(const ThrashDraw& draw, int width, int height);
+    void drawOverlay(const Overlay& overlay, int width, int height);
     void postProcess(const ThrashDraw& draw);
     bool meterExposure();
     void meterSkyOpen(bool raining);
@@ -322,6 +327,12 @@ private:
     bool                    m_particlesOn = true;
     unsigned int            m_particleProgram = 0, m_particleArray = 0, m_particleBuffer = 0;
     unsigned int            m_particleNoise = 0;    // the particles' noise (makeNoise)
+    // The overlay: the game thread's, and the GL thread's way of drawing it (drawOverlay).
+    std::shared_ptr<const Overlay> m_overlay;
+    const OverlayArt*       m_overlayUploaded = nullptr;
+    unsigned int            m_overlayProgram = 0, m_overlayArray = 0, m_overlayBuffer = 0;
+    unsigned int            m_overlayFont = 0, m_overlayIcon = 0;
+    bool                    m_overlayFailed = false;
     // The soft particles' half-size layer (drawParticles; NFS_PARTICLES_HALF).
     unsigned int            m_softLayer = 0, m_softFramebuffer = 0, m_softLayerProgram = 0;
     int                     m_softW = 0, m_softH = 0;

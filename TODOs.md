@@ -235,7 +235,19 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     the GPU, centre-weighted; the picture follows the scene against the
     track's own usual brightness, so each track keeps its look and only dark
     or bright stretches are evened out.
-
+- [ ] Rain on lens refinements: make particles of rain drops on lens slowly
+  slide down to simulate gravity (however keep their shape) - moving by about
+  a total of 1/60th of the  screen's height in 1 sec. This can be
+  computationally additive (?) (try to make it cheap) therefore make 2/3 of
+  current number of rain particles appear on screen to make up for it. Also the
+  number of particles on screen should depend on current density of rain - the
+  2/3 current number should be the max and at lowest rain density we get 1/2 of
+  it.
+- [ ] Snow particles effect on screen; similar to rain, but pre-baked hexagons/snowflakes
+  /other shapes. Please don't make them look cheap. They should have various sizes. 
+  and there's no need for refraction on them - only semi-transparency.
+  There are mostly transparent - towards the edges they're more transparent but
+  their main lines are less transparent.
 
 ### Races/locations
 
@@ -536,8 +548,18 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   - Done: the plain limiter gave most of the lift back (a race is wall-to-wall
     peaks); now the peaks are rounded off and a look-ahead limiter catches the
     rest (`NFS_VOLUME`, 1.8 by ear).
-- [ ] In a brief popup in whosse visual style is consistent with game, show
+- [x] In a brief popup on the bottom left whose visual style is consistent with game, show
   cyrretnly plating song when it starts and then slide the popup away.
+  Background same as HUD background, on the let there's the nfs icon attached
+  that's found also in main menu when selecting single play, two player, hot
+  pursuit, etc, song is like: <artist: yellow letters> - <song: while letters>
+  and around the popup there's yellow glowing outline. The popup 'slides in' and
+  'slides out'.
+  - Done: a second into the race the panel slides in from the left -- the HUD's
+    navy, a yellow glow round it, the NFS emblem of the HUD's own art
+    (`hud98.fsh`), the artist in yellow and the song in white in the HUD's font
+    (`cp16bi.ffn`) -- stays 5 s and slides out (`NFS_NOW_PLAYING`,
+    `native_now_playing.cpp`, `ThrashRenderer::drawOverlay`).
 - [ ] Music control: what tracks play in game, skip current track button.
 - [ ] Radio: be able to add your own tracks.
 - [x] Crash sounds by how hard the hit was; metal scraping rising with speed.
