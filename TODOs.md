@@ -253,10 +253,23 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   There are mostly transparent - towards the edges they're more transparent but
   their main lines are less transparent. Note that snow particles will be
   pre-rendered assets that just fall onto the windshield at different sizes.
-- [ ] BUG: exhaust flames: they are visible from the front of the car too (e.g. 
+- [x] BUG: exhaust flames: they are visible from the front of the car too (e.g. 
   if you look back or change replay camera). The bug here is that exhaust flame
   does not get occluded by driver's car (get occluded by other objects though). 
-  This way also side exhaust flames ghost through the rear bumper..
+  This way also side exhaust flames ghost through the rear bumper -> this is
+  especially visible on cars with side exhausts.
+  - Done: a flame no longer leans on the depth buffer to be hidden by the car
+    it burns on. Each car with an `exhausts.json` also has its body read (the
+    high-detail parts of its `car.fce`, wheels left out, out of `car.viv` as
+    the game reads it), and each frame, in each view, five rays from the camera
+    to the flame (its middle and four points round it) are tried against those
+    triangles in the car's own space: the share that get through is how much
+    of the flame shows, and its pool of light on the road goes with it
+    (`exhaustBodyLetsThrough`, `native_exhausts.cpp`). A hit within 12 cm of the
+    flame is its own pipe, and a camera inside the body (an in-car view) cuts
+    nothing. About 6 us a flame on the heaviest body (the Hellcat's 6900
+    triangles). The far-side test tried before (9ecd13f, reverted) took the
+    view's translation for the camera's place; the camera is -t M^T.
 - [ ] BUG: when press b to look back in rainy weather, the rain drops appear as
   lines (possibly due to rotation of camera view) - fix it.
 - [ ] After extracting assets, make 3d models such as cops animating (e.g when

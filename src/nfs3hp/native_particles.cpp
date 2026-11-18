@@ -101,6 +101,7 @@ constexpr std::size_t kMostWeather = 2200;   // enough for the heaviest shower (
 struct Flame
 {
     x86::reg32 car;    // the car it burns on, its exhausts moving with it
+    const CarExhausts* exhausts;   // that car's exhausts and body (native_exhausts.cpp's, kept for the race)
     float at[3];       // the mouth of the exhaust in that car's space, a little out of it
     float age, life;   // seconds; a second
     float size;        // the radius it grows to, metres
@@ -589,6 +590,7 @@ void throwFlame(const CarExhausts& exhausts, x86::reg32 car, std::size_t tip, fl
 {
     Flame flame{};
     flame.car = car;
+    flame.exhausts = &exhausts;
     flame.at[0] = exhausts.tips[tip].x;
     flame.at[1] = exhausts.tips[tip].y;
     flame.at[2] = exhausts.tips[tip].z - 0.06f;
@@ -1385,6 +1387,10 @@ void projectParticles(win32::WinApplication* app, x86::reg32 view)
     };
     s_out.reserve(s_out.size() + s_particles.size());
     const float scale = std::fabs(k1);
+    // Where this view's camera is in the world: p M + t is 0 there, so -t M^T.
+    float eye[3];
+    for (int i = 0; i < 3; ++i)
+        eye[i] = -(t[0] * m[i * 3] + t[1] * m[i * 3 + 1] + t[2] * m[i * 3 + 2]);
     for (Particle& q : s_particles)
     {
         EffectParticle e{};
@@ -1528,6 +1534,22 @@ void projectParticles(win32::WinApplication* app, x86::reg32 view)
         constexpr float hold = 0.80f;   // at its size, trembling, until this
         const float out = 1.0f - smoothStep(hold, flame.life, flame.age);   // and out
         const float size = flame.size * std::sqrt(SDL_min(1.0f, flame.age / grow)) * out;
+        /* Its own car's body, where that stands between it and the camera: the
+         * camera put into the car's space (its axes are its rows), and rays to
+         * the flame tried against the body's triangles (native_exhausts.cpp).
+         * The depth buffer did not do this for the car the flame burns on --
+         * from in front of the car they showed through it, and a side pipe's
+         * through the rear bumper (TODOs.md, 2026-11-18). */
+        float through = 1.0f;
+        if (flame.exhausts)
+        {
+            float local[3] = { 0.0f, 0.0f, 0.0f };
+            for (int i = 0; i < 3; ++i)          // right, up, forward: +0xc0, +0xcc, +0xd8
+                for (int j = 0; j < 3; ++j)      // x, y, z of each
+                    local[i] += (eye[j] - f(flame.car + 0x98 + 4 * x86::reg32(j)))
+                                * f(flame.car + 0xc0 + 0xc * x86::reg32(i) + 4 * x86::reg32(j));
+            through = exhaustBodyLetsThrough(*flame.exhausts, local, flame.at, size);
+        }
         const float shake = scale * size * 0.12f / z;
         e.x += std::sin(flame.age * 47.0f + flame.seed * 39.0f) * shake;
         e.y += std::cos(flame.age * 59.0f + flame.seed * 23.0f) * shake;
@@ -1536,12 +1558,15 @@ void projectParticles(win32::WinApplication* app, x86::reg32 view)
         e.r = flame.colour[0];
         e.g = flame.colour[1];
         e.b = flame.colour[2];
-        e.a = SDL_min(1.0f, flame.age / 0.05f) * out * smoothStep(1.5f, 3.5f, z);
+        e.a = SDL_min(1.0f, flame.age / 0.05f) * out * smoothStep(1.5f, 3.5f, z) * through;
         e.seed = flame.seed;
         e.type = float(EffectParticle::Flame);
         e.tx = e.ty = -1.0f;
-        s_sparks.push_back(e);
-        if (!(light > 0.0f))
+        if (through > 0.0f)
+            s_sparks.push_back(e);
+        /* Its light goes with it: where the body hides the flame, the pool it
+         * throws under the car is the body's to hide as well. */
+        if (!(light > 0.0f) || !(through > 0.0f))
             continue;
         const float pool[3] = { at[0], groundOf(flame.car) + 0.04f, at[2] };
         EffectParticle glow{};
@@ -1557,7 +1582,7 @@ void projectParticles(win32::WinApplication* app, x86::reg32 view)
          * glow, not a puddle of paint -- a third of what the flame itself is
          * worth, so it reads as a tint under the car and nothing more. */
         glow.a = SDL_min(1.0f, flame.age / 0.08f) * out * SDL_min(light, 2.0f) * flame.light * 0.15f
-                 * smoothStep(1.5f, 3.5f, poolZ);
+                 * smoothStep(1.5f, 3.5f, poolZ) * through;
         glow.seed = flame.seed;
         glow.type = float(EffectParticle::Glow);
         glow.tx = glow.ty = -1.0f;

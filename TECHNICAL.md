@@ -683,7 +683,23 @@ and fades and stops by its one second, no more. **They stay at the pipe they
 came out of**, on the car: a flame remembers the car and where on it it burns,
 in that car's own space, and is turned into the world afresh each frame from the
 car's centre and axes, so it goes round corners and down the road with it
-instead of hanging over the road behind. `NFS_EXHAUST_FLAMES` (`0`/`off`) takes
+instead of hanging over the road behind. **Their own car hides them**, by
+its body rather than the depth buffer: the high-detail parts of the car's
+`car.fce` (out of `car.viv`, the copy the game reads; wheels left out, since
+they turn) are read with its `exhausts.json`, in the same model space, into a
+box tree, and each frame, in each view, five rays from the camera -- its place
+in the world is -t M^T of the view's record, put into the car's space by its
+axes -- to the flame's middle and four points round it are tried against them
+(`exhaustBodyLetsThrough`, `native_exhausts.cpp`). The share that get through
+is how much of the flame shows, and its pool of light goes with it. A hit
+within 12 cm of the flame is its own pipe's mouth and does not count; a camera
+inside the body's box (an in-car view, which draws none of it) cuts nothing.
+The depth buffer had been left to do this and did not for the car the flame
+burns on: from in front of it the flames showed through the car, and a side
+pipe's through the rear bumper. Other things in front of a flame still cut it
+by the depth buffer. A car on `NFS_EXHAUST_DEFAULTS`' pipes has no body read.
+`NFS_EXHAUSTS_TRACE` says how many triangles each body came to.
+`NFS_EXHAUST_FLAMES` (`0`/`off`) takes
 them away. `NFS_EXHAUST_DEFAULTS` (off; `1`) gives every car with nothing marked
 a pair of default pipes instead of none -- at the rear corners, `x` ±0.42 m,
 `y` -0.27, `z` -2.05, 0.05 m across, which is where the game's own marked cars

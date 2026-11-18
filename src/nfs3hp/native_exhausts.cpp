@@ -1,8 +1,11 @@
 #include <nfs3hp.h>
 #include <lib/file.h>
 #include <SDL3/SDL.h>
+#include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -269,6 +272,294 @@ std::string lowerCase(std::string text)
     return text;
 }
 
+/* The car's body, for the flames it stands in front of (exhaustBodyLetsThrough).
+ *
+ * The particle pass cuts a flame by the depth buffer, but a car's own body did
+ * not reliably cut the flames burning on it: they showed through the car from in
+ * front of it, and a side pipe's through the rear bumper (TODOs.md, 2026-11-18),
+ * whatever the car wrote or did not write there.  The flame and the body are
+ * both known exactly in the car's own space, so the body is asked directly:
+ * its high-detail triangles, out of the same car.fce the exhausts were marked
+ * on (tools/car_model.py documents the format). */
+namespace body
+{
+constexpr std::size_t kHeader = 0x1f04;          // the FCE's fixed header; its tables' offsets count from its end
+constexpr x86::reg32 kTriangleCount = 0x04, kVertexCount = 0x08;
+constexpr x86::reg32 kVertexTable = 0x10, kTriangleTable = 0x18;
+constexpr x86::reg32 kPartCount = 0xf8, kPartOrigins = 0xfc;
+constexpr x86::reg32 kPartFirstVertex = 0x3fc, kPartFirstTriangle = 0x5fc, kPartTriangles = 0x6fc;
+constexpr x86::reg32 kPartNames = 0xe04;
+constexpr std::size_t kNameSize = 64, kMostParts = 64;
+constexpr std::size_t kTriangleSize = 0x38;      // page, three indices (the part's own), flags, (u, v) three times
+constexpr std::uint32_t kLeafTriangles = 4;      // a box tree's leaf holds this many or fewer
+constexpr float kPipeSlack = 0.12f;              // m: a hit this near the flame is its own pipe's mouth
+constexpr float kInsideMargin = 0.05f;           // m: the camera this far inside the body's box is in the car
+constexpr float kAround = 0.6f;                  // the four rays round the middle, at this much of the radius
+
+std::uint32_t u32(const std::string& data, std::size_t at)
+{
+    std::uint32_t value = 0;
+    if (at + 4 <= data.size())
+        std::memcpy(&value, data.data() + at, 4);
+    return value;
+}
+
+float f32(const std::string& data, std::size_t at)
+{
+    float value = 0.0f;
+    if (at + 4 <= data.size())
+        std::memcpy(&value, data.data() + at, 4);
+    return value;
+}
+
+std::uint32_t bigEndian(const std::string& data, std::size_t at)
+{
+    if (at + 4 > data.size())
+        return 0;
+    const auto* b = reinterpret_cast<const unsigned char*>(data.data() + at);
+    return std::uint32_t(b[0]) << 24 | std::uint32_t(b[1]) << 16 | std::uint32_t(b[2]) << 8 | std::uint32_t(b[3]);
+}
+
+std::string loadFile(const std::string& path)
+{
+    std::size_t size = 0;
+    void* bytes = SDL_LoadFile(path.c_str(), &size);
+    if (!bytes)
+        return std::string();
+    std::string data(static_cast<const char*>(bytes), size);
+    SDL_free(bytes);
+    return data;
+}
+
+/* The car's car.fce: out of its car.viv first, the copy the game reads (a BIGF
+ * archive: a count at 8, big-endian, then from 16 an offset, a size and a name
+ * each), else the loose one beside it. */
+std::string modelBytes(const std::string& folder)
+{
+    const std::string archive = loadFile(folder + "car.viv");
+    if (archive.size() >= 16 && archive.compare(0, 4, "BIGF") == 0)
+    {
+        const std::uint32_t count = bigEndian(archive, 8);
+        std::size_t at = 16;
+        for (std::uint32_t i = 0; i < count && at + 8 < archive.size(); ++i)
+        {
+            const std::uint32_t offset = bigEndian(archive, at), size = bigEndian(archive, at + 4);
+            at += 8;
+            const std::size_t end = archive.find('\0', at);
+            if (end == std::string::npos)
+                break;
+            const std::string name = lowerCase(archive.substr(at, end - at));
+            at = end + 1;
+            if (name == "car.fce" && std::size_t(offset) + size <= archive.size())
+                return archive.substr(offset, size);
+        }
+    }
+    std::string loose = loadFile(folder + "car.fce");
+    return loose.empty() ? loadFile(folder + "CAR.FCE") : loose;
+}
+
+bool startsWith(const std::string& text, const char* prefix)
+{
+    return text.compare(0, std::strlen(prefix), prefix) == 0;
+}
+
+/* Not a wheel, which turns and steers: "left front wheel", or in the short
+ * names a converted model carries, ":HLFW" and the like.  (Which level of
+ * detail a part is, is read()'s business: the parts come high first, then
+ * medium, small, tiny, and only some say which -- tools/car_model.py's
+ * assign_lods.) */
+bool notWheel(const std::string& name)
+{
+    if (name.find("wheel") != std::string::npos)
+        return false;
+    const bool shortName = startsWith(name, ":") && name.size() == 5;
+    return !(shortName && (name.compare(3, 2, "fw") == 0 || name.compare(3, 2, "rw") == 0));
+}
+
+void boxOf(const CarBody& body, std::uint32_t first, std::uint32_t count, CarBody::Node& node)
+{
+    for (int a = 0; a < 3; ++a)
+    {
+        node.lo[a] = 1e30f;
+        node.hi[a] = -1e30f;
+    }
+    for (std::uint32_t k = first; k < first + count; ++k)
+    {
+        const float* c = &body.corners[std::size_t(body.order[k]) * 9];
+        for (int v = 0; v < 3; ++v)
+            for (int a = 0; a < 3; ++a)
+            {
+                node.lo[a] = std::min(node.lo[a], c[v * 3 + a]);
+                node.hi[a] = std::max(node.hi[a], c[v * 3 + a]);
+            }
+    }
+}
+
+std::uint32_t build(CarBody& body, std::uint32_t first, std::uint32_t count)
+{
+    const std::uint32_t index = std::uint32_t(body.nodes.size());
+    body.nodes.push_back(CarBody::Node{});
+    CarBody::Node node{};
+    boxOf(body, first, count, node);
+    node.first = first;
+    node.count = count;
+    if (count > kLeafTriangles)
+    {
+        int axis = 0;
+        for (int a = 1; a < 3; ++a)
+            if (node.hi[a] - node.lo[a] > node.hi[axis] - node.lo[axis])
+                axis = a;
+        auto middle = [&](std::uint32_t t) {
+            const float* c = &body.corners[std::size_t(t) * 9];
+            return c[axis] + c[3 + axis] + c[6 + axis];
+        };
+        const auto begin = body.order.begin() + first;
+        std::nth_element(begin, begin + count / 2, begin + count,
+                         [&](std::uint32_t a, std::uint32_t b) { return middle(a) < middle(b); });
+        node.count = 0;
+        node.left = build(body, first, count / 2);
+        node.right = build(body, first + count / 2, count - count / 2);
+    }
+    body.nodes[index] = node;
+    return index;
+}
+
+std::shared_ptr<const CarBody> read(const std::string& folder)
+{
+    const std::string data = modelBytes(folder);
+    if (data.size() < kHeader)
+        return nullptr;
+    const std::uint32_t vertices = u32(data, kVertexCount), triangles = u32(data, kTriangleCount);
+    const std::size_t vertexAt = kHeader + u32(data, kVertexTable), triangleAt = kHeader + u32(data, kTriangleTable);
+    if (vertexAt + std::size_t(vertices) * 12 > data.size() || triangleAt + std::size_t(triangles) * kTriangleSize > data.size())
+        return nullptr;
+    auto body = std::make_shared<CarBody>();
+    const std::uint32_t parts = std::min<std::uint32_t>(u32(data, kPartCount), kMostParts);
+    bool lower = false;   // past the high level of detail
+    for (std::uint32_t p = 0; p < parts; ++p)
+    {
+        std::string name(data.data() + kPartNames + p * kNameSize, kNameSize);
+        name = lowerCase(name.substr(0, name.find('\0')));
+        if (startsWith(name, "medium") || startsWith(name, "small") || startsWith(name, "tiny")
+            || startsWith(name, ":m") || startsWith(name, ":l") || startsWith(name, ":t"))
+            lower = true;
+        const bool high = startsWith(name, "hi ") || startsWith(name, "high") || startsWith(name, ":h") || !lower;
+        if (!high || !notWheel(name))
+            continue;
+        const float origin[3] = { f32(data, kPartOrigins + p * 12), f32(data, kPartOrigins + p * 12 + 4),
+                                  f32(data, kPartOrigins + p * 12 + 8) };
+        const std::uint32_t firstVertex = u32(data, kPartFirstVertex + p * 4);
+        const std::uint32_t firstTriangle = u32(data, kPartFirstTriangle + p * 4), count = u32(data, kPartTriangles + p * 4);
+        for (std::uint32_t t = firstTriangle; t < firstTriangle + count && t < triangles; ++t)
+        {
+            const std::size_t at = triangleAt + std::size_t(t) * kTriangleSize;
+            float corner[9];
+            bool ok = true;
+            for (int v = 0; v < 3; ++v)
+            {
+                const std::uint32_t i = firstVertex + u32(data, at + 4 + std::size_t(v) * 4);
+                if (i >= vertices)
+                {
+                    ok = false;
+                    break;
+                }
+                for (int a = 0; a < 3; ++a)
+                    corner[v * 3 + a] = f32(data, vertexAt + std::size_t(i) * 12 + std::size_t(a) * 4) + origin[a];
+            }
+            if (ok)
+                body->corners.insert(body->corners.end(), corner, corner + 9);
+        }
+    }
+    const std::uint32_t count = std::uint32_t(body->corners.size() / 9);
+    if (count == 0)
+        return nullptr;
+    body->order.resize(count);
+    for (std::uint32_t i = 0; i < count; ++i)
+        body->order[i] = i;
+    body->nodes.reserve(std::size_t(count) / kLeafTriangles * 2 + 1);
+    build(*body, 0, count);
+    return body;
+}
+
+/* Where along from + t*d, 0 < t < most, the segment first meets the box; false
+ * where it never does. */
+bool meetsBox(const CarBody::Node& node, const float from[3], const float inverse[3], float most)
+{
+    float lo = 0.0f, hi = most;
+    for (int a = 0; a < 3; ++a)
+    {
+        float t0 = (node.lo[a] - from[a]) * inverse[a], t1 = (node.hi[a] - from[a]) * inverse[a];
+        if (t0 > t1)
+            std::swap(t0, t1);
+        lo = std::max(lo, t0);
+        hi = std::min(hi, t1);
+        if (lo > hi)
+            return false;
+    }
+    return true;
+}
+
+/* Whether from + t*d meets the triangle for some 0 < t < most (both its faces:
+ * the ray may come from inside a part). */
+bool meetsTriangle(const float* c, const float from[3], const float d[3], float most)
+{
+    const float e1[3] = { c[3] - c[0], c[4] - c[1], c[5] - c[2] };
+    const float e2[3] = { c[6] - c[0], c[7] - c[1], c[8] - c[2] };
+    const float p[3] = { d[1] * e2[2] - d[2] * e2[1], d[2] * e2[0] - d[0] * e2[2], d[0] * e2[1] - d[1] * e2[0] };
+    const float det = e1[0] * p[0] + e1[1] * p[1] + e1[2] * p[2];
+    if (std::fabs(det) < 1e-12f)
+        return false;
+    const float inv = 1.0f / det;
+    const float s[3] = { from[0] - c[0], from[1] - c[1], from[2] - c[2] };
+    const float u = (s[0] * p[0] + s[1] * p[1] + s[2] * p[2]) * inv;
+    if (u < 0.0f || u > 1.0f)
+        return false;
+    const float q[3] = { s[1] * e1[2] - s[2] * e1[1], s[2] * e1[0] - s[0] * e1[2], s[0] * e1[1] - s[1] * e1[0] };
+    const float v = (d[0] * q[0] + d[1] * q[1] + d[2] * q[2]) * inv;
+    if (v < 0.0f || u + v > 1.0f)
+        return false;
+    const float t = (e2[0] * q[0] + e2[1] * q[1] + e2[2] * q[2]) * inv;
+    return t > 0.0f && t < most;
+}
+
+/* Whether the body stands anywhere on the way from `from` to within the pipe's
+ * slack of `to`. */
+bool blocked(const CarBody& body, const float from[3], const float to[3])
+{
+    float d[3] = { to[0] - from[0], to[1] - from[1], to[2] - from[2] };
+    const float length = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    if (length <= kPipeSlack)
+        return false;
+    for (float& x : d)
+        x /= length;
+    const float most = length - kPipeSlack;
+    float inverse[3];
+    for (int a = 0; a < 3; ++a)
+        inverse[a] = std::fabs(d[a]) > 1e-12f ? 1.0f / d[a] : (d[a] < 0.0f ? -1e30f : 1e30f);
+    std::uint32_t stack[64];
+    int top = 0;
+    stack[top++] = 0;
+    while (top > 0)
+    {
+        const CarBody::Node& node = body.nodes[stack[--top]];
+        if (!meetsBox(node, from, inverse, most))
+            continue;
+        if (node.count == 0)
+        {
+            if (top + 2 > 64)
+                return false;   // deeper than any car's tree; give the flame the benefit
+            stack[top++] = node.left;
+            stack[top++] = node.right;
+            continue;
+        }
+        for (std::uint32_t k = node.first; k < node.first + node.count; ++k)
+            if (meetsTriangle(&body.corners[std::size_t(body.order[k]) * 9], from, d, most))
+                return true;
+    }
+    return false;
+}
+}  // namespace body
+
 /* The exhausts.json in this folder, if there is one, kept under the folder's
  * own name and -- if nothing else has that one -- under the folder alone (the
  * game's traffic bodies are named `0005`, `pursuit\0003`, either way). */
@@ -292,6 +583,11 @@ void readCarFolder(const std::string& path)
     if (folder.empty())
         return;
     exhausts.folder = folder;
+    exhausts.body = body::read(path);
+    if (SDL_getenv("NFS_EXHAUSTS_TRACE"))
+        SDL_Log("[EXHAUST] %s: body of %zu triangles, for cutting its flames%s", folder.c_str(),
+                exhausts.body ? exhausts.body->corners.size() / 9 : std::size_t(0),
+                exhausts.body ? "" : " (none read: the depth buffer alone cuts them)");
     s_byFolder[folder] = exhausts;
     const std::size_t slash = folder.find_last_of('/');
     if (slash != std::string::npos && !s_byFolder.count(folder.substr(slash + 1)))
@@ -413,6 +709,48 @@ bool exhaustDefaultsOn()
 void loadCarExhausts()
 {
     load();
+}
+
+float exhaustBodyLetsThrough(const CarExhausts& exhausts, const float eye[3], const float at[3], float radius)
+{
+    if (!exhausts.body)
+        return 1.0f;
+    const CarBody& car = *exhausts.body;
+    const CarBody::Node& whole = car.nodes[0];
+    bool inside = true;
+    for (int a = 0; a < 3; ++a)
+        inside = inside && eye[a] > whole.lo[a] + body::kInsideMargin && eye[a] < whole.hi[a] - body::kInsideMargin;
+    if (inside)
+        return 1.0f;
+    // Two ways square to the view, for the four rays round the middle.
+    float d[3] = { at[0] - eye[0], at[1] - eye[1], at[2] - eye[2] };
+    const float length = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    if (length < 1e-4f)
+        return 1.0f;
+    for (float& x : d)
+        x /= length;
+    float across[3] = { d[2], 0.0f, -d[0] };   // d x up
+    float span = std::sqrt(across[0] * across[0] + across[2] * across[2]);
+    if (span < 1e-4f)
+    {
+        across[0] = 1.0f;
+        across[2] = 0.0f;
+        span = 1.0f;
+    }
+    for (float& x : across)
+        x /= span;
+    const float up[3] = { across[1] * d[2] - across[2] * d[1], across[2] * d[0] - across[0] * d[2],
+                          across[0] * d[1] - across[1] * d[0] };
+    const float r = radius * body::kAround;
+    const float offsets[5][2] = { { 0, 0 }, { r, 0 }, { -r, 0 }, { 0, r }, { 0, -r } };
+    int through = 0;
+    for (const auto& o : offsets)
+    {
+        const float to[3] = { at[0] + across[0] * o[0] + up[0] * o[1], at[1] + across[1] * o[0] + up[1] * o[1],
+                              at[2] + across[2] * o[0] + up[2] * o[1] };
+        through += body::blocked(car, eye, to) ? 0 : 1;
+    }
+    return float(through) / 5.0f;
 }
 
 /* The body name the race gave a car, at +0x1e4: a whole C string, strcpy'd
