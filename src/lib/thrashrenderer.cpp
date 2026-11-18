@@ -1952,20 +1952,19 @@ constexpr float kShadowRound = 3.0f;
 constexpr float kShadowSolid = 0.6f;
 constexpr float kShadowDarkness = 0.9f;
 
-/* NFS_CAR_DEPTH: 1 or on makes a car's body write depth even where the game
- * has the mask off for it, which its own draw of the cars does in places.
- * Off by default: it was added while the exhaust flames seemed to stand in
- * front of the car because the car left no depth, and that turned out to be
- * the particle shader reading the depth buffer's rows upside down instead
- * (drawParticles' shader, 2026-11-18).  Writing it is what the car's own alpha
- * cut (kDepthCutCar) was made for -- faint glass still draws and still writes,
- * near-invisible texels do neither -- so it is worth a look on a track where
- * cars overlap, but it changes how cars resolve against each other. */
+/* NFS_CAR_DEPTH: on, a car's body writes depth even where the game has the mask
+ * off for it, which its own draw of the cars does for stretches of the race.
+ * The post pass's particles are cut by what the depth buffer holds, so a car
+ * absent from it cuts nothing: the exhaust flames stood in front of the car
+ * they burn on, through its rear bumper (2026-11-18).  The car's own alpha cut
+ * (kDepthCutCar, 0.08) is what this was written for -- faint glass still draws
+ * and still writes, near-invisible texels do neither.  0 or off draws the cars
+ * as the game did. */
 static bool carDepthSetting()
 {
     static const bool on = [] {
         const char* value = SDL_getenv("NFS_CAR_DEPTH");
-        return value && (SDL_strcmp(value, "1") == 0 || SDL_strcasecmp(value, "on") == 0);
+        return !(value && (SDL_strcmp(value, "0") == 0 || SDL_strcasecmp(value, "off") == 0));
     }();
     return on;
 }
