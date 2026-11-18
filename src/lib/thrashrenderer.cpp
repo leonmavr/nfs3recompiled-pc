@@ -993,6 +993,7 @@ void ThrashRenderer::flush()
     batch.car = m_carSurface || (!m_textureShadow && (m_textureFormat == TF_ARGB_8888 || m_textureFormat == TF_ARGB_4444));
     batch.decal = m_textureShadow;
     batch.light = m_textureLight;
+    batch.wetLight = m_textureWetStreak;
     batch.skipDraw = (batch.decal && !carShadowSetting()) || (m_textureWetStreak && !m_wetLightsLit);
     m_batches.push_back(batch);
     /* The batch's own screen box, for the trace: which of a frame's draws a
@@ -2953,7 +2954,12 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
         if (wet || draw.wetness > 0.0f || haze > 0.0f || post || headlight > 0.0f)
         {
             const ThrashVertex& corner = draw.vertices[first];
-            const bool flat = (corner.combine[3] == 0 || !batch.zTest) && !batch.zBuffer;
+            /* Not a light on a wet road: the game lays the tail lights' red
+             * strips after the road unfogged and writing no depth, as the HUD
+             * draws -- taken for its start, the whole-picture pass (exposure,
+             * glow, grade) came between a car's two strips, and the strip
+             * after it was the darker half of the streak (2026-11-18). */
+            const bool flat = (corner.combine[3] == 0 || !batch.zTest) && !batch.zBuffer && !batch.wetLight;
             if (traced && m_sceneDrawn && m_traceKinds.size() < 4000)
             {
                 // F flat, f fogged without depth, t tested without depth writes, W world; a run once
@@ -3049,10 +3055,12 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
         /* A car's shadow lies on the road and leaves its depth as the road's:
          * written a little above it, its edge stood up as a step, and the
          * shadows of what stands by the road caught on it in a rim. */
-        /* Nor a lamp's glow: light, not a thing, and (below) cut by nothing. */
-        if (!previous || batch.zBuffer != previous->zBuffer || batch.decal != previous->decal
-            || batch.light != previous->light)
-            glDepthMask(batch.zBuffer && !batch.decal && !batch.light ? GL_TRUE : GL_FALSE);
+        /* Nor a lamp's glow: light, not a thing, and (below) cut by nothing.
+         * Nor a light on a wet road (wetLight), the same in all three. */
+        const bool lit = batch.light || batch.wetLight;
+        const bool litBefore = previous && (previous->light || previous->wetLight);
+        if (!previous || batch.zBuffer != previous->zBuffer || batch.decal != previous->decal || lit != litBefore)
+            glDepthMask(batch.zBuffer && !batch.decal && !lit ? GL_TRUE : GL_FALSE);
         /* A car's pixels leave 0 in the picture's alpha, everything else adds
          * its own to what is there: the shadows of what stands by the road are
          * not cast by the cars, which have their own (postProcess) -- and a
@@ -3065,12 +3073,15 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
          * road under it as car: left out of the motion blur and the shadows, a
          * sharp piece of the car's own shadow stood in each, two broken shadows
          * behind the rear wheels (2026-11-17).  Light leaves the picture's alpha
-         * as it was. */
+         * as it was.  So does a light on a wet road: the tail lights' 4444 red
+         * strips, written as a car's, marked the road under them as car --
+         * left out of the haze and the shadows, darker solid patches round
+         * the red, at night with the weather on (2026-11-18). */
         if (!previous || batch.alphaBlend != previous->alphaBlend || batch.car != previous->car
-            || batch.decal != previous->decal || batch.light != previous->light)
+            || batch.decal != previous->decal || lit != litBefore)
         {
-            const GLenum alphaSource = batch.car || batch.decal || batch.light ? GL_ZERO : GL_ONE;
-            const GLenum alphaKept = batch.car && !batch.light ? GL_ZERO : GL_ONE;
+            const GLenum alphaSource = batch.car || batch.decal || lit ? GL_ZERO : GL_ONE;
+            const GLenum alphaKept = batch.car && !lit ? GL_ZERO : GL_ONE;
             if (batch.alphaBlend)
                 glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, alphaSource, alphaKept);
             else
@@ -3091,8 +3102,8 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
          * middle was cut away -- the tail and brake lights unlit by day
          * (2026-11-17). */
         if (!previous || batch.alphaBlend != previous->alphaBlend || batch.zBuffer != previous->zBuffer
-            || batch.decal != previous->decal || batch.car != previous->car || batch.light != previous->light)
-            glUniform1f(m_locations.depthCut, batch.zBuffer && !batch.decal && !batch.light
+            || batch.decal != previous->decal || batch.car != previous->car || lit != litBefore)
+            glUniform1f(m_locations.depthCut, batch.zBuffer && !batch.decal && !lit
                                                   ? (batch.car ? kDepthCutCar : kDepthCutWorld) : 0.0f);
         if (!previous || batch.chromaKey != previous->chromaKey)
             glUniform1i(m_locations.chromaKey, batch.chromaKey ? 1 : 0);

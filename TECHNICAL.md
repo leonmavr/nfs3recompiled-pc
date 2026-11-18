@@ -970,6 +970,20 @@ are flagged `wetStreak` and, by day (`0x6fd4c8` clear,
 its own -- the dark strips that stayed, and a skipped shadow
 (`NFS_CAR_SHADOW=0`) drawn with whatever texture followed it.
 
+At night they are drawn as light (`Batch::wetLight`, as a lamp's glow): no
+depth written, nothing cut, and the picture's alpha left as it was. The 4444
+strips are added with depth on, and by their format counted as a car's, so
+each wrote 0 into the picture's alpha -- the road under it marked as car, left
+out of the haze and the shadows -- and stood as darker, solid patches round the
+red in the snow and the rain at night (2026-11-18, `NFS_SPRITE_TRACE`: the
+strips `fmt 3 blend 0 depth 1/1 car 1`).
+
+Nor do those lights mark the HUD's start (`Batch::wetLight`): the game draws
+the red strips after the road unfogged and writing no depth, as the HUD's
+first draw is told by, so the whole-picture pass -- exposure, glow, grade --
+ran between a car's strips, and the one drawn after it was the darker half of
+the streak.
+
 The road stays wet through up to 30 frames of the weather reading dry
 (`kDryAfterFrames`, `wetRoadTick`): a single dry frame made the whole road dry
 for that frame. `NFS_WET_TRACE=1` logs each time the weather reads dry or wet
@@ -2383,8 +2397,12 @@ the traffic and police cars further down (`traffic/0001`,
 editor's "Mark exhausts..." button) opens a window: the cars in a list on the
 left, the car's body seen from behind (its high level of detail, shaded), and
 small on the right from the side and from above with the marks on them. A left
-click on the body puts an exhaust there -- on its surface, the nearest point
-seen from behind -- and holding the button grows it; a left click on a mark
+click on the body puts an exhaust there -- on its surface, the nearest point from
+whichever view was clicked -- and holding the button grows it; **any of the three
+views marks**, since some cars have their exhausts down the side, where the view
+from behind cannot reach a point (the depth each view picks along is its own:
+from behind the nearest z, from the side the nearest x, from above the nearest y,
+`pick`); a left click on a mark
 grows it, a right click shrinks it while held; a middle click or `d` takes it
 away; `m` mirrors (on by default: a mark made, grown or shrunk on one side is
 on the other too); The strip under the views is the colour the flames burn: hue across it,

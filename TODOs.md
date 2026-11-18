@@ -99,6 +99,10 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   of the game's between the sky and the road was taken for the HUD's start, so
   the reflection and the whole-picture pass came before the road. The HUD's
   start now waits for the road.
+- [x] Tail lights' red on a wet road at night (2026-11-18): darker solid patches
+  round it, and the streak half bright, half dark. The game's 4444 strips were
+  counted as a car's (no haze under them) and taken for the HUD's start (the
+  whole-picture pass between them); now drawn as light, and never the HUD's.
 - [x] Wider, sharper reflections on the cars from the sky already captured.
 - [x] Camera shake on big impacts and hard landings, by the hit's speed.
   - Done: `NFS_CRASH_SHAKE` (Crashes you feel).

@@ -206,6 +206,7 @@ private:
         bool car;               // a car's or an effect's: 0 into the picture's alpha (postProcess's shadows)
         bool decal;             // a car's shadow on the road: no depth, the road's alpha kept
         bool light;             // a lamp's glow: drawn into the light layer too (initPost)
+        bool wetLight = false;  // a light on a wet road (glw4, the 4444 strip): never the HUD's start
         /* A quad or two that covers a quarter of the view and more: a sprite
          * drawn over the view, never a piece of the track.  NFS_SPRITE_TRACE
          * logs it, NFS_TEXTURE_DUMP saves its picture (flush, draw). */
