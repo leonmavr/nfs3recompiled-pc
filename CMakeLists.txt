@@ -241,6 +241,16 @@ function(add_game_exe name)
 endfunction()
 
 add_game_exe(nfs3hp)
+if(NOT ANDROID)
+    set(SNOWFLAKE_ATLAS "${NFS_ROOT_DIR}/assets/snowflakes/snowflake-atlas.png")
+    set_property(TARGET nfs3hp APPEND PROPERTY LINK_DEPENDS "${SNOWFLAKE_ATLAS}")
+    add_custom_command(TARGET nfs3hp POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${NFS_ROOT_DIR}/assets/snowflakes"
+            "$<TARGET_FILE_DIR:nfs3hp>/assets/snowflakes"
+        COMMENT "Copying snowflake sprites beside nfs3hp"
+        VERBATIM)
+endif()
 option(NFS_BUILD_FF_TESTS "Build guest COM force-feedback regression checks" OFF)
 if(NFS_BUILD_FF_TESTS AND NOT ANDROID)
     add_executable(force_feedback_checks tools/force_feedback_checks.cpp)

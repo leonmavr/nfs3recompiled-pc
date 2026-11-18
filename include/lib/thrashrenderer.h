@@ -308,6 +308,9 @@ private:
     Uint64                  m_skyOpenNs = 0;
     Uint64                  m_adaptNs = 0, m_exposureSaidNs = 0;
     unsigned int            m_sky = 0;              // the GL thread's, from here on
+    unsigned int            m_snowAtlas = 0;
+    float                   m_snowAmount = 0.0f, m_snowSpeed = 0.0f;   // the snow on the glass's shares, eased
+    Uint64                  m_snowEasedNs = 0;
     int                     m_skyW = 0, m_skyH = 0;
     bool                    m_skyTaken = false;     // this frame's
     bool                    m_skyValid = false;
@@ -344,7 +347,8 @@ private:
                             m_compositeSun = -1, m_compositeScale = -1, m_compositeCentre = -1, m_compositeUp = -1,
                             m_compositeSize = -1, m_compositeBlur = -1, m_compositeLight = -1, m_compositeHalo = -1,
                             m_compositeTrailOn = -1, m_compositeGlare = -1, m_compositeGlareAt = -1,
-                            m_compositeAdapt = -1, m_compositeExposure = -1;
+                            m_compositeAdapt = -1, m_compositeExposure = -1, m_compositeSnow = -1,
+                            m_compositeSnowSprites = -1;
     float                   m_detailStrength = 0.0f;  // NFS_ROAD_DETAIL; 0 for none
     float                   m_surfaceStrength = 0.0f; // NFS_OBJECT_DETAIL; 0 for none
     bool                    m_sharpen = false;        // NFS_TEXTURE_SHARP

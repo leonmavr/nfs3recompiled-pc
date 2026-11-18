@@ -247,12 +247,21 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   number of particles on screen should depend on current density of rain - the
   2/3 current number should be the max and at lowest rain density we get 1/2 of
   it.
-- [ ] Snow particles effect on screen; similar to rain, but pre-baked hexagons/snowflakes
+- [x] Snow particles effect on screen; similar to rain, but pre-baked hexagons/snowflakes
   /other shapes. Please don't make them look cheap. They should have various sizes. 
   and there's no need for refraction on them - only semi-transparency.
   There are mostly transparent - towards the edges they're more transparent but
   their main lines are less transparent. Note that snow particles will be
   pre-rendered assets that just fall onto the windshield at different sizes.
+  - Done (2026-11-18): pixel-art clumps of wet snow (nine big with gaps and
+    crumbs, nine small), twelve tones from a light middle to a darker wet edge,
+    falling down the view in the final composite, each column at its own speed
+    within a fifth of the others, with no refraction. Each lives 6 s and melts
+    to half its size over its last 2 s through six pre-baked shrink stages that
+    keep its outline. No more flicker: the density (from how many flakes are
+    alive, and the speed) is eased, and a flake leaving it fades. Their density
+    is the weather's by up to 2.5 times at 300 km/h, and under a roof (a
+    tunnel) they ease off the glass over a couple of seconds.
 - [x] BUG: exhaust flames: they are visible from the front of the car too (e.g. 
   if you look back or change replay camera). The bug here is that exhaust flame
   does not get occluded by driver's car (get occluded by other objects though). 
@@ -634,6 +643,22 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   contact. If it is moving too slow (<60kph) on two or more wheels of contact and it's toppling ( >
   90 degrees between base of car and horizon) for more than 0.5 sec, auto-reset
   it (like pressing r key).
+- [ ] Gimmicky but fun: windshield wiper + graphic that wipes off snow/raindrops
+  from screen.
+- [ ] More realistic tire smoke: tire smoke particles and color area great, but 
+   tire smoke shouldn't spread as rise as it does now - it's
+  supposed to be kind of heavy and fall on the ground pretty quickly. Also it's
+  generated either at high RPM when car is still or barely moving (e.g. start line, slamming the 
+  acceleration at low speed), whenenever the games plays
+  the time squeek sound (it's probably easy to figure out the branch for it), 
+  or whenever tire marks are generated. It also takes a while to disappear (if
+  it hasn't hit the ground) and gradually disappears by 6 sec after being
+  generated. Density look of smoke (not necessarily number of particles - be
+  careful since way too many particles could drop perfomance) depends on either
+  (whatever is easier to implement): decelleration mangitude + turn sharpness OR speed
+  and break duration - we have different scales depending on speed - [0, 50],
+  [50, 100], [100, 150], [150, 200], [200, inf] kph and duration of braking [0, 1],
+  [1, 2], [1,2], [2,4], [2, inf]. Choose the easier to implement approach.
 
 ### Music/Sound
 - [x] Sound quality is great and sound works well but volume is still too

@@ -388,11 +388,13 @@ are moved by the race's clock -- standing still with it -- turned into the
 view as `sub_492370` turns a lamp, sorted back to front, and handed to the
 renderer (`glide2x::effectParticles`). `ThrashRenderer::drawParticles` draws
 them over the world just before the whole-picture pass, a quad each, their
-shapes made in the shader (`g_particleShader`), hidden behind what stands in
-front of them by the depth buffer, a puff fading where it meets what is behind
-it, the picture's alpha left as it was. Not in split screen, nor without the
-native THRASH renderer: the game's own then. `NFS_PARTICLES` (1; a number up
-to 3 for more, `0`/`off` for the game's).
+shapes made in the shader (`g_particleShader`, which tells the shapes apart by
+names taken from `EffectParticle::Type` -- `kFlake`, `kDroplet` -- rather than
+by its numbers, `particleTypeNames` passing them in as the shader's defines),
+hidden behind what stands in front of them by the depth buffer, a puff fading
+where it meets what is behind it, the picture's alpha left as it was. Not in
+split screen, nor without the native THRASH renderer: the game's own then.
+`NFS_PARTICLES` (1; a number up to 3 for more, `0`/`off` for the game's).
 
 **No particle ever shows the edge of its quad.** A cloud's or a flake's ragged
 rim is its noise's, scaled by it -- so where the noise came out small the rim
@@ -525,6 +527,37 @@ each drop fades in or out by its own hash. Rain only (the road wet), drawn
 under the HUD. `NFS_LENS_RAIN` (1; up to 2 for more, `0`/`off` none); `lens::`
 in `thrashrenderer.cpp`, the drops' sizes and lives in the shader's
 `lensCell`.
+
+**Snow on the windshield** (`snowOnScreen` in the same composite): while
+screen-projected snowflakes are present, a deterministic screen-space field
+over the view holds pixel-art clumps of wet snow falling down it -- each column
+at the same speed give or take a fifth, so they do not move as one sheet. Each
+cell's flake lives 6 s (`snow::kLife`): it lands, and from 4 s
+(`kShrinkFrom`) melts down through the atlas's shrink stages to half its size,
+the same outline and dark wet edge at every stage, and goes; the cell rests 0.5
+to 4 s and a new flake -- its own sprite, size, place and mirroring -- lands
+there. Big flakes (with a few gaps and loose crumbs round them) and small ones
+(none) are different sprites. They are read texel by texel (`texelFetch`), each
+sprite pixel a whole number of screen pixels (1 or 2 at 720 lines, more above),
+and never turned, so they stay pixel art. How many cells hold one is the
+weather's snow by up to 2.5 times as the view comes on -- `snow::kMost` at
+`kMostSpeed` (300 km/h) -- both shares eased over a second
+(`kEaseSeconds`): worked out afresh each frame from how many flakes were alive
+and from the speed, they wavered, and a flake whose cell sat at the edge of the
+share blinked on and off with them; one that drops out of it now fades. Where
+the sky is shut out, in a tunnel or under a bridge, the sky texel's `g` (the
+share of the weather still on the glass) eases them off over 2.5 s
+(`kGoSeconds`), back within 0.2 s (`kComeSeconds`) in the open. All of these
+are `namespace snow`, handed to the shader as constants.
+
+The atlas (`assets/snowflakes/snowflake-atlas.png`, written by
+`tools/generate_snowflakes.py`) is 768x768 of 32-pixel tiles: a
+column a sprite (nine big, then nine small), a row a shrink stage (six, down to
+half). Twelve tones each, lightest in the middle and darker and thinner every
+step out, never a ring lighter than the one inside it; white, light grey or
+pale cyan, edged in a wet blue-grey; a glint. The CMake target copies it beside
+the executable.
+
 ### The game's own sprites are not drawn
 
 Every picture in the game's particle set is a 565 texel with no alpha and

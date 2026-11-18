@@ -12,6 +12,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
 
 namespace win32
 {
@@ -475,7 +476,7 @@ ThrashRenderer::~ThrashRenderer()
             glDeleteTextures(1, &m_reflection);
         if (m_detailTexture)
             glDeleteTextures(1, &m_detailTexture);
-        for (unsigned int texture : { m_sky, m_postCopy, m_bright, m_postDepth })
+        for (unsigned int texture : { m_sky, m_postCopy, m_bright, m_postDepth, m_snowAtlas })
             if (texture)
                 glDeleteTextures(1, &texture);
         if (m_postFramebuffer)
@@ -1313,7 +1314,10 @@ static const char g_adaptShader[] =
  * depth buffer is the sky's or as far (over 250 m, as the glare has it).  In a
  * tunnel, or under a bridge, that is all roof.  One texel kept from frame to
  * frame (two in turn), eased towards it; the particles read it to leave the
- * rain and snow out where nothing falls (drawParticles). */
+ * rain and snow out where nothing falls (drawParticles).  The composited snow
+ * on the glass, though, is let go of slowly: its share is eased towards the
+ * sky's here too, but over seconds, so a tunnel takes the flakes off the
+ * windscreen as it would, not the instant the roof begins. */
 static const char g_skyOpenShader[] =
 "in vec2 v_uv;"
 "layout (location=0) out vec4 o_color;"
@@ -1323,6 +1327,8 @@ static const char g_skyOpenShader[] =
 "uniform vec2 u_band;"   // from, to: the top of the picture, in its rows (0 the top)
 "uniform float u_raining;"   // 1 while it rains (the road wet), else 0
 "uniform vec3 u_lensRate;"   // the lens wetting, drying (a frame's share); the sky share it takes to wet
+"uniform vec2 u_openFade;"   // from, to: no weather below the first share of sky, all of it from the second
+"uniform vec2 u_snowRate;"   // the snow on the glass coming, going (a frame's share)
 "float unpack(vec2 c) { return c.x + c.y / 255.0; }"
 "vec2 pack(float t) { float s = clamp(t, 0.0, 1.0) * 255.0; return vec2(floor(s) / 255.0, fract(s)); }"
 "void main()"
@@ -1341,7 +1347,12 @@ static const char g_skyOpenShader[] =
 "    float lens = unpack(last.ba);"
 "    float wetting = u_raining * step(u_lensRate.z, open);"
 "    lens += (wetting - lens) * (wetting > lens ? u_lensRate.x : u_lensRate.y);"
-"    o_color = vec4(mix(last.r, open, u_rate), 0.0, pack(lens));"
+/* And how much of the weather lies on the glass (the composite's snow): all of
+ * it under an open sky, easing away where the sky is shut out. */
+"    float snowy = smoothstep(u_openFade.x, u_openFade.y, open);"
+"    float snow = last.g;"
+"    snow += (snowy - snow) * (snowy > snow ? u_snowRate.x : u_snowRate.y);"
+"    o_color = vec4(mix(last.r, open, u_rate), snow, pack(lens));"
 "}";
 
 /* The soft particles' half-size layer (drawParticles), premultiplied, laid
@@ -1380,8 +1391,10 @@ static const char g_compositeShader[] =
 "uniform vec2 u_glareAt;"
 "uniform sampler2D u_adapt;"
 "uniform vec4 u_exposure;"   // strength, dead zone, most up, most down (stops)
-"uniform sampler2D u_skyOpen;"   // its b, a: how wet the lens is (g_skyOpenShader)
+"uniform sampler2D u_skyOpen;"   // r: the sky overhead, g: the snow still on the glass, b, a: how wet the lens is
 "uniform vec4 u_lens;"           // amount (0 for none), seconds, speed share (0 to 1), unused
+"uniform sampler2D u_snowSprites;"
+"uniform vec4 u_snow;"           // amount (0 to 1, eased), seconds, the speed's (1 to 2.5 times, eased), unused
 "uniform float u_stops;"
 "float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }"
 /* Rain on the lens (NFS_LENS_RAIN): drops on the view, in cells of two grids
@@ -1461,6 +1474,71 @@ static const char g_compositeShader[] =
 "            lensCell(px, b + vec2(float(i), float(j)), fine, 17.3, wet, 0.0, pull, best);"
 "        }"
 "    return uv + pull / u_size;"
+"}"
+/* Snow on the glass: pixel-art clumps of wet snow (assets/snowflakes,
+ * u_snowSprites; tools/generate_snowflakes.py) in cells of a field
+ * over the view, falling down it -- each column a little faster or slower than
+ * the next.  Each cell's flake lives SNOW_LIFE seconds, melting down through
+ * the atlas's shrink stages from SNOW_SHRINK_FROM, and the cell then rests a
+ * while before a new one -- its own sprite, size, place and mirroring -- lands
+ * there.  Big flakes and small ones are different sprites.  Read texel by texel
+ * at a whole number of screen pixels each, so they stay pixel art.  How many
+ * cells have one is how much snow lies on the glass (the sky texel's g, let go
+ * of slowly under a roof) by the weather's share (u_snow.x) and the speed's
+ * (u_snow.z), both eased on the CPU; a flake whose cell drops out of that share
+ * fades rather than blinking.  None bends the picture as the drops do. */
+"vec3 snowOnScreen(vec2 uv, vec3 color)"
+"{"
+"    if (u_snow.x <= 0.0) return color;"
+"    float onGlass = texture(u_skyOpen, vec2(0.5)).g;"   /* how much of it is still on the glass, let go of slowly under a roof */
+"    float amount = u_snow.x * onGlass;"
+"    if (amount <= 0.002) return color;"
+"    vec2 px = vec2(uv.x, 1.0 - uv.y) * u_size;"   /* px.y grows up the view */
+"    float cell = clamp(u_size.y / 9.0, 56.0, 120.0);"
+"    float unit = u_size.y / SNOW_BASE_HEIGHT;"
+"    float column = floor(px.x / cell);"
+"    float seen = min(mix(0.07, 0.30, amount) * u_snow.z, 0.95);"
+"    float t = u_snow.y;"
+"    vec3 result = color;"
+"    for (int i = -1; i <= 1; ++i) {"
+"        float x = column + float(i);"
+"        float fall = -t * cell / 6.0 * mix(0.8, 1.2, lensHash(vec2(x, 87.3)));"
+"        float row = floor((px.y - fall) / cell);"
+"        for (int j = -1; j <= 1; ++j) {"
+"            vec2 home = vec2(x, row + float(j));"
+"            float period = SNOW_LIFE + mix(SNOW_REST_LEAST, SNOW_REST_MOST, lensHash(home + 3.1));"
+"            float clock = t + lensHash(home + 5.3) * period;"
+"            float life = floor(clock / period);"
+"            float age = clock - life * period;"
+"            if (age >= SNOW_LIFE) continue;"
+"            vec2 id = home + vec2(life * 0.137, life * 0.311);"   /* each life its own flake */
+"            float seed = lensHash(id + vec2(23.7, 71.9));"
+"            if (seed > seen) continue;"
+"            float sway = sin(t * 0.7 + seed * 6.2832) * cell * 0.035;"
+"            vec2 center = (home + vec2(mix(0.30, 0.70, lensHash(id + 4.7)),"
+"                                        mix(0.30, 0.70, lensHash(id + 9.7)))) * cell"
+"                          + vec2(sway, fall);"
+"            bool big = lensHash(id + 18.1) < SNOW_BIG_SHARE;"
+"            float size = lensHash(id + 61.7);"
+"            float scale = max(1.0, floor(unit * (big ? mix(1.5, 2.0, size) : mix(1.0, 1.5, size)) + 0.5));"
+"            vec2 texel = floor((px - (floor(center) - SNOW_TILE * 0.5 * scale)) / scale);"
+"            if (any(lessThan(texel, vec2(0.0))) || any(greaterThanEqual(texel, vec2(SNOW_TILE)))) continue;"
+"            if (lensHash(id + 27.3) < 0.5) texel.x = SNOW_TILE - 1.0 - texel.x;"   /* mirrored or not; never turned, which would break the pixels */
+"            float sprite = floor(lensHash(id + 41.9) * (big ? SNOW_BIG : SNOW_SMALL)) + (big ? 0.0 : SNOW_BIG);"
+"            float stage = min(floor(clamp((age - SNOW_SHRINK_FROM) / (SNOW_LIFE - SNOW_SHRINK_FROM), 0.0, 1.0)"
+"                                    * SNOW_STAGES), SNOW_STAGES - 1.0);"
+"            vec4 flake = texelFetch(u_snowSprites, ivec2(int(sprite * SNOW_TILE + texel.x),"
+"                                    int(stage * SNOW_TILE + SNOW_TILE - 1.0 - texel.y)), 0);"
+"            if (flake.a <= 0.0) continue;"
+"            float edgeFade = smoothstep(0.0, cell * 0.5, center.y)"
+"                           * (1.0 - smoothstep(u_size.y - cell * 0.5, u_size.y, center.y));"
+"            float landing = clamp(age / SNOW_LANDING, 0.0, 1.0) * clamp((SNOW_LIFE - age) / SNOW_GOING, 0.0, 1.0);"
+"            float share = clamp((seen - seed) / SNOW_SHARE_FADE, 0.0, 1.0);"
+"            float weight = edgeFade * landing * share * mix(0.6, 0.9, lensHash(id + 53.1));"
+"            result = result * (1.0 - flake.a * weight) + flake.rgb * weight;"
+"        }"
+"    }"
+"    return result;"
 "}"
 /* Auto-exposure (above): the eye's brightness against the usual, in stops. */
 "float exposureGain()"
@@ -1669,6 +1747,7 @@ static const char g_compositeShader[] =
 "        c = (c - 0.5) * u_grade.y + 0.5;"
 "        c = mix(vec3(luma(c)), c, u_grade.x) * u_tint;"
 "    }"
+"    c = snowOnScreen(v_uv, c);"
 "    o_color = vec4(clamp(c, 0.0, 1.0), 1.0);"
 "}";
 
@@ -1696,14 +1775,33 @@ static const char g_particleVertexShader[] =
 "    gl_Position = vec4(a_position / u_size * 2.0 - 1.0, 0.0, 1.0);"
 "}";
 
-/* A grain (0): a clump with a ragged edge -- its outline a few waves round it,
- * turned by its seed -- lit a little from above.  A puff (1): a cloud of fine
+/* The shapes a particle's quad can be (EffectParticle::Type), for the shader
+ * below to tell apart by name: its numbers are the enum's, read here rather
+ * than written out again. */
+static std::string particleTypeNames()
+{
+    const std::pair<const char*, EffectParticle::Type> types[] = {
+        { "kGrain", EffectParticle::Grain },     { "kPuff", EffectParticle::Puff },
+        { "kSpark", EffectParticle::Spark },     { "kBlade", EffectParticle::Blade },
+        { "kSpike", EffectParticle::Spike },     { "kStreak", EffectParticle::Streak },
+        { "kFlame", EffectParticle::Flame },     { "kGlow", EffectParticle::Glow },
+        { "kSmoke", EffectParticle::Smoke },     { "kDroplet", EffectParticle::Droplet },
+        { "kFlake", EffectParticle::Flake },     { "kBrakeGlow", EffectParticle::BrakeGlow },
+    };
+    std::string names;
+    for (const auto& type : types)
+        names += std::string("const int ") + type.first + " = " + std::to_string(int(type.second)) + ";\n";
+    return names;
+}
+
+/* A grain: a clump with a ragged edge -- its outline a few waves round it,
+ * turned by its seed -- lit a little from above.  A puff: a cloud of fine
  * dust, soft and uneven, faded where it meets what is behind it so it never
  * shows a hard line against the ground.  Both are the colour of the ground they
  * were thrown from (round v_from, the picture there -- the world's pixels
  * only, a car's being 0 in the alpha, and the car that threw them standing
  * over the very spot; or every pixel there, where too few are the world's),
- * a grain darker and a puff paler.  A spark (2): a streak from where it was to
+ * a grain darker and a puff paler.  A spark: a streak from where it was to
  * where it is, white hot at its head.  Each is hidden behind what stands in
  * front of it, from the depth buffer (1 - 1/z). */
 static const char g_particleShader[] =
@@ -1762,27 +1860,27 @@ static const char g_particleShader[] =
 /* The round ones -- grains, puffs, flames, glows, smoke, flakes, brake glows --
  * have nothing in their quad's corners: gone before anything is read. */
 "    float r = length(v_uv);"
-"    if (r >= 1.0 && (type <= 1 || (type >= 6 && type != 9))) discard;"
+"    if (r >= 1.0 && (type <= kPuff || (type >= kFlame && type != kDroplet))) discard;"
 "    float behind = texture(u_depth, gl_FragCoord.xy * u_fragScale / u_size).r;"
 "    float zBehind = 1.0 / max(1.0 - behind, 1e-5);"
 "    float room = zBehind - z;"
-"    if (room < (type == 4 ? -0.4 : type == 11 ? -0.45 : -0.05)) discard;"
-"    if (type == 5) {"   /* a piece of an air trail: thin, even, soft at its sides */
+"    if (room < (type == kSpike ? -0.4 : type == kBrakeGlow ? -0.45 : -0.05)) discard;"
+"    if (type == kStreak) {"   /* a piece of an air trail: thin, even, soft at its sides */
 "        o_color = vec4(v_color.rgb, exp(-v_uv.y * v_uv.y * 4.0) * v_color.a);"
 "        return;"
 "    }"
-/* A raindrop (9): a short dash, soft at its sides and at both ends, so it has
+/* A raindrop: a short dash, soft at its sides and at both ends, so it has
  * no corner and no square to it however large it comes to be. */
-"    if (type == 9) {"
+"    if (type == kDroplet) {"
 "        float a = exp(-v_uv.y * v_uv.y * 4.0) * (1.0 - smoothstep(0.45, 1.0, abs(v_uv.x)));"
 "        o_color = vec4(v_color.rgb, a * v_color.a * overhead());"
 "        return;"
 "    }"
-/* An exhaust flame (6): a ball of burning gas, ragged and flickering by its
+/* An exhaust flame: a ball of burning gas, ragged and flickering by its
  * seed, the car's flame colour at its edge and much lighter -- near white -- in
  * its core (v_color.rgb is the car's colour, v_params.y its own flicker).  It is
  * added to what is behind it, so the core reads as light rather than paint. */
-"    if (type == 6) {"
+"    if (type == kFlame) {"
 "        vec2 q = v_uv * 1.8 + vec2(seed * 13.7, seed * 27.1);"
 "        float n = noise(q) * 0.55 + noise(q * 2.3) * 0.3 + noise(q * 4.7) * 0.15;"
 "        float rr = length(v_uv) * (0.72 + 0.5 * n);"
@@ -1794,11 +1892,11 @@ static const char g_particleShader[] =
 "        o_color = vec4(c * (0.9 + 0.6 * core), a * (0.8 + 0.2 * core));"
 "        return;"
 "    }"
-/* The light a flame throws (7): a soft pool of it on the road under the pipe,
+/* The light a flame throws: a soft pool of it on the road under the pipe,
  * its colour the flame's, squared away to nothing at its edge, squashed
  * lengthwise -- a disc on the ground seen from behind.  Additive, like the
  * flame it comes from. */
-"    if (type == 7) {"
+"    if (type == kGlow) {"
 "        float rr = length(vec2(v_uv.x, v_uv.y * 2.6));"
 "        float a = max(1.0 - rr, 0.0);"
 "        a *= a;"
@@ -1807,13 +1905,13 @@ static const char g_particleShader[] =
 "        o_color = vec4(v_color.rgb * (0.75 + 0.5 * a), a);"
 "        return;"
 "    }"
-/* A hot brake disc (11): a soft glow round the hub, its ring a little hotter
+/* A hot brake disc: a soft glow round the hub, its ring a little hotter
  * than its middle, as a disc glows through the spokes; narrowed sideways as the
  * disc turns edge on (v_from.x, 0 to 1, how round it is seen).  Added, like a
  * flame's light.  It may lie up to 45 cm behind what is drawn in front of it --
  * the tyre's tread, from behind the car -- and fades the deeper it lies, so a
  * glow behind the tyre is a faint warmth round the wheel, not cut off. */
-"    if (type == 11) {"
+"    if (type == kBrakeGlow) {"
 "        vec2 q = vec2(v_uv.x / max(v_from.x, 0.2), v_uv.y);"
 "        float rr = length(q);"
 "        if (rr >= 1.0) discard;"
@@ -1824,12 +1922,12 @@ static const char g_particleShader[] =
 "        o_color = vec4(v_color.rgb * (0.85 + 0.4 * soft), a);"
 "        return;"
 "    }"
-/* A snowflake (10): a small soft speck, ragged by its seed -- soft at the ends
+/* A snowflake: a small soft speck, ragged by its seed -- soft at the ends
  * of its quad along x as well as at its sides, so that the streak its quad is
  * stretched into at speed (drawParticles) is a flake's dash and not a turned
  * box; standing still the quad is square and the flake the speck it was.
  * Blended over the picture, not added to it. */
-"    if (type == 10) {"
+"    if (type == kFlake) {"
 /* Never under 1, so both axes are at their rim where the quad is: nothing of
  * the flake reaches its edge, however its noise came out. */
 "        float ragged = 1.0 + 0.4 * noise(v_uv * 3.0 + vec2(seed * 19.0, seed * 7.0));"
@@ -1840,10 +1938,10 @@ static const char g_particleShader[] =
 "        o_color = vec4(v_color.rgb, a * v_color.a * clamp(room / 0.1 + 0.5, 0.0, 1.0) * overhead());"
 "        return;"
 "    }"
-/* Tyre smoke (8): a dark cloud off a wheel spinning or locked, ragged by its
+/* Tyre smoke: a dark cloud off a wheel spinning or locked, ragged by its
  * own noise, its top catching the sky and its heart almost black, neither of
  * them the ground's colour.  Blended over the picture, not added to it. */
-"    if (type == 8) {"
+"    if (type == kSmoke) {"
 "        vec2 q = v_uv * 1.7 + vec2(seed * 21.3, seed * 37.7);"
 "        float n = noise(q) * 0.55 + noise(q * 2.2) * 0.3 + noise(q * 4.6) * 0.15;"
 "        float rr = length(v_uv) * (0.72 + 0.45 * n);"
@@ -1855,7 +1953,7 @@ static const char g_particleShader[] =
 "        o_color = vec4(c, a * clamp(room / 0.3 + 0.25, 0.0, 1.0));"
 "        return;"
 "    }"
-"    if (type == 2) {"
+"    if (type == kSpark) {"
 "        float across = exp(-v_uv.y * v_uv.y * 5.0);"
 "        float along = clamp(v_uv.x * 0.5 + 0.5, 0.0, 1.0);"
 "        float a = across * mix(0.15, 1.0, along * along) * v_color.a;"
@@ -1863,7 +1961,7 @@ static const char g_particleShader[] =
 "        o_color = vec4(hot, a);"
 "        return;"
 "    }"
-"    if (type == 4) {"
+"    if (type == kSpike) {"
 /* A spike of a spike strip: a steel point (up the screen is -y) on a dark
  * rubber belt, lit from above. */
 "        float up = -v_uv.y;"
@@ -1878,12 +1976,12 @@ static const char g_particleShader[] =
 "        return;"
 "    }"
 "    float angle = atan(v_uv.y, v_uv.x) + seed * 6.2832;"
-"    if (type == 0 || type == 3) {"
+"    if (type == kGrain || type == kBlade) {"
 "        vec3 g = ground(v_color.rgb);"
-/* What comes off grass (3) is blades: long and thin, tapering, a little bent,
+/* What comes off grass is blades: long and thin, tapering, a little bent,
  * lying as they tumble (v_params.w), a greener and brighter shade of the
  * ground -- where the ground is green; off snow or earth, grains. */
-"        if (type == 3 && g.g > g.r * 1.02 && g.g > g.b * 0.9) {"
+"        if (type == kBlade && g.g > g.r * 1.02 && g.g > g.b * 0.9) {"
 "            vec2 d = vec2(cos(v_params.w), sin(v_params.w));"
 "            vec2 q = vec2(dot(v_uv, d), dot(v_uv, vec2(-d.y, d.x)));"
 "            q.y -= (seed - 0.5) * 0.5 * q.x * q.x;"
@@ -1920,10 +2018,11 @@ static const char g_particleShader[] =
 "    o_color = vec4(c, a * v_color.a * clamp(room / 0.3 + 0.2, 0.0, 1.0));"
 "}";
 
-static GLuint postProgram(GLuint (*compile)(GLenum, const std::string&, const char*), const char* fragmentBody)
+static GLuint postProgram(GLuint (*compile)(GLenum, const std::string&, const char*), const char* fragmentBody,
+                          const std::string& defines = std::string())
 {
     const GLuint vertex = compile(GL_VERTEX_SHADER, "", g_postVertexShader);
-    const GLuint fragment = compile(GL_FRAGMENT_SHADER, "", fragmentBody);
+    const GLuint fragment = compile(GL_FRAGMENT_SHADER, defines, fragmentBody);
     const GLuint program = glCreateProgram();
     glAttachShader(program, vertex);
     glAttachShader(program, fragment);
@@ -2052,6 +2151,54 @@ constexpr float kDrySeconds = 5.0f;     // to dry, under a roof or out of the ra
 constexpr float kSkyToWet = 0.06f;      // the share of sky overhead it takes
 }  // namespace lens
 
+/* Snow on the windscreen (the composite's snowOnScreen): how much more of it
+ * there is as the view comes on, and how long it takes to go. */
+namespace snow
+{
+constexpr float kMostSpeed = 300.0f / 3.6f;   // m/s: as fast as it comes down hardest, and no more
+constexpr float kMost = 2.5f;                 // times the weather's own snow, at that speed
+constexpr float kComeSeconds = 0.2f;          // to cover the glass, out in the open in the snow
+constexpr float kGoSeconds = 2.5f;            // to leave it, under a roof (a tunnel, a bridge)
+constexpr float kEaseSeconds = 1.0f;          // the weather's and the speed's share, eased: no flake blinks on a frame's change
+constexpr double kClockWrap = 3600.0;         // seconds: the field's clock starts again after an hour
+// Each flake (the composite's snowOnScreen; the atlas is tools/generate_snowflakes.py's):
+constexpr float kLife = 6.0f;                 // seconds on the glass
+constexpr float kShrinkFrom = 4.0f;           // seconds: melting down through the stages from here
+constexpr float kRestLeast = 0.5f;            // seconds a cell rests before the next lands, at least
+constexpr float kRestMost = 4.0f;             // and at most
+constexpr float kLanding = 0.12f;             // seconds to come on as it lands
+constexpr float kGoing = 0.15f;               // and to go at the end
+constexpr float kShareFade = 0.03f;           // of the share: a cell dropping out of it fades over this much
+constexpr float kBigShare = 0.4f;             // of the flakes, the big ones
+constexpr float kBaseHeight = 720.0f;         // a picture this high draws a sprite's pixel at 1 or 2 of its own
+// The atlas's layout, as the generator writes it.
+constexpr int kTile = 32;                     // pixels a sprite
+constexpr int kStages = 6;                    // shrink stages, a row each
+constexpr int kBig = 9, kSmall = 9;           // sprites, a column each: the big first
+}  // namespace snow
+
+/* The snow's tunables as the composite shader's constants. */
+static std::string snowShaderConstants()
+{
+    const std::pair<const char*, float> values[] = {
+        { "SNOW_LIFE", snow::kLife },           { "SNOW_SHRINK_FROM", snow::kShrinkFrom },
+        { "SNOW_REST_LEAST", snow::kRestLeast }, { "SNOW_REST_MOST", snow::kRestMost },
+        { "SNOW_LANDING", snow::kLanding },     { "SNOW_GOING", snow::kGoing },
+        { "SNOW_SHARE_FADE", snow::kShareFade }, { "SNOW_BIG_SHARE", snow::kBigShare },
+        { "SNOW_BASE_HEIGHT", snow::kBaseHeight }, { "SNOW_TILE", float(snow::kTile) },
+        { "SNOW_STAGES", float(snow::kStages) }, { "SNOW_BIG", float(snow::kBig) },
+        { "SNOW_SMALL", float(snow::kSmall) },
+    };
+    std::string text;
+    char line[96];
+    for (const auto& value : values)
+    {
+        SDL_snprintf(line, sizeof line, "const float %s = %.6f;\n", value.first, double(value.second));
+        text += line;
+    }
+    return text;
+}
+
 /* Auto-exposure's tunables (g_meterShader, g_adaptShader, the composite). */
 namespace exposure
 {
@@ -2083,6 +2230,64 @@ static float onOff(const char* name, float otherwise)
     return parsed > 0.0f ? SDL_min(parsed, 2.0f) : otherwise;
 }
 
+#if !defined(__ANDROID__)
+static unsigned int loadSnowflakeAtlas()
+{
+    const char* basePath = SDL_GetBasePath();
+    if (!basePath)
+    {
+        SDL_LogError(SDL_LOG_CATEGORY_RENDER, "[GFX] snow sprites: cannot find the executable directory: %s",
+                     SDL_GetError());
+        return 0;
+    }
+    const std::string path = std::string(basePath) + "assets/snowflakes/snowflake-atlas.png";
+    SDL_Surface* loaded = SDL_LoadPNG(path.c_str());
+    if (!loaded)
+    {
+        SDL_LogError(SDL_LOG_CATEGORY_RENDER, "[GFX] snow sprites: cannot load %s: %s", path.c_str(), SDL_GetError());
+        return 0;
+    }
+    SDL_Surface* rgba = SDL_ConvertSurface(loaded, SDL_PIXELFORMAT_RGBA32);
+    SDL_DestroySurface(loaded);
+    if (!rgba)
+    {
+        SDL_LogError(SDL_LOG_CATEGORY_RENDER, "[GFX] snow sprites: cannot convert %s: %s", path.c_str(), SDL_GetError());
+        return 0;
+    }
+    constexpr int side = 768;
+    if (rgba->w != side || rgba->h != side)
+    {
+        SDL_LogError(SDL_LOG_CATEGORY_RENDER, "[GFX] snow sprites: %s is %dx%d, expected %dx%d", path.c_str(),
+                     rgba->w, rgba->h, side, side);
+        SDL_DestroySurface(rgba);
+        return 0;
+    }
+    std::vector<x86::reg8> pixels(std::size_t(side) * side * 4);
+    for (int y = 0; y < side; ++y)
+        std::memcpy(pixels.data() + std::size_t(y) * side * 4,
+                    static_cast<const x86::reg8*>(rgba->pixels) + std::size_t(y) * rgba->pitch, side * 4);
+    SDL_DestroySurface(rgba);
+    for (std::size_t i = 0; i < pixels.size(); i += 4)
+        for (std::size_t channel = 0; channel < 3; ++channel)
+            pixels[i + channel] = x86::reg8((unsigned(pixels[i + channel]) * pixels[i + 3] + 127) / 255);
+
+    unsigned int texture = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, side, side, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    // Pixel art: read texel by texel (snowOnScreen's texelFetch), never filtered.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[GFX] snow sprites: loaded %s", path.c_str());
+    return texture;
+}
+#endif
+
 void ThrashRenderer::initPost()
 {
     // Each on unless set to 0 (or "off"); a number for how much, where it has one.
@@ -2096,6 +2301,9 @@ void ThrashRenderer::initPost()
     m_antialias = onOff("NFS_AA", 1.0f) > 0.0f;
     m_exposure = SDL_min(onOff("NFS_EXPOSURE", exposure::kStrength), 1.0f);
     m_lensRain = onOff("NFS_LENS_RAIN", lens::kAmount);
+#if !defined(__ANDROID__)
+    m_snowAtlas = loadSnowflakeAtlas();
+#endif
     m_exposureTrace = SDL_getenv("NFS_EXPOSURE_TRACE") != nullptr;
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[GFX] auto-exposure %.2f", double(m_exposure));
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
@@ -2111,7 +2319,7 @@ void ThrashRenderer::initPost()
             const char* particles = SDL_getenv("NFS_PARTICLES");
             m_particlesOn = !(particles && (SDL_strcmp(particles, "0") == 0 || SDL_strcasecmp(particles, "off") == 0));
             const GLuint vertex = compileShader(GL_VERTEX_SHADER, "", g_particleVertexShader);
-            const GLuint fragment = compileShader(GL_FRAGMENT_SHADER, "", g_particleShader);
+            const GLuint fragment = compileShader(GL_FRAGMENT_SHADER, particleTypeNames(), g_particleShader);
             m_particleProgram = glCreateProgram();
             glAttachShader(m_particleProgram, vertex);
             glAttachShader(m_particleProgram, fragment);
@@ -2128,7 +2336,7 @@ void ThrashRenderer::initPost()
             glGenVertexArrays(1, &m_particleArray);
             glGenBuffers(1, &m_particleBuffer);
         }
-        m_compositeProgram = postProgram(compileShader, g_compositeShader);
+        m_compositeProgram = postProgram(compileShader, g_compositeShader, snowShaderConstants());
         m_brightSource = glGetUniformLocation(m_brightProgram, "u_source");
         m_compositeSource = glGetUniformLocation(m_compositeProgram, "u_source");
         m_compositeBright = glGetUniformLocation(m_compositeProgram, "u_bright");
@@ -2152,6 +2360,8 @@ void ThrashRenderer::initPost()
         m_compositeGlareAt = glGetUniformLocation(m_compositeProgram, "u_glareAt");
         m_compositeAdapt = glGetUniformLocation(m_compositeProgram, "u_adapt");
         m_compositeExposure = glGetUniformLocation(m_compositeProgram, "u_exposure");
+        m_compositeSnow = glGetUniformLocation(m_compositeProgram, "u_snow");
+        m_compositeSnowSprites = glGetUniformLocation(m_compositeProgram, "u_snowSprites");
         glUseProgram(m_compositeProgram);
         glUniform1f(glGetUniformLocation(m_compositeProgram, "u_stops"), exposure::kStops);
         glUniform4f(m_compositeExposure, 0.0f, 0.0f, 0.0f, 0.0f);
@@ -2459,6 +2669,9 @@ void ThrashRenderer::meterSkyOpen(bool raining)
     const float rate = restart ? 1.0f : 1.0f - std::exp(-since / overhead::kSeconds);
     const float wetting = restart ? 1.0f : 1.0f - std::exp(-since / lens::kWetSeconds);
     const float drying = restart ? 1.0f : 1.0f - std::exp(-since / lens::kDrySeconds);
+    /* The snow on the glass comes as fast as the sky shows and goes slowly. */
+    const float covering = restart ? 1.0f : 1.0f - std::exp(-since / snow::kComeSeconds);
+    const float leaving = restart ? 1.0f : 1.0f - std::exp(-since / snow::kGoSeconds);
     glActiveTexture(GL_TEXTURE6);
     glBindTexture(GL_TEXTURE_2D, m_skyOpen[m_skyIndex]);
     glActiveTexture(GL_TEXTURE2);
@@ -2474,6 +2687,8 @@ void ThrashRenderer::meterSkyOpen(bool raining)
     glUniform2f(glGetUniformLocation(m_skyOpenProgram, "u_band"), overhead::kBandFrom, overhead::kBandTo);
     glUniform1f(glGetUniformLocation(m_skyOpenProgram, "u_raining"), raining && m_lensRain > 0.0f ? 1.0f : 0.0f);
     glUniform3f(glGetUniformLocation(m_skyOpenProgram, "u_lensRate"), wetting, drying, lens::kSkyToWet);
+    glUniform2f(glGetUniformLocation(m_skyOpenProgram, "u_openFade"), overhead::kNone, overhead::kAll);
+    glUniform2f(glGetUniformLocation(m_skyOpenProgram, "u_snowRate"), covering, leaving);
     glBindVertexArray(m_postArray);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glActiveTexture(GL_TEXTURE0);
@@ -2620,6 +2835,27 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
     const float ramp = SDL_max(0.0f, SDL_min(1.0f, (draw.speed - 10.0f) / 25.0f));
     const float blur = m_motionBlur * draw.speed * ramp * ramp * (3.0f - 2.0f * ramp) / 90.0f;
     const bool particles = m_particlesOn && draw.particles && !draw.particles->empty();
+    float snowAmount = 0.0f;
+    if (particles && m_snowAtlas)
+    {
+        std::size_t snowflakes = 0;
+        for (const EffectParticle& particle : *draw.particles)
+            snowflakes += particle.type == EffectParticle::Flake;
+        snowAmount = SDL_min(1.0f, float(snowflakes) / 24.0f);
+    }
+    /* Eased: how many flakes are alive changes every frame, and the speed
+     * wavers, and a flake whose cell sat at the edge of that share blinked on
+     * and off with it. */
+    {
+        const Uint64 now = SDL_GetTicksNS();
+        const float since = m_snowEasedNs ? float(double(now - m_snowEasedNs) * 1e-9) : 1e9f;
+        m_snowEasedNs = now;
+        const float ease = since > 1.0f ? 1.0f : 1.0f - std::exp(-since / snow::kEaseSeconds);
+        const float speedShare = SDL_clamp(draw.speed / snow::kMostSpeed, 0.0f, 1.0f);
+        m_snowAmount += (snowAmount - m_snowAmount) * ease;
+        m_snowSpeed += (speedShare - m_snowSpeed) * ease;
+        snowAmount = m_snowAtlas && m_snowAmount > 0.002f ? m_snowAmount : 0.0f;
+    }
     /* The sun's glare: where the sun is on the screen, and how strong it is
      * there -- faded out as it goes off the screen, none behind. */
     float glareAmount = 0.0f, glareX = 0.0f, glareY = 0.0f;
@@ -2718,14 +2954,17 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
     glUniform1f(m_compositeTrailOn, without(kPerfTrails) ? 0.0f : trails);
     glUniform1f(m_compositeGlare, glareAmount);
     glUniform2f(m_compositeGlareAt, glareX, glareY);
-    /* Rain on the lens: how wet it is is in the sky texel (meterSkyOpen),
-     * which there is only with the particles. */
-    if (m_lensRain > 0.0f && particles && m_skyOpen[0] && !without(kPerfLens))
+    const bool lensRain = m_lensRain > 0.0f && particles && m_skyOpen[0] && !without(kPerfLens);
+    const bool snowOnLens = snowAmount > 0.0f && m_skyOpen[0];
+    if (lensRain || snowOnLens)
     {
         glUniform1i(glGetUniformLocation(m_compositeProgram, "u_skyOpen"), 6);
         glActiveTexture(GL_TEXTURE6);
         glBindTexture(GL_TEXTURE_2D, m_skyOpen[m_skyIndex]);
         glActiveTexture(GL_TEXTURE0);
+    }
+    if (lensRain)
+    {
         const double seconds = double(SDL_GetTicksNS() % (1000ull * SDL_NS_PER_SECOND)) * 1e-9;
         glUniform4f(glGetUniformLocation(m_compositeProgram, "u_lens"), m_lensRain, float(seconds),
                     smoothStep(8.0f, 30.0f, draw.speed), 0.0f);
@@ -2733,6 +2972,20 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
     }
     else
         glUniform4f(glGetUniformLocation(m_compositeProgram, "u_lens"), 0.0f, 0.0f, 0.0f, 0.0f);
+    if (snowOnLens)
+    {
+        glUniform1i(m_compositeSnowSprites, 7);
+        glActiveTexture(GL_TEXTURE7);
+        glBindTexture(GL_TEXTURE_2D, m_snowAtlas);
+        glActiveTexture(GL_TEXTURE0);
+        const double seconds = std::fmod(double(SDL_GetTicksNS()) * 1e-9, snow::kClockWrap);
+        /* As much again as the weather has, up to kMost times it by the speed
+         * below kMostSpeed, and no more after. */
+        glUniform4f(m_compositeSnow, snowAmount, float(seconds), 1.0f + (snow::kMost - 1.0f) * m_snowSpeed, 0.0f);
+        glUniform2f(m_compositeSize, float(width), float(height));
+    }
+    else
+        glUniform4f(m_compositeSnow, 0.0f, 0.0f, 0.0f, 0.0f);
     if (exposed)
     {
         glUniform1i(m_compositeAdapt, 5);
