@@ -1040,11 +1040,18 @@ def parse_assignment(text):
     return name.strip(), values
 
 
-def accel_samples(car, scale=1.0):
-    """The 112 AI acceleration samples for the car as it now stands, at 1 m/s a step."""
+def accel_samples(car, scale=1.0, count=None):
+    """The AI acceleration samples for the car as it now stands, at 1 m/s a step.
+
+    As many as the car's own table holds: the game's cars keep eight sections of
+    14 (112), but an add-on's file can hold another shape -- `clkg`'s first
+    section is a whole 98-sample curve -- and a table written to the wrong
+    length would be cut short or padded with zeros the game drives to.
+    """
+    count = count or len(car.accel_table()) or ACC_SAMPLES
     curve = car.physics_curve(step=0.25)
     samples = []
-    for index in range(ACC_SAMPLES):
+    for index in range(count):
         speed = float(index)
         value = 0.0
         if curve and speed <= car.vmax * 1.02:
@@ -1059,35 +1066,6 @@ def table_time(samples, speed):
     return Car.time_from_curve(curve, speed)
 
 
-_CALIBRATION = {}
-
-
-def calibration(root=CARMODEL):
-    """How much the engine-curve estimate overstates the retail cars.
-
-    The estimate has no clutch, tyre or traction loss in it, so it is quicker
-    than the acceleration tables EA shipped.  Measured against the whole field
-    it is a steady factor, and that factor is what `derive --scale auto` takes
-    out -- the tuning still shows through, the optimism does not.
-    """
-    key = str(root)
-    if key in _CALIBRATION:
-        return _CALIBRATION[key]
-    ratios = []
-    for car in all_cars(root):
-        table = table_time(car.accel_table(), 27.78)
-        raw = table_time(accel_samples(car, 1.0), 27.78)
-        if table and raw:
-            ratios.append(raw / table)
-    if ratios:
-        ratios.sort()
-        factor = ratios[len(ratios) // 2]
-    else:
-        factor = 1.0
-    _CALIBRATION[key] = factor
-    return factor
-
-
 def derive_tables(car, scale="auto", match=None, root=CARMODEL):
     """Rewrite the eight AI ACC sections from the engine curve, gearing and mass.
 
@@ -1098,28 +1076,36 @@ def derive_tables(car, scale="auto", match=None, root=CARMODEL):
     the shape), a number, or 1.0 for the raw engine-curve estimate.
     """
     before = car.accel_table()
-    if match is not None:
-        factor = calibration(root)
-        for _ in range(4):
+    shipped = table_time(before, 27.78)
+    aim = match if match is not None else (shipped if scale == "auto" else None)
+    factor = 1.0 if aim else float(scale)
+    if aim:
+        # The model is optimistic by an amount of its own for each car (it has
+        # no clutch, tyre or traction loss in it), so the estimate is scaled
+        # until it gives this car the 0-100 it has: the shape is the model's,
+        # the level the car's.  A couple of passes settle it -- both sides move
+        # with the square root of the factor at worst.
+        for _ in range(6):
             samples = accel_samples(car, factor)
             now = table_time(samples, 27.78)
             if not now:
                 break
-            factor *= now / match
-    elif scale == "auto":
-        factor = calibration(root)
-        samples = accel_samples(car, factor)
-    else:
-        factor = float(scale)
-        samples = accel_samples(car, factor)
+            factor *= now / aim
     samples = accel_samples(car, factor)
-    return samples, factor, table_time(before, 27.78), table_time(samples, 27.78)
+    return samples, factor, shipped, table_time(samples, 27.78)
 
 
 def write_accel(carp, samples):
-    for section in range(ACC_LAST - ACC_FIRST + 1):
-        chunk = samples[section * 14:(section + 1) * 14]
-        carp.set(ACC_FIRST + section, chunk)
+    """The curve into the eight AI ACC sections, each as many numbers as it holds
+    now -- not 14 each, as most cars' files do: an add-on's can differ, and a
+    section written to another length is either refused or loses samples."""
+    at = 0
+    for section in range(ACC_FIRST, ACC_LAST + 1):
+        room = len(carp.fields[section].values)
+        chunk = list(samples[at:at + room])
+        at += room
+        chunk += [0.0] * (room - len(chunk))
+        carp.set(section, chunk)
 
 
 def resolve_changes(carp, changes):
@@ -1582,7 +1568,7 @@ def main(argv=None):
             print("%s (%s):" % (car.key, car.folder))
             print("  acceleration table  0-100 %s -> %s   (scale %.3f%s)"
                   % ("%.2f s" % was if was else "--", "%.2f s" % now if now else "--", factor,
-                     ", the model's own optimism" if args.scale == "auto" and args.match is None
+                     ", this car's own 0-100 kept" if args.scale == "auto" and args.match is None
                      else ""))
             if args.dry_run:
                 print("  (nothing written)")
