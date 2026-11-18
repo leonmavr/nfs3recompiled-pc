@@ -430,8 +430,12 @@ the game still decides where and when, and how fast and how big
 
 - **a raindrop** as a short bright streak from where it was a frame ago
   (`EffectParticle::Droplet`, added to the picture like a spark),
-- **a snowflake** as a small soft speck, ragged by its seed
-  (`EffectParticle::Flake`, blended like a puff),
+- **a snowflake** as a small soft speck, ragged by its seed, its quad stretched
+  the same way as a drop's -- from where it was a frame ago to where it is, soft
+  at both ends of it (`EffectParticle::Flake`, blended like a puff). Standing
+  still the flake's quad is square and it is the speck it was; at speed the
+  flake streaks past the windscreen the faster the view goes, as the drops do
+  (2026-11-18),
 
 in a pale colour of its own, falling as the game threw it -- the rain hardly
 slowed, the flake drifting. Which it is comes from the track's weather (its

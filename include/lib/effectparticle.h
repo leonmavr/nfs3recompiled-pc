@@ -16,7 +16,7 @@ struct EffectParticle
         Droplet = 9, Flake = 10, BrakeGlow = 11
     };
     float x, y;         // the centre, in the picture's pixels
-    float tx, ty;       // a spark: where it was a moment ago; else where it was thrown from
+    float tx, ty;       // a spark's, a drop's, a flake's: where it was a moment ago; else where it was thrown from
     float depth;        // its distance in the view, as the depth buffer has it (z)
     float size;         // its half-width, in pixels
     float r, g, b, a;   // its colour where the ground's cannot be had; a is how much of it shows

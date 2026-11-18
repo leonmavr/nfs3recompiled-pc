@@ -1409,14 +1409,19 @@ void projectParticles(win32::WinApplication* app, x86::reg32 view)
         e.seed = q.seed;
         e.type = float(q.type);
         const float left = 1.0f - q.age / q.life;
-        if (q.type == EffectParticle::Droplet)
+        if (q.type == EffectParticle::Droplet || q.type == EffectParticle::Flake)
         {
-            // A drop is a short bright streak from where it was a frame ago.
+            /* A drop is a short bright streak from where it was a frame ago,
+             * and a flake is drawn the same way: at speed both streak past the
+             * windscreen the faster the view moves, and standing still the
+             * streak is no longer than the flake's own speck (2026-11-18). */
             e.r = q.colour[0];
             e.g = q.colour[1];
             e.b = q.colour[2];
-            e.a = q.alpha * near;
-            e.size = SDL_max(0.8f, scale * q.size / z);
+            e.a = q.type == EffectParticle::Droplet
+                      ? q.alpha * near
+                      : q.alpha * SDL_min(1.0f, q.age / 0.08f) * SDL_min(1.0f, left * 3.0f) * near;
+            e.size = SDL_max(0.8f, SDL_min(scale * q.size / z, 300.0f));
             if (q.hasLast)
             {
                 e.tx = q.last[0];
@@ -1435,7 +1440,10 @@ void projectParticles(win32::WinApplication* app, x86::reg32 view)
             q.last[0] = e.x;
             q.last[1] = e.y;
             q.hasLast = true;
-            s_sparks.push_back(e);
+            if (q.type == EffectParticle::Droplet)
+                s_sparks.push_back(e);   // added to the picture, like a spark
+            else
+                s_out.push_back(e);      // blended over it, like a puff
             continue;
         }
         if (q.type == EffectParticle::Spark)

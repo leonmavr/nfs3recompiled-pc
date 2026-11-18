@@ -1824,16 +1824,25 @@ static const char g_particleShader[] =
 "        o_color = vec4(v_color.rgb * (0.85 + 0.4 * soft), a);"
 "        return;"
 "    }"
-/* Tyre smoke (8): a dark cloud off a wheel spinning or locked, ragged by its
- * own noise, its top catching the sky and its heart almost black, neither of
- * them the ground's colour.  Blended over the picture, not added to it. */
-"    if (type == 10) {"   /* a snowflake: a small soft speck, ragged by its seed */
-"        float rr = length(v_uv) * (0.85 + 0.35 * noise(v_uv * 3.0 + vec2(seed * 19.0, seed * 7.0)));"
-"        float a = (1.0 - smoothstep(0.35, 1.0, rr)) * inside(v_uv);"
+/* A snowflake (10): a small soft speck, ragged by its seed -- soft at the ends
+ * of its quad along x as well as at its sides, so that the streak its quad is
+ * stretched into at speed (drawParticles) is a flake's dash and not a turned
+ * box; standing still the quad is square and the flake the speck it was.
+ * Blended over the picture, not added to it. */
+"    if (type == 10) {"
+/* Never under 1, so both axes are at their rim where the quad is: nothing of
+ * the flake reaches its edge, however its noise came out. */
+"        float ragged = 1.0 + 0.4 * noise(v_uv * 3.0 + vec2(seed * 19.0, seed * 7.0));"
+"        float along = 1.0 - smoothstep(0.3, 1.0, abs(v_uv.x) * ragged);"
+"        float across = 1.0 - smoothstep(0.3, 1.0, abs(v_uv.y) * ragged);"
+"        float a = along * across;"
 "        if (a <= 0.002) discard;"
 "        o_color = vec4(v_color.rgb, a * v_color.a * clamp(room / 0.1 + 0.5, 0.0, 1.0) * overhead());"
 "        return;"
 "    }"
+/* Tyre smoke (8): a dark cloud off a wheel spinning or locked, ragged by its
+ * own noise, its top catching the sky and its heart almost black, neither of
+ * them the ground's colour.  Blended over the picture, not added to it. */
 "    if (type == 8) {"
 "        vec2 q = v_uv * 1.7 + vec2(seed * 21.3, seed * 37.7);"
 "        float n = noise(q) * 0.55 + noise(q * 2.2) * 0.3 + noise(q * 4.6) * 0.15;"
@@ -2275,16 +2284,17 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
     added.reserve(list.size() * 6);
     for (const EffectParticle& p : list)
     {
-        /* A spark or a streak is a quad stretched from where it was to where it
-         * is, white hot at its head; a flame is a quad like a puff's, but added
+        /* A spark, a streak, a drop and a flake are quads stretched from where
+         * they were to where they are -- white hot at its head, a drop and a
+         * flake soft at both ends; a flame is a quad like a puff's, but added
          * to what is behind it rather than blended over it -- light, not paint. */
-        const bool streak = p.type == EffectParticle::Spark || p.type == EffectParticle::Streak
-                            || p.type == EffectParticle::Droplet;
-        const bool additive =
-            streak || p.type == EffectParticle::Flame || p.type == EffectParticle::Glow
-            || p.type == EffectParticle::BrakeGlow;
+        const bool stretch = p.type == EffectParticle::Spark || p.type == EffectParticle::Streak
+                             || p.type == EffectParticle::Droplet || p.type == EffectParticle::Flake;
+        const bool additive = (stretch && p.type != EffectParticle::Flake)
+                              || p.type == EffectParticle::Flame || p.type == EffectParticle::Glow
+                              || p.type == EffectParticle::BrakeGlow;
         float ax, ay, bx, by;   // the quad's two axes, half its length and width
-        if (streak)
+        if (stretch)
         {
             float dx = p.x - p.tx, dy = p.y - p.ty;
             float length = std::sqrt(dx * dx + dy * dy);
@@ -2310,9 +2320,9 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
         const bool cloud = !additive && m_softHalf
                            && (p.type == EffectParticle::Puff || p.type == EffectParticle::Smoke);
         std::vector<Corner>& into = additive ? added : cloud ? soft : corners;
-        const float cx = streak ? 0.5f * (p.x + p.tx) : p.x;
-        const float cy = streak ? 0.5f * (p.y + p.ty) : p.y;
-        const float fromX = streak ? -1.0f : p.tx;
+        const float cx = stretch ? 0.5f * (p.x + p.tx) : p.x;
+        const float cy = stretch ? 0.5f * (p.y + p.ty) : p.y;
+        const float fromX = stretch ? -1.0f : p.tx;
         auto corner = [&](float s, float t) {
             into.push_back({ cx + ax * s + bx * t, cy + ay * s + by * t, s, t, p.r, p.g, p.b, p.a, fromX, p.ty,
                                 p.depth, p.seed, p.type, p.turn });
