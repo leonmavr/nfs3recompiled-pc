@@ -286,20 +286,6 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   - [x] Next: light on trackside objects (fences, walls) from the headlights.
     - Done: walls, fences, trees, buildings lit by the player's headlights in
       the shader (`NFS_HEADLIGHT_OBJECTS`, 1.6).
-- [x] BUG: exhaust flames visible through the player's own car (from in front of
-  it, or ghosting through the rear bumper). Nothing to do with the car's depth
-  at all: **the particle shader read the depth buffer upside down.** This port
-  draws the picture turned over, so its depth rows run from the top while
-  `gl_FragCoord` runs from the bottom; every particle was therefore cut against
-  the surface mirrored across the middle of the picture. High up that is nearly
-  the same thing (so opponents' flames *were* being cut off, which is what made
-  it look like a car-only problem); low down, behind your own car, it compared
-  against the sky, which holds no depth, so nothing ever cut them. Fixed by
-  turning the row over where the particles read the depth. Measured with
-  `NFS_FLAME_DEPTH_TRACE` (the flame at 5.88 m, the car's rear at 4.89 m: cut).
-  A separate switch, `NFS_CAR_DEPTH` (off), can make cars write depth where the
-  game leaves the mask off -- kept for a look at cars that overlap, not needed
-  for this.
 - [ ] Emissive light from environmental models that emit light. Note that this
   is partially implementned by the original game but check if it can improved
 - [ ] High Stakes-only tracks (Park, UK, GT1-3): the road loads now, the race
