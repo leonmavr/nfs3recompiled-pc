@@ -840,7 +840,22 @@ void Renderer::ensureFramePacing()
 {
     if (m_swapInterval != 0)
         return;
-    glthread::post(this, []() { SDL_GL_SetSwapInterval(1); });
+    /* Adaptive where the driver has it (NFS_VSYNC, on by default; "strict"
+     * for plain vsync): a frame on time waits for the refresh as before, one a
+     * little late goes out at once, torn, rather than waiting a whole refresh
+     * more -- at 30 frames a second on a 60 Hz screen a frame of 34 ms was
+     * shown at 50 (2026-11-18, the rain's "spikes", NFS_PERF_TRACE).  Where it
+     * is refused (EGL on Android), plain vsync. */
+    static const bool adaptive = [] {
+        const char* value = SDL_getenv("NFS_VSYNC");
+        return !(value && SDL_strcasecmp(value, "strict") == 0);
+    }();
+    glthread::post(this, []() {
+        const bool late = adaptive && SDL_GL_SetSwapInterval(-1);
+        if (!late)
+            SDL_GL_SetSwapInterval(1);
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "frame pacing: %s", late ? "adaptive vsync (a late frame tears rather than waits)" : "vsync");
+    });
     m_swapInterval = 1;
     const char* capEnv = SDL_getenv("NFS_FPS_CAP");
     const int cap = capEnv ? SDL_atoi(capEnv) : 30;

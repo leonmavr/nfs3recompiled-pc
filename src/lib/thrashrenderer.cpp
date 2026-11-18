@@ -155,7 +155,7 @@ static const char g_fragmentShader[] =
 "    return texelFetch(u_texture, ivec2(t), level);"
 "}"
 /* A texture seen larger than it is (initGl, NFS_TEXTURE_SHARP): Catmull-Rom
- * over the sixteen texels around the point, in nine bilinear reads, instead
+ * over the sixteen texels around the point, in five bilinear reads (below), instead
  * of the GPU's bilinear over four -- the track's 64 x 64 pictures spread over
  * a wall or a hillside keep their edges instead of melting into a cross-hatched
  * blur -- in the world only (what is fogged): the menus' lettering, cut out
@@ -163,12 +163,16 @@ static const char g_fragmentShader[] =
  * pixel or smaller the GPU's own filtering (the
  * levels, trilinear, anisotropic) is the better one and is what is used; the
  * two are blended across the step, so no line shows where one gives way. */
+/* Five of the nine (2026-11-18): the four corner reads carry the products of
+ * the curve's two small end weights, a few hundredths, and are left out, the
+ * rest renormalised -- no difference to be seen -- and the GPU's own filtered
+ * read is made only where it is blended in, not under every magnified pixel
+ * (with 16x anisotropic filtering, the dearest read of them all). */
 "vec4 sharpTexture(vec2 uv, vec2 gx, vec2 gy)"
 "{"
-"    vec4 plain = textureGrad(u_texture, uv, gx, gy);"
 "    vec2 size = vec2(textureSize(u_texture, 0));"
 "    float rho = max(length(gx * size), length(gy * size));"
-"    if (rho >= 1.0) return plain;"
+"    if (rho >= 1.0) return textureGrad(u_texture, uv, gx, gy);"
 "    vec2 p = uv * size;"
 "    vec2 t1 = floor(p - 0.5) + 0.5;"
 "    vec2 f = p - t1;"
@@ -178,16 +182,16 @@ static const char g_fragmentShader[] =
 "    vec2 w3 = f * f * (-0.5 + 0.5 * f);"
 "    vec2 w12 = w1 + w2;"
 "    vec2 a = (t1 - 1.0) / size, b = (t1 + w2 / w12) / size, c = (t1 + 2.0) / size;"
-"    vec4 sum = textureLod(u_texture, vec2(a.x, a.y), 0.0) * w0.x * w0.y"
-"             + textureLod(u_texture, vec2(b.x, a.y), 0.0) * w12.x * w0.y"
-"             + textureLod(u_texture, vec2(c.x, a.y), 0.0) * w3.x * w0.y"
-"             + textureLod(u_texture, vec2(a.x, b.y), 0.0) * w0.x * w12.y"
-"             + textureLod(u_texture, vec2(b.x, b.y), 0.0) * w12.x * w12.y"
-"             + textureLod(u_texture, vec2(c.x, b.y), 0.0) * w3.x * w12.y"
-"             + textureLod(u_texture, vec2(a.x, c.y), 0.0) * w0.x * w3.y"
-"             + textureLod(u_texture, vec2(b.x, c.y), 0.0) * w12.x * w3.y"
-"             + textureLod(u_texture, vec2(c.x, c.y), 0.0) * w3.x * w3.y;"
-"    return mix(plain, clamp(sum, 0.0, 1.0), smoothstep(1.0, 0.6, rho));"
+"    float wn = w12.x * w0.y, ww = w0.x * w12.y, wm = w12.x * w12.y, we = w3.x * w12.y, ws = w12.x * w3.y;"
+"    vec4 sum = textureLod(u_texture, vec2(b.x, a.y), 0.0) * wn"
+"             + textureLod(u_texture, vec2(a.x, b.y), 0.0) * ww"
+"             + textureLod(u_texture, vec2(b.x, b.y), 0.0) * wm"
+"             + textureLod(u_texture, vec2(c.x, b.y), 0.0) * we"
+"             + textureLod(u_texture, vec2(b.x, c.y), 0.0) * ws;"
+"    vec4 sharp = clamp(sum / (wn + ww + wm + we + ws), 0.0, 1.0);"
+"    float blend = smoothstep(1.0, 0.6, rho);"
+"    if (blend >= 1.0) return sharp;"
+"    return mix(textureGrad(u_texture, uv, gx, gy), sharp, blend);"
 "}"
 "void main()"
 "{"
@@ -1963,6 +1967,29 @@ static bool perfTraced()
     static const bool on = SDL_getenv("NFS_PERF_TRACE") != nullptr;
     return on;
 }
+/* NFS_PERF_TRACE=2: each of the costly effects left out in turn, two seconds
+ * each, and the frames timed without it -- what each one costs on this GPU,
+ * from one race.  The picture changes as it goes; for finding costs only. */
+enum PerfLeftOut
+{
+    kPerfNone, kPerfHaze, kPerfSharpen, kPerfGrain, kPerfWet, kPerfHeadlights, kPerfShadows, kPerfBlur,
+    kPerfAa, kPerfBloom, kPerfHalo, kPerfTrails, kPerfLens, kPerfExposure, kPerfCount
+};
+static const char* const kPerfNames[kPerfCount] = { "nothing", "haze", "bicubic textures", "grain", "wet road",
+                                                     "headlights on objects", "object shadows", "motion blur", "FXAA",
+                                                     "glow", "lamps' halo", "light trails", "lens rain",
+                                                     "auto-exposure" };
+static int s_perfLeftOut = kPerfNone;   // this frame's
+static bool perfCycling()
+{
+    static const bool on = [] {
+        const char* text = SDL_getenv("NFS_PERF_TRACE");
+        return text && SDL_strcmp(text, "2") == 0;
+    }();
+    return on;
+}
+static bool without(int effect) { return s_perfLeftOut == effect; }
+
 struct GpuCost
 {
     Uint64 frameStart = 0, mark = 0;
@@ -1971,6 +1998,12 @@ struct GpuCost
     Uint64 said = 0;
 };
 static GpuCost s_gpu;
+
+/* NFS_PERF_TRACE: the textures the game uploaded this frame, how big, and the
+ * game thread's time in them (setTextureData), for a slow frame's line. */
+static unsigned s_uploads = 0;
+static double s_uploadKB = 0.0, s_uploadMs = 0.0;
+
 static double gpuLap()
 {
     glFinish();
@@ -2623,8 +2656,8 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
         glGenerateMipmap(GL_TEXTURE_2D);
         glActiveTexture(GL_TEXTURE0);
     }
-    const bool exposed = m_exposure > 0.0f && meterExposure();
-    if (m_bloom > 0.0f)
+    const bool exposed = m_exposure > 0.0f && !without(kPerfExposure) && meterExposure();
+    if (m_bloom > 0.0f && !without(kPerfBloom))
     {
         glBindFramebuffer(GL_FRAMEBUFFER, m_postFramebuffer);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_bright, 0);
@@ -2646,12 +2679,12 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
     glUniform1i(m_compositeSource, 0);
     glUniform1i(m_compositeBright, 1);
     glUniform2f(m_compositePixel, 1.0f / float(width), 1.0f / float(height));
-    glUniform1f(m_compositeBloom, m_bloom);
+    glUniform1f(m_compositeBloom, without(kPerfBloom) ? 0.0f : m_bloom);
     glUniform3f(m_compositeGrade, draw.grade[3], draw.grade[4], m_gradeOn ? 1.0f : 0.0f);
     glUniform3f(m_compositeTint, draw.grade[0], draw.grade[1], draw.grade[2]);
-    glUniform1i(m_compositeAa, m_antialias ? 1 : 0);
-    glUniform1f(m_compositeShadow, shadows ? draw.sun[0] : 0.0f);
-    glUniform1f(m_compositeBlur, blur);
+    glUniform1i(m_compositeAa, m_antialias && !without(kPerfAa) ? 1 : 0);
+    glUniform1f(m_compositeShadow, shadows && !without(kPerfShadows) ? draw.sun[0] : 0.0f);
+    glUniform1f(m_compositeBlur, without(kPerfBlur) ? 0.0f : blur);
     if (needDepth)
     {
         glUniform1i(m_compositeDepth, 2);
@@ -2670,13 +2703,13 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
         glBindTexture(GL_TEXTURE_2D, m_bright);
         glActiveTexture(GL_TEXTURE0);
     }
-    glUniform1f(m_compositeHalo, lights ? m_lightGlow * 0.8f : 0.0f);
-    glUniform1f(m_compositeTrailOn, trails);
+    glUniform1f(m_compositeHalo, lights && !without(kPerfHalo) ? m_lightGlow * 0.8f : 0.0f);
+    glUniform1f(m_compositeTrailOn, without(kPerfTrails) ? 0.0f : trails);
     glUniform1f(m_compositeGlare, glareAmount);
     glUniform2f(m_compositeGlareAt, glareX, glareY);
     /* Rain on the lens: how wet it is is in the sky texel (meterSkyOpen),
      * which there is only with the particles. */
-    if (m_lensRain > 0.0f && particles && m_skyOpen[0])
+    if (m_lensRain > 0.0f && particles && m_skyOpen[0] && !without(kPerfLens))
     {
         glUniform1i(glGetUniformLocation(m_compositeProgram, "u_skyOpen"), 6);
         glActiveTexture(GL_TEXTURE6);
@@ -2723,7 +2756,39 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
         glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
     }
 
-    if (timed)
+    if (timed && perfCycling())
+    {
+        s_gpu.post += gpuLap();
+        s_gpu.frameStart = 0;
+        /* Per effect left out: a frame's times summed while it is out, the first
+         * few after a change let go (their pipeline still the last one's). */
+        static int s_current = -1, s_skip = 0;
+        static double s_world = 0.0, s_particles = 0.0, s_post = 0.0;
+        static unsigned s_frames = 0;
+        if (s_perfLeftOut != s_current)
+        {
+            if (s_current >= 0 && s_frames > 0)
+                SDL_Log("[PERF] without %-22s the world %5.2f ms, particles %5.2f, the rest of the pass %5.2f "
+                        "(%u frames, wet %d)",
+                        kPerfNames[s_current], s_world / s_frames, s_particles / s_frames, s_post / s_frames, s_frames,
+                        int(draw.wetness > 0.0f));
+            s_current = s_perfLeftOut;
+            s_skip = 3;
+            s_world = s_particles = s_post = 0.0;
+            s_frames = 0;
+        }
+        if (s_skip > 0)
+            --s_skip;
+        else
+        {
+            s_world += s_gpu.world;
+            s_particles += s_gpu.particles;
+            s_post += s_gpu.post;
+            ++s_frames;
+        }
+        s_gpu.world = s_gpu.particles = s_gpu.post = 0.0;
+    }
+    else if (timed)
     {
         s_gpu.post += gpuLap();
         s_gpu.frameStart = 0;
@@ -2762,6 +2827,8 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
     {
         glFinish();
         s_gpu.frameStart = s_gpu.mark = SDL_GetTicksNS();
+        if (perfCycling())
+            s_perfLeftOut = int((s_gpu.frameStart / (2 * SDL_NS_PER_SECOND)) % kPerfCount);
     }
     glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_renderer->m_texture, 0);
@@ -2841,7 +2908,7 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
     const float haze = draw.race ? m_haze : 0.0f;
     const bool wet = draw.wetness > 0.0f && m_reflectionValid && m_reflectionW == int(draw.width)
                      && m_reflectionH == int(draw.height);
-    glUniform1f(m_locations.wet, wet ? draw.wetness : 0.0f);
+    glUniform1f(m_locations.wet, wet && !without(kPerfWet) ? draw.wetness : 0.0f);
     /* NFS_WET_TRACE: a wet frame drawn dry, and why. */
     const bool traced = wetTraced();
     if (traced)
@@ -2934,7 +3001,7 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
          * sky added onto the sky -- only brightened it. */
         {
             const float hazeHere = m_skyTaken && m_skyW == int(draw.width) && m_skyH == int(draw.height)
-                                   && batch.alphaBlend ? haze : 0.0f;
+                                   && batch.alphaBlend && !without(kPerfHaze) ? haze : 0.0f;
             if (hazeHere != hazeSet)
             {
                 glUniform1f(m_locations.haze, hazeHere);
@@ -2942,15 +3009,15 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
             }
         }
         if (m_detailTexture && (!previous || batch.detail != previous->detail))
-            glUniform1f(m_locations.detail, batch.detail ? m_detailStrength : 0.0f);
+            glUniform1f(m_locations.detail, batch.detail && !without(kPerfGrain) ? m_detailStrength : 0.0f);
         if (m_detailTexture && (!previous || batch.surface != previous->surface))
-            glUniform1f(m_locations.surface, batch.surface ? m_surfaceStrength : 0.0f);
+            glUniform1f(m_locations.surface, batch.surface && !without(kPerfGrain) ? m_surfaceStrength : 0.0f);
         if (!previous || batch.headlit != previous->headlit)
-            glUniform1f(m_locations.headlight, batch.headlit ? headlight : 0.0f);
+            glUniform1f(m_locations.headlight, batch.headlit && !without(kPerfHeadlights) ? headlight : 0.0f);
         if (!previous || batch.carShine != previous->carShine)
             glUniform1f(m_locations.carShine, batch.carShine ? m_carShine : 0.0f);
         if (!previous || batch.sharpen != previous->sharpen)
-            glUniform1i(m_locations.sharpen, batch.sharpen && m_sharpen ? 1 : 0);
+            glUniform1i(m_locations.sharpen, batch.sharpen && m_sharpen && !without(kPerfSharpen) ? 1 : 0);
         if (batch.fogTable != fogTable)
         {
             fogTable = batch.fogTable;
@@ -3084,6 +3151,21 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
 
 void ThrashRenderer::swap()
 {
+    /* NFS_PERF_TRACE: a frame slower than kSlowFrameMs on the game thread, said
+     * at once with what the game uploaded in it. */
+    if (perfTraced())
+    {
+        constexpr double kSlowFrameMs = 35.0;
+        static Uint64 s_last = 0;
+        const Uint64 now = SDL_GetTicksNS();
+        const double ms = s_last ? double(now - s_last) * 1e-6 : 0.0;
+        s_last = now;
+        if (ms > kSlowFrameMs)
+            SDL_Log("[PERF] slow frame: %.1f ms on the game thread; %u textures uploaded in it, %.0f KB, %.2f ms",
+                    ms, s_uploads, s_uploadKB, s_uploadMs);
+        s_uploads = 0;
+        s_uploadKB = s_uploadMs = 0.0;
+    }
     m_renderer->ensureFramePacing();
     /* While a race loads (Renderer::setUnpaced), its loading picture is
      * flipped again and again as the files come in: at most one of those
@@ -3670,8 +3752,24 @@ static void soften(std::vector<x86::reg8>& texels, x86::reg32 size, x86::reg32 l
         rebuildLevels(texels, size, levels);
 }
 
-void ThrashRenderer::setTextureData(x86::reg32, x86::reg32 address, const void* data, x86::reg32 largeMipmap,
+void ThrashRenderer::setTextureData(x86::reg32 tmu, x86::reg32 address, const void* data, x86::reg32 largeMipmap,
                                     x86::reg32 smallMipmap, TextureFormat format)
+{
+    if (!perfTraced())
+    {
+        uploadTexture(tmu, address, data, largeMipmap, smallMipmap, format);
+        return;
+    }
+    const Uint64 began = SDL_GetTicksNS();
+    uploadTexture(tmu, address, data, largeMipmap, smallMipmap, format);
+    ++s_uploads;
+    const double side = double(256 >> largeMipmap);
+    s_uploadKB += side * side * (format == TF_ARGB_8888 ? 4.0 : 2.0) / 1024.0;
+    s_uploadMs += double(SDL_GetTicksNS() - began) * 1e-6;
+}
+
+void ThrashRenderer::uploadTexture(x86::reg32, x86::reg32 address, const void* data, x86::reg32 largeMipmap,
+                                   x86::reg32 smallMipmap, TextureFormat format)
 {
     const x86::reg32 size = 256 >> largeMipmap;
     const x86::reg32 smallest = 256 >> smallMipmap;

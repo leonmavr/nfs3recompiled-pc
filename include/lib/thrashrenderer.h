@@ -146,6 +146,9 @@ public:
     void setTexture(x86::reg32 tmu, x86::reg32 address) override;
     void setTextureData(x86::reg32 tmu, x86::reg32 address, const void* data,
                         x86::reg32 largeMipmap, x86::reg32 smallMimmap, TextureFormat format) override;
+    // setTextureData's work (NFS_PERF_TRACE times it).
+    void uploadTexture(x86::reg32 tmu, x86::reg32 address, const void* data, x86::reg32 largeMipmap,
+                       x86::reg32 smallMipmap, TextureFormat format);
     void drawTriangle(const GrVertex* a, const GrVertex* b, const GrVertex* c) override;
     void resetTextures() override;
 
