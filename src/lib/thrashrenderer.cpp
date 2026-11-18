@@ -1316,6 +1316,10 @@ static const char g_skyOpenShader[] =
 "uniform sampler2D u_last;"
 "uniform float u_rate;"
 "uniform vec2 u_band;"   // from, to: the top of the picture, in its rows (0 the top)
+"uniform float u_raining;"   // 1 while it rains (the road wet), else 0
+"uniform vec3 u_lensRate;"   // the lens wetting, drying (a frame's share); the sky share it takes to wet
+"float unpack(vec2 c) { return c.x + c.y / 255.0; }"
+"vec2 pack(float t) { float s = clamp(t, 0.0, 1.0) * 255.0; return vec2(floor(s) / 255.0, fract(s)); }"
 "void main()"
 "{"
 "    float open = 0.0;"
@@ -1325,8 +1329,25 @@ static const char g_skyOpenShader[] =
 "            open += step(0.996, texture(u_depth, at).r);"
 "        }"
 "    open /= 72.0;"
-"    float last = texture(u_last, vec2(0.5)).r;"
-"    o_color = vec4(mix(last, open, u_rate), 0.0, 0.0, 1.0);"
+"    vec4 last = texture(u_last, vec2(0.5));"
+/* And how wet the lens is (the windscreen's drops, the composite): wetting in
+ * the rain under an open sky, drying under a roof or out of the rain, in two
+ * bytes so a slow drying does not stall. */
+"    float lens = unpack(last.ba);"
+"    float wetting = u_raining * step(u_lensRate.z, open);"
+"    lens += (wetting - lens) * (wetting > lens ? u_lensRate.x : u_lensRate.y);"
+"    o_color = vec4(mix(last.r, open, u_rate), 0.0, pack(lens));"
+"}";
+
+/* The soft particles' half-size layer (drawParticles), premultiplied, laid
+ * over the picture. */
+static const char g_softLayerShader[] =
+"in vec2 v_uv;"
+"layout (location=0) out vec4 o_color;"
+"uniform sampler2D u_layer;"
+"void main()"
+"{"
+"    o_color = texture(u_layer, v_uv);"
 "}";
 
 static const char g_compositeShader[] =
@@ -1354,8 +1375,88 @@ static const char g_compositeShader[] =
 "uniform vec2 u_glareAt;"
 "uniform sampler2D u_adapt;"
 "uniform vec4 u_exposure;"   // strength, dead zone, most up, most down (stops)
+"uniform sampler2D u_skyOpen;"   // its b, a: how wet the lens is (g_skyOpenShader)
+"uniform vec4 u_lens;"           // amount (0 for none), seconds, speed share (0 to 1), unused
 "uniform float u_stops;"
 "float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }"
+/* Rain on the lens (NFS_LENS_RAIN): drops on the view, in cells of two grids
+ * -- clusters (a main drop and two to five smaller ones broken off round it)
+ * and a fine mist of single droplets.  A cell has its cluster or not by its
+ * hash; it lives three to six seconds and comes again elsewhere in its cell.
+ * Each drop a little narrower than it is tall, 0.8 to 1 of it by its hash.
+ * A drop is a little lens: it shows the picture round it, upside down and
+ * gathered from 2.6 to 3.8 times its size (the more the bigger the drop), as a
+ * drop on a lens does, blended into the picture over its outer part so that
+ * nothing outlines it; it catches a little light.  Still, a drop creeps down;
+ * at speed it slides out towards the edge of the view and is gone sooner, the
+ * small ones lagging behind it, a trail of what broke off.  A cluster and its
+ * travel keep within half a cell of its middle, so a pixel looks at the four
+ * cells nearest it in each grid and finds every drop that can reach it; a
+ * cell whose cluster is out of reach is passed over at once.  How many there
+ * are is how wet the lens is (g_skyOpenShader), times u_lens.x, each fading in
+ * or out by its own hash. */
+"float unpack2(vec2 c) { return c.x + c.y / 255.0; }"
+"float lensHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }"
+"void lensDrop(vec2 px, vec2 c, float r, float aspect, float big, float fade, inout vec2 pull, inout float best)"
+"{"
+"    vec2 d = px - c;"
+"    vec2 e = vec2(d.x / aspect, d.y);"   /* its width against its height, 0.8 to 1 */
+"    float body = 1.0 - dot(e, e) / (r * r);"
+"    if (body <= 0.0) return;"
+"    float show = smoothstep(0.0, 0.25, body) * fade;"
+"    if (show <= best) return;"
+"    best = show;"
+"    float gather = mix(1.6, 2.8, clamp(r / big, 0.0, 1.0));"
+"    pull = -d * (1.0 + gather);"
+"}"
+"void lensCell(vec2 px, vec2 id, float cell, float seed, float wet, float cluster, inout vec2 pull, inout float best)"
+"{"
+"    float h = lensHash(id + seed);"
+"    float here = clamp((wet * u_lens.x * 0.6 - h) * 6.0, 0.0, 1.0);"
+"    if (here <= 0.0) return;"
+"    float period = mix(3.0, 6.0, lensHash(id + seed + 1.3));"
+"    float tt = (u_lens.y + h * 37.0) / period;"
+"    float cycle = floor(tt), t = fract(tt);"
+"    float life = mix(0.9, 0.45, u_lens.z);"
+"    if (t > life) return;"
+"    float age = t / life;"
+"    float big = cell * (cluster > 0.5 ? 0.08 : 0.24);"
+"    float r = big * mix(0.55, 1.0, lensHash(id + cycle * 1.7 + seed));"
+"    vec2 c = (id + vec2(lensHash(id + cycle * 0.37 + seed), lensHash(id + cycle * 0.71 + seed + 2.1))) * cell;"
+"    float side = c.x < u_size.x * 0.5 ? -1.0 : 1.0;"
+"    vec2 travel = vec2(side * u_lens.z, (1.0 - u_lens.z) * 0.4) * cell * 0.22 * age * age;"
+"    float reach = (cluster > 0.5 ? 3.1 * r : r) + length(travel) + 1.0;"
+"    if (distance(px, c) > reach) return;"
+"    float fade = here * smoothstep(0.0, 0.04, t) * (1.0 - smoothstep(0.7, 1.0, age));"
+"    lensDrop(px, c + travel, r, mix(0.8, 1.0, lensHash(id + cycle * 3.7 + seed)), big, fade, pull, best);"
+"    if (cluster < 0.5) return;"
+"    for (int k = 0; k < 5; ++k) {"
+"        float n = float(k) + cycle * 7.0;"
+"        if (lensHash(id + seed + n * 0.53) > 0.75) continue;"
+"        float a = lensHash(id + seed + n * 3.1) * 6.2832;"
+"        float apart = mix(1.35, 2.5, lensHash(id + seed + n * 1.7));"
+"        float rs = r * mix(0.18, 0.42, lensHash(id + seed + n * 5.3));"
+"        float lag = mix(0.25, 0.65, lensHash(id + seed + n * 2.9));"
+"        lensDrop(px, c + vec2(cos(a), sin(a)) * apart * r + travel * lag, rs,"
+"                 mix(0.8, 1.0, lensHash(id + seed + n * 4.1)), big, fade, pull, best);"
+"    }"
+"}"
+"vec2 lensDrops(vec2 uv, out float best)"
+"{"
+"    best = 0.0;"
+"    float wet = unpack2(texture(u_skyOpen, vec2(0.5)).ba);"
+"    if (wet <= 0.01) return uv;"
+"    vec2 px = uv * u_size;"
+"    vec2 pull = vec2(0.0);"
+"    float coarse = u_size.y / 2.7, fine = u_size.y / 10.0;"
+"    vec2 a = floor(px / coarse - 0.5), b = floor(px / fine - 0.5);"
+"    for (int j = 0; j < 2; ++j)"
+"        for (int i = 0; i < 2; ++i) {"
+"            lensCell(px, a + vec2(float(i), float(j)), coarse, 0.0, wet, 1.0, pull, best);"
+"            lensCell(px, b + vec2(float(i), float(j)), fine, 17.3, wet, 0.0, pull, best);"
+"        }"
+"    return uv + pull / u_size;"
+"}"
 /* Auto-exposure (above): the eye's brightness against the usual, in stops. */
 "float exposureGain()"
 "{"
@@ -1519,7 +1620,11 @@ static const char g_compositeShader[] =
 "}"
 "void main()"
 "{"
+"    float drop = 0.0;"
+"    vec2 seen = u_lens.x > 0.0 ? lensDrops(v_uv, drop) : v_uv;"
 "    vec3 c = u_aa ? fxaa(v_uv) : texture(u_source, v_uv).rgb;"
+"    if (drop > 0.0)"
+"        c = mix(c, texture(u_source, seen).rgb * 1.06, drop);"
 "    if (u_blur > 0.0)"
 "        c = motionBlur(v_uv, c);"
 "    if (u_shadow > 0.0)"
@@ -1606,14 +1711,20 @@ static const char g_particleShader[] =
 "uniform sampler2D u_depth;"
 "uniform vec2 u_size;"
 "uniform sampler2D u_open;"   /* how much sky is overhead (g_skyOpenShader), 0 to 1 */
+"uniform float u_fragScale;"  /* the picture's pixels to one of the target's: 2 in the half-size layer */
 "uniform vec2 u_openFade;"    /* from, to: none of the weather below the first, all of it from the second */
 "float overhead() { return smoothstep(u_openFade.x, u_openFade.y, texture(u_open, vec2(0.5)).r); }"
-"float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }"
+/* Value noise, its lattice's values a table (u_noise, 256 by 256, made once:
+ * makeNoise) rather than worked out with sin() at each of four corners: the
+ * smoothstep put in the coordinates, so the texture's own bilinear filter
+ * gives the same smooth noise with one read (2026-11-18: three of these a
+ * pixel of every puff, and the rain's spray piles puffs up). */
+"uniform sampler2D u_noise;"
 "float noise(vec2 p)"
 "{"
 "    vec2 i = floor(p), f = fract(p);"
 "    vec2 u = f * f * (3.0 - 2.0 * f);"
-"    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);"
+"    return texture(u_noise, (i + u + 0.5) / 256.0).r;"
 "}"
 /* How much of a quad is inside its circle: 1 well inside, 0 at its rim and
  * beyond (as the world shader's). */
@@ -1643,11 +1754,14 @@ static const char g_particleShader[] =
 "{"
 "    float z = v_params.x, seed = v_params.y;"
 "    int type = int(v_params.z + 0.5);"
-"    float behind = texture(u_depth, gl_FragCoord.xy / u_size).r;"
+/* The round ones -- grains, puffs, flames, glows, smoke, flakes, brake glows --
+ * have nothing in their quad's corners: gone before anything is read. */
+"    float r = length(v_uv);"
+"    if (r >= 1.0 && (type <= 1 || (type >= 6 && type != 9))) discard;"
+"    float behind = texture(u_depth, gl_FragCoord.xy * u_fragScale / u_size).r;"
 "    float zBehind = 1.0 / max(1.0 - behind, 1e-5);"
 "    float room = zBehind - z;"
 "    if (room < (type == 4 ? -0.4 : type == 11 ? -0.45 : -0.05)) discard;"
-"    float r = length(v_uv);"
 "    if (type == 5) {"   /* a piece of an air trail: thin, even, soft at its sides */
 "        o_color = vec4(v_color.rgb, exp(-v_uv.y * v_uv.y * 4.0) * v_color.a);"
 "        return;"
@@ -1840,6 +1954,32 @@ static float lightGlowSetting();
 static float lightTrailSetting();
 static float smoothStep(float edge0, float edge1, float x);
 
+/* NFS_PERF_TRACE: where the GL thread's time goes, a race frame at a time --
+ * the world (to the whole-picture pass), the particles, the rest of the pass --
+ * each ended by a glFinish, so it is the GPU's time too.  Only when asked: the
+ * glFinishes stall the pipeline. */
+static bool perfTraced()
+{
+    static const bool on = SDL_getenv("NFS_PERF_TRACE") != nullptr;
+    return on;
+}
+struct GpuCost
+{
+    Uint64 frameStart = 0, mark = 0;
+    double world = 0.0, particles = 0.0, post = 0.0;
+    unsigned frames = 0;
+    Uint64 said = 0;
+};
+static GpuCost s_gpu;
+static double gpuLap()
+{
+    glFinish();
+    const Uint64 now = SDL_GetTicksNS();
+    const double ms = double(now - s_gpu.mark) * 1e-6;
+    s_gpu.mark = now;
+    return ms;
+}
+
 /* NFS_WET_TRACE: what the frames of a wet race were drawn as.  Asked when
  * first needed, after nfs3hp.ini is in the environment. */
 static bool wetTraced()
@@ -1858,6 +1998,16 @@ constexpr float kNone = 0.03f, kAll = 0.12f;          // share of the band that 
 constexpr float kSeconds = 0.25f;                     // its ease
 constexpr float kRestartAfter = 0.5f;                 // s without a race picture: from what is seen
 }  // namespace overhead
+
+/* Rain on the lens (the composite's lensDrops): how fast the lens wets in the
+ * rain under an open sky and dries out of it, and how much sky it takes. */
+namespace lens
+{
+constexpr float kAmount = 1.0f;         // NFS_LENS_RAIN: how many drops, against the shader's own
+constexpr float kWetSeconds = 1.5f;     // to wet, under an open sky in the rain
+constexpr float kDrySeconds = 5.0f;     // to dry, under a roof or out of the rain
+constexpr float kSkyToWet = 0.06f;      // the share of sky overhead it takes
+}  // namespace lens
 
 /* Auto-exposure's tunables (g_meterShader, g_adaptShader, the composite). */
 namespace exposure
@@ -1902,6 +2052,7 @@ void ThrashRenderer::initPost()
     m_gradeOn = onOff("NFS_GRADE", 1.0f) > 0.0f;
     m_antialias = onOff("NFS_AA", 1.0f) > 0.0f;
     m_exposure = SDL_min(onOff("NFS_EXPOSURE", exposure::kStrength), 1.0f);
+    m_lensRain = onOff("NFS_LENS_RAIN", lens::kAmount);
     m_exposureTrace = SDL_getenv("NFS_EXPOSURE_TRACE") != nullptr;
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[GFX] auto-exposure %.2f", double(m_exposure));
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
@@ -1963,6 +2114,8 @@ void ThrashRenderer::initPost()
         glUniform4f(m_compositeExposure, 0.0f, 0.0f, 0.0f, 0.0f);
         glUseProgram(0);
         m_skyOpenProgram = postProgram(compileShader, g_skyOpenShader);
+        m_softLayerProgram = postProgram(compileShader, g_softLayerShader);
+        m_softHalf = onOff("NFS_PARTICLES_HALF", 1.0f) > 0.0f;
         if (m_exposure > 0.0f)
         {
             m_meterProgram = postProgram(compileShader, g_meterShader);
@@ -2046,6 +2199,33 @@ void ThrashRenderer::allocateLightLayer(int width, int height)
  * triangles, the grains and puffs blended over the picture back to front and
  * the sparks added on last, none writing the picture's alpha (what is a car
  * and what is not, for the passes after). */
+/* The particles' noise (g_particleShader's u_noise): 256 by 256 values, the
+ * same each run, wrapping, filtered. */
+static unsigned int makeNoise()
+{
+    std::vector<unsigned char> values(256 * 256);
+    std::uint32_t state = 0x9e3779b9u;
+    for (unsigned char& v : values)
+    {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        v = (unsigned char)(state >> 24);
+    }
+    unsigned int texture = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_R8, 256, 256);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 256, GL_RED, GL_UNSIGNED_BYTE, values.data());
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    return texture;
+}
+
 void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height)
 {
     struct Corner
@@ -2053,9 +2233,12 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
         float x, y, u, v, r, g, b, a, fx, fy, depth, seed, type, turn;
     };
     const std::vector<EffectParticle>& list = *draw.particles;
-    std::vector<Corner> corners;
+    /* Three runs, in this order: the soft ones (spray's mist, smoke) blended in
+     * the half-size layer; the rest of the blended ones; the added ones. */
+    std::vector<Corner> soft, corners, added;
+    soft.reserve(list.size() * 6);
     corners.reserve(list.size() * 6);
-    std::size_t blended = 0;
+    added.reserve(list.size() * 6);
     for (const EffectParticle& p : list)
     {
         /* A spark or a streak is a quad stretched from where it was to where it
@@ -2089,22 +2272,27 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
             ay = 0.0f;
             bx = 0.0f;
             by = p.size;
-            if (!additive)
-                ++blended;   // the alpha-blended ones come first in the buffer
         }
+        const bool cloud = !additive && m_softHalf
+                           && (p.type == EffectParticle::Puff || p.type == EffectParticle::Smoke);
+        std::vector<Corner>& into = additive ? added : cloud ? soft : corners;
         const float cx = streak ? 0.5f * (p.x + p.tx) : p.x;
         const float cy = streak ? 0.5f * (p.y + p.ty) : p.y;
         const float fromX = streak ? -1.0f : p.tx;
         auto corner = [&](float s, float t) {
-            corners.push_back({ cx + ax * s + bx * t, cy + ay * s + by * t, s, t, p.r, p.g, p.b, p.a, fromX, p.ty,
+            into.push_back({ cx + ax * s + bx * t, cy + ay * s + by * t, s, t, p.r, p.g, p.b, p.a, fromX, p.ty,
                                 p.depth, p.seed, p.type, p.turn });
         };
         corner(-1, -1); corner(1, -1); corner(1, 1);
         corner(-1, -1); corner(1, 1); corner(-1, 1);
     }
+    const std::size_t softCount = soft.size(), blendedCount = corners.size(), addedCount = added.size();
+    soft.insert(soft.end(), corners.begin(), corners.end());
+    soft.insert(soft.end(), added.begin(), added.end());
+    const std::vector<Corner>& all = soft;
     glBindVertexArray(m_particleArray);
     glBindBuffer(GL_ARRAY_BUFFER, m_particleBuffer);
-    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(corners.size() * sizeof(Corner)), corners.data(), GL_STREAM_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(all.size() * sizeof(Corner)), all.data(), GL_STREAM_DRAW);
     const GLsizei stride = sizeof(Corner);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, (const void*)offsetof(Corner, x));
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, (const void*)offsetof(Corner, u));
@@ -2118,6 +2306,11 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
     glUniform1i(glGetUniformLocation(m_particleProgram, "u_depth"), 2);
     glUniform2f(glGetUniformLocation(m_particleProgram, "u_size"), float(width), float(height));
     glUniform1i(glGetUniformLocation(m_particleProgram, "u_open"), 7);
+    if (!m_particleNoise)
+        m_particleNoise = makeNoise();
+    glUniform1i(glGetUniformLocation(m_particleProgram, "u_noise"), 8);
+    glActiveTexture(GL_TEXTURE8);
+    glBindTexture(GL_TEXTURE_2D, m_particleNoise);
     glActiveTexture(GL_TEXTURE7);
     if (m_skyOpen[0])
     {
@@ -2134,16 +2327,66 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
     glBindTexture(GL_TEXTURE_2D, m_postDepth);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, m_postCopy);
+    glEnable(GL_BLEND);
+    /* The soft ones at half the size -- a quarter of the pixels, and the
+     * rain's spray piles big ones up near the lens -- into a layer cleared to
+     * nothing: its colour premultiplied, its alpha what they cover; then the
+     * layer laid over the picture, filtered (2026-11-18). */
+    if (softCount && m_softLayerProgram)
+    {
+        const int halfW = SDL_max(width / 2, 1), halfH = SDL_max(height / 2, 1);
+        if (!m_softLayer || m_softW != halfW || m_softH != halfH)
+        {
+            if (m_softLayer)
+                glDeleteTextures(1, &m_softLayer);
+            glGenTextures(1, &m_softLayer);
+            glBindTexture(GL_TEXTURE_2D, m_softLayer);
+            glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, halfW, halfH);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glBindTexture(GL_TEXTURE_2D, m_postCopy);
+            if (!m_softFramebuffer)
+                glGenFramebuffers(1, &m_softFramebuffer);
+            m_softW = halfW;
+            m_softH = halfH;
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, m_softFramebuffer);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_softLayer, 0);
+        glViewport(0, 0, halfW, halfH);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+        glUniform1f(glGetUniformLocation(m_particleProgram, "u_fragScale"), float(width) / float(halfW));
+        glDrawArrays(GL_TRIANGLES, 0, GLsizei(softCount));
+        glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
+        glViewport(0, 0, width, height);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+        glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+        glUseProgram(m_softLayerProgram);
+        glUniform1i(glGetUniformLocation(m_softLayerProgram, "u_layer"), 9);
+        glActiveTexture(GL_TEXTURE9);
+        glBindTexture(GL_TEXTURE_2D, m_softLayer);
+        glActiveTexture(GL_TEXTURE0);
+        glBindVertexArray(m_postArray);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glBindVertexArray(m_particleArray);
+        glUseProgram(m_particleProgram);
+    }
+    glUniform1f(glGetUniformLocation(m_particleProgram, "u_fragScale"), 1.0f);
     glViewport(0, 0, width, height);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
-    glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    if (blended)
-        glDrawArrays(GL_TRIANGLES, 0, GLsizei(blended * 6));
-    if (corners.size() > blended * 6)
+    if (!m_softLayerProgram && softCount)
+        glDrawArrays(GL_TRIANGLES, 0, GLsizei(softCount));   // no layer to draw them in: as before
+    if (blendedCount)
+        glDrawArrays(GL_TRIANGLES, GLsizei(softCount), GLsizei(blendedCount));
+    if (addedCount)
     {
         glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-        glDrawArrays(GL_TRIANGLES, GLsizei(blended * 6), GLsizei(corners.size() - blended * 6));
+        glDrawArrays(GL_TRIANGLES, GLsizei(softCount + blendedCount), GLsizei(addedCount));
     }
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDisable(GL_BLEND);
@@ -2152,7 +2395,7 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
 /* How much sky is overhead this frame (g_skyOpenShader), from the depth copied
  * into m_postDepth, into m_skyOpen[m_skyIndex] from the last frame's.  The
  * picture's framebuffer is bound again after. */
-void ThrashRenderer::meterSkyOpen()
+void ThrashRenderer::meterSkyOpen(bool raining)
 {
     if (!m_skyOpenProgram)
         return;
@@ -2168,7 +2411,10 @@ void ThrashRenderer::meterSkyOpen()
     const Uint64 now = SDL_GetTicksNS();
     const float since = m_skyOpenNs ? float(double(now - m_skyOpenNs) * 1e-9) : 1e9f;
     m_skyOpenNs = now;
-    const float rate = since > overhead::kRestartAfter ? 1.0f : 1.0f - std::exp(-since / overhead::kSeconds);
+    const bool restart = since > overhead::kRestartAfter;
+    const float rate = restart ? 1.0f : 1.0f - std::exp(-since / overhead::kSeconds);
+    const float wetting = restart ? 1.0f : 1.0f - std::exp(-since / lens::kWetSeconds);
+    const float drying = restart ? 1.0f : 1.0f - std::exp(-since / lens::kDrySeconds);
     glActiveTexture(GL_TEXTURE6);
     glBindTexture(GL_TEXTURE_2D, m_skyOpen[m_skyIndex]);
     glActiveTexture(GL_TEXTURE2);
@@ -2182,6 +2428,8 @@ void ThrashRenderer::meterSkyOpen()
     glUniform1i(glGetUniformLocation(m_skyOpenProgram, "u_last"), 6);
     glUniform1f(glGetUniformLocation(m_skyOpenProgram, "u_rate"), rate);
     glUniform2f(glGetUniformLocation(m_skyOpenProgram, "u_band"), overhead::kBandFrom, overhead::kBandTo);
+    glUniform1f(glGetUniformLocation(m_skyOpenProgram, "u_raining"), raining && m_lensRain > 0.0f ? 1.0f : 0.0f);
+    glUniform3f(glGetUniformLocation(m_skyOpenProgram, "u_lensRate"), wetting, drying, lens::kSkyToWet);
     glBindVertexArray(m_postArray);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glActiveTexture(GL_TEXTURE0);
@@ -2269,6 +2517,9 @@ bool ThrashRenderer::meterExposure()
 void ThrashRenderer::postProcess(const ThrashDraw& draw)
 {
     m_postDone = true;
+    const bool timed = perfTraced() && s_gpu.frameStart != 0;
+    if (timed)
+        s_gpu.world += gpuLap();
     if (!m_compositeProgram)
         return;
     const int width = int(draw.width), height = int(draw.height);
@@ -2348,8 +2599,12 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
     {
         // How much sky is overhead, for the rain and snow; then the particles
         // over the world, then the picture taken again with them in it.
-        meterSkyOpen();
+        meterSkyOpen(draw.wetness > 0.0f);
+        if (timed)
+            s_gpu.post += gpuLap();
         drawParticles(draw, width, height);
+        if (timed)
+            s_gpu.particles += gpuLap();
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, m_postCopy);
         glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, width, height);
@@ -2419,6 +2674,21 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
     glUniform1f(m_compositeTrailOn, trails);
     glUniform1f(m_compositeGlare, glareAmount);
     glUniform2f(m_compositeGlareAt, glareX, glareY);
+    /* Rain on the lens: how wet it is is in the sky texel (meterSkyOpen),
+     * which there is only with the particles. */
+    if (m_lensRain > 0.0f && particles && m_skyOpen[0])
+    {
+        glUniform1i(glGetUniformLocation(m_compositeProgram, "u_skyOpen"), 6);
+        glActiveTexture(GL_TEXTURE6);
+        glBindTexture(GL_TEXTURE_2D, m_skyOpen[m_skyIndex]);
+        glActiveTexture(GL_TEXTURE0);
+        const double seconds = double(SDL_GetTicksNS() % (1000ull * SDL_NS_PER_SECOND)) * 1e-9;
+        glUniform4f(glGetUniformLocation(m_compositeProgram, "u_lens"), m_lensRain, float(seconds),
+                    smoothStep(8.0f, 30.0f, draw.speed), 0.0f);
+        glUniform2f(m_compositeSize, float(width), float(height));
+    }
+    else
+        glUniform4f(glGetUniformLocation(m_compositeProgram, "u_lens"), 0.0f, 0.0f, 0.0f, 0.0f);
     if (exposed)
     {
         glUniform1i(m_compositeAdapt, 5);
@@ -2453,6 +2723,22 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
         glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
     }
 
+    if (timed)
+    {
+        s_gpu.post += gpuLap();
+        s_gpu.frameStart = 0;
+        ++s_gpu.frames;
+        const Uint64 now = SDL_GetTicksNS();
+        if (s_gpu.frames >= 30 && now - s_gpu.said >= SDL_NS_PER_SECOND)
+        {
+            const double n = double(s_gpu.frames);
+            SDL_Log("[PERF] GPU a frame: the world %.2f ms (wet %d), particles %.2f, the rest of the pass %.2f",
+                    s_gpu.world / n, int(draw.wetness > 0.0f), s_gpu.particles / n, s_gpu.post / n);
+            const Uint64 said = now;
+            s_gpu = GpuCost{};
+            s_gpu.said = said;
+        }
+    }
     // Back to the world's state; the batch loop sets the rest as it goes.
     glUseProgram(m_program);
     glBindVertexArray(m_vertexArray);
@@ -2472,6 +2758,11 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
 
 void ThrashRenderer::drawPending(const ThrashDraw& draw)
 {
+    if (perfTraced() && !m_sceneDrawn && s_gpu.frameStart == 0)
+    {
+        glFinish();
+        s_gpu.frameStart = s_gpu.mark = SDL_GetTicksNS();
+    }
     glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_renderer->m_texture, 0);
     glBindVertexArray(m_vertexArray);
@@ -2885,6 +3176,7 @@ void ThrashRenderer::swap()
         m_traceWetness = 0.0f;
         m_reflectionTaken = false;
         m_roadDrawn = false;
+        s_gpu.frameStart = 0;   // NFS_PERF_TRACE: a frame with no pass times nothing
         m_traceKinds.clear();
         m_traceDraws = 0;
         m_sceneDrawn = false;

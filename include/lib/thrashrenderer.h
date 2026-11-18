@@ -279,7 +279,7 @@ private:
     void drawParticles(const ThrashDraw& draw, int width, int height);
     void postProcess(const ThrashDraw& draw);
     bool meterExposure();
-    void meterSkyOpen();
+    void meterSkyOpen(bool raining);
     float                   m_grade[5] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };  // the game thread's
     float                   m_head[14] = {};        // the game thread's: on, origin, direction, projection, up
     float                   m_headStrength = 0.0f;  // NFS_HEADLIGHT_OBJECTS
@@ -290,6 +290,7 @@ private:
     bool                    m_gradeOn = false;      // NFS_GRADE
     bool                    m_antialias = false;    // NFS_AA
     float                   m_exposure = 0.0f;      // NFS_EXPOSURE; the GL thread's from here on
+    float                   m_lensRain = 0.0f;      // NFS_LENS_RAIN
     bool                    m_exposureTrace = false;  // NFS_EXPOSURE_TRACE
     unsigned int            m_meter = 0, m_adapt[2] = {}, m_meterProgram = 0, m_adaptProgram = 0;
     int                     m_adaptIndex = 0;       // m_adapt's, this frame's
@@ -317,6 +318,11 @@ private:
     std::shared_ptr<const std::vector<EffectParticle>> m_particles;
     bool                    m_particlesOn = true;
     unsigned int            m_particleProgram = 0, m_particleArray = 0, m_particleBuffer = 0;
+    unsigned int            m_particleNoise = 0;    // the particles' noise (makeNoise)
+    // The soft particles' half-size layer (drawParticles; NFS_PARTICLES_HALF).
+    unsigned int            m_softLayer = 0, m_softFramebuffer = 0, m_softLayerProgram = 0;
+    int                     m_softW = 0, m_softH = 0;
+    bool                    m_softHalf = true;
     int                     m_brightSource = -1, m_compositeSource = -1, m_compositeBright = -1,
                             m_compositePixel = -1, m_compositeBloom = -1, m_compositeGrade = -1,
                             m_compositeTint = -1, m_compositeAa = -1, m_compositeDepth = -1, m_compositeShadow = -1,

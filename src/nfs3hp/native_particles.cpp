@@ -200,10 +200,37 @@ float argument(win32::WinApplication* app, x86::CPU& cpu, int k)
     return app->getMemory<float>(cpu.esp + 4 + 4 * x86::reg32(k));
 }
 
+/* NFS_PERF_TRACE: what the particles cost, counted over a second. */
+struct ParticleCost
+{
+    unsigned frames = 0, added = 0, replaced = 0;
+    std::size_t most = 0;
+    double frameMs = 0.0, mirrorMs = 0.0;
+} s_cost;
+
+bool perfTracing()
+{
+    static const bool on = SDL_getenv("NFS_PERF_TRACE") != nullptr;
+    return on;
+}
+
+/* A particle into the pool; a full one gives up a particle in turn, in place
+ * (2026-11-17: the oldest was erased from the front, every particle after it
+ * moved down a place -- 300 KB moved for each one added once the rain's spray
+ * filled the pool, hundreds a frame: the rain's lag). */
+std::size_t s_replace = 0;   // the next to give up its place in a full pool
+
 void add(const Particle& particle)
 {
+    ++s_cost.added;
     if (s_particles.size() >= kMost)
-        s_particles.erase(s_particles.begin());   // the oldest makes room
+    {
+        ++s_cost.replaced;
+        s_replace %= s_particles.size();
+        s_particles[s_replace++] = particle;
+        return;
+    }
+    s_particles.reserve(kMost);
     s_particles.push_back(particle);
 }
 
@@ -1769,11 +1796,28 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
         s_cameraKnown = true;
     }
     // The clock's state and what the cars and the engines make, once a frame.
+    const Uint64 began = perfTracing() ? SDL_GetTicksNS() : 0;
     frameParticles(app);
     s_frameOn = true;
     projectParticles(app, view);
     std::sort(s_out.begin(), s_out.end(), deeper);
     handOver();
+    if (perfTracing())
+    {
+        s_cost.frameMs += double(SDL_GetTicksNS() - began) * 1e-6;
+        s_cost.most = SDL_max(s_cost.most, s_particles.size());
+        static Uint64 said = 0;
+        if (++s_cost.frames >= 30 && SDL_GetTicksNS() - said >= SDL_NS_PER_SECOND)
+        {
+            said = SDL_GetTicksNS();
+            const double n = double(s_cost.frames);
+            SDL_Log("[PERF] particles: %.2f ms a frame, the mirror's %.2f; %zu at most (%zu weather), %.0f added a "
+                    "frame, %.0f of them in a full pool",
+                    s_cost.frameMs / n, s_cost.mirrorMs / n, s_cost.most, s_weatherCount, double(s_cost.added) / n,
+                    double(s_cost.replaced) / n);
+            s_cost = ParticleCost{};
+        }
+    }
 }
 
 /* The rear-view mirror: the same particles, in the mirror's own view, so that
@@ -1784,10 +1828,13 @@ void particlesMirrorFrame(win32::WinApplication* app, x86::reg32 view)
 {
     if (!s_frameOn || !view)
         return;
+    const Uint64 began = perfTracing() ? SDL_GetTicksNS() : 0;
     const std::size_t from = s_out.size();
     projectParticles(app, view);
     std::sort(s_out.begin() + std::ptrdiff_t(from), s_out.end(), deeper);
     handOver();
+    if (perfTracing())
+        s_cost.mirrorMs += double(SDL_GetTicksNS() - began) * 1e-6;
 }
 
 }  // namespace nfs3hp

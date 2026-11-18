@@ -472,6 +472,25 @@ player's car. Their floor was the world's 0 before: on a track lying below it
 every drop was under the ground as it was made, put up there and bounced, and
 the rain was gone. `weather::` in `native_particles.cpp`.
 
+**A full pool.** The rain's spray -- every wheel of every car on a wet road --
+fills the particle pool (3600). A particle added to a full one takes the place
+of one already there, in turn (`add`); until 2026-11-17 the oldest was erased
+from the front and every particle after it moved down a place, some 320 KB moved
+for each one added, hundreds a frame: the rain's lag.
+
+**The soft ones at half the size.** The spray's mist and the tyre smoke
+(`Puff`, `Smoke`) are drawn into a layer half the picture's size each way, a
+quarter of its pixels, cleared to nothing: their colour premultiplied, its
+alpha what they cover; the layer is then laid over the picture, filtered
+(`drawParticles`, `g_softLayerShader`). Soft clouds lose nothing by it, and
+near the lens the rain's spray piles up hundreds of them hundreds of pixels
+across, which an integrated GPU at 1080p paid 5 to 18 ms a frame for
+(2026-11-18, `NFS_PERF_TRACE`). The sharp ones -- drops, sparks, grit, flames,
+glows -- stay full size, after the layer. Their noise is a 256 by 256 table
+read once rather than worked out with `sin()` at four corners, and the corners
+of every round one are thrown away before anything is read.
+`NFS_PARTICLES_HALF=0` draws them all full size, as before, to compare.
+
 **None under a roof.** In a tunnel, or under a bridge, no rain or snow is seen
 (`meterSkyOpen`, `thrashrenderer.cpp`): in the whole-picture pass, before the
 particles, a grid of 12 by 6 points over the top of the picture (3 to 43% of
@@ -480,6 +499,28 @@ them that is the sky's or as far (as the glare has it) is kept in one texel,
 eased over a quarter of a second, never read back. The particle shader fades
 the drops and flakes by it: none under 3% sky, all from 12%. `overhead::` in
 `thrashrenderer.cpp`.
+
+**Rain on the lens** (`NFS_LENS_RAIN`, `lensDrops` in the composite): drops
+on the view, the port's own and nothing to do with the game's drops on the
+view (cleared every frame). Two grids of cells over the picture: clusters, a
+cell 1/2.7 of its height -- a main drop and two to five smaller ones broken off
+round it -- and a fine mist of single droplets, a cell 1/10 of it. A cell has
+its cluster or not by its hash; it lives 3 to 6 s and comes again elsewhere in
+its cell. Each drop is a little narrower than it is tall, 0.8 to 1 of it
+by its hash. A drop is a little lens: it shows the picture round it upside down,
+gathered from 2.6 to 3.8 times its size (the more the bigger the drop), blended
+into the picture over its outer quarter so nothing outlines it. Standing still
+a drop creeps down; at speed (from 8 m/s, all of it at 30) it slides out
+towards the edge of the view and is gone sooner, the small ones lagging behind
+it. A cluster and its travel keep within half a cell of its middle, so a pixel
+looks at the four nearest cells of each grid, passing over at once a cell
+whose cluster is out of reach. How many there are is how wet the lens is,
+which the sky texel keeps in its other two bytes: wetting over 1.5 s in the
+rain under 6% of sky or more, drying over 5 s under a roof or out of the rain;
+each drop fades in or out by its own hash. Rain only (the road wet), drawn
+under the HUD. `NFS_LENS_RAIN` (1; up to 2 for more, `0`/`off` none); `lens::`
+in `thrashrenderer.cpp`, the drops' sizes and lives in the shader's
+`lensCell`.
 ### The game's own sprites are not drawn
 
 Every picture in the game's particle set is a 565 texel with no alpha and
@@ -2508,6 +2549,9 @@ the next time the game starts.
 | `NFS_EXHAUST_DEFAULTS` | off (`0`) | `1`/`on`: a car with no exhausts marked gets two default pipes at its rear corners, and so flames too (Exhaust flames when gearing up). A marked car keeps its own. |
 | `NFS_FLAME_LIGHT` | on (`1`) | `0`/`off`: no pool of light on the road under each exhaust flame. A number up to 3: how strong (Exhaust flames when gearing up). |
 | `NFS_WEATHER_MAX` | `2.5` | How heavy the rain or snow comes at its heaviest, against the mean, which is as much as the game throws; it comes and goes over the race (The weather's flakes and drops, the port's own). 1 to 10; `1` steady. `NFS_WEATHER_TRACE=1` prints the game's rate and the weather's once a second. |
+| `NFS_LENS_RAIN` | `1` | How many raindrops on the view in the rain, magnifying what is behind them, streaking off at speed, none under a roof; up to `2`, `0`/`off` none (The weather's flakes and drops, the port's own). |
+| `NFS_PARTICLES_HALF` | on | `0`/`off`: the spray's mist and the smoke drawn full size rather than in a half-size layer (The weather's flakes and drops, the port's own). |
+| `NFS_PERF_TRACE` | unset | `1`: once a second, what the port's particles cost the game thread (and the mirror's), how many there are and how many are added a frame, and where the GL thread's time goes in a race frame -- the world, the particles, the rest of the whole-picture pass -- each ended by a `glFinish`, so slower while it is on (`[PERF]`). |
 | `NFS_WEATHER_PARTICLES` | on | `0`/`off`: the game's own flakes and drops, drawn as squares cut out of nothing, instead of the port's (The weather's flakes and drops, the port's own). |
 | `NFS_SPRITE_TRACE` | unset | `1`: one line for each kind of draw in the frame -- the texture the game gave it, its format and levels, whether and by what colour it is cut out, what it is blended by, its depth and clip. For finding a sprite that is cut out by nothing. |
 | `NFS_CHROMA_TRACE` | unset | `1`: print each colour the game cuts its pictures out by, once each (`[CHROMA] keyed out: 0x0000f800 (0,248,0)`), for telling one picture's key from another's. |

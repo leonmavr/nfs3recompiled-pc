@@ -14,12 +14,15 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     small ragged grains thrown up and falling back under gravity, and soft
     uneven dust clouds -- more of them and higher the faster, coloured like
     the ground they came from (sand, snow, mud).
-- [ ] Rain on the windscreen/camera: drops and streaks that clear at speed.
+- [x] Rain on the windscreen/camera: drops and streaks that clear at speed.
   Independent of the game's own particles that landed on the view (cleared
   every frame, see The game's own sprites are not drawn): an effect of its own
   on top of the rendering, in the whole-picture pass, and cheap -- a few
   procedural drops refracting the picture behind them, sliding and streaking
   off with speed, none under a roof (the sky test the weather uses).
+  - Done (2026-11-17, `NFS_LENS_RAIN`): two grids of procedural drops in the
+    composite, magnifying what is behind them, streaking off at speed, the
+    lens wetting and drying with the sky test (Rain on the lens).
 - [x] Sun glare by day with no weather: a haze and lens ghosts round the sun,
   dimmed behind what stands in front of it (`NFS_SUN_GLARE`).
 - [x] The weather's own flakes and drops drawn as blocky, translucent squares.
@@ -522,6 +525,10 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 - [ ] Opponents choose always: one copy of player's car and game's default cars.
   They should also be able to choose from added cars (given that class
   restrivtions are repsected)
+- [ ] misbehavior: since air control got better, now when a car is toppled
+  sideways, is still drives but very slow, doesn't reset but keep driving. i
+  know it's against physics but when a car is in two sideways wheels, it should
+  have some artificial gravity to bring it back to 4 wheels.
 
 ### Music/Sound
 - [x] Sound quality is great and sound works well but volume is still too
