@@ -1057,6 +1057,42 @@ frame, HUD and all (`ThrashRenderer::drawOverlay`, `include/lib/overlay.h`:
 quads in HUD units, 480 to the picture's height). `NFS_NOW_PLAYING` (on, five
 seconds; a number for how many, up to 30; `0`/`off` never).
 
+### Reading the game's UI art
+
+What the port draws in the game's own style it takes from the game's files,
+read as follows (all little-endian).
+
+- **Fonts, `.ffn`** (`gamedata/dashhud/*.ffn` for the race's HUD,
+  `fedata/text/*.ffn` for the menus'): `"FNTF"`, the file's size (+4), how
+  many characters (+8, u16), the line's height (+0x12, u16), the picture's
+  offset (+0x1c, u32). From +0x20 a record of 11 bytes per character: its code
+  (u16), width and height (u8 each), where it is in the picture (x, y: u16
+  each), its advance, its offset from the pen and its offset from the line's
+  top (s8 each). The picture: a 16-byte header -- 0x7a, width at +4, height at
+  +6 -- then 4 bits a texel, the first texel in the high half of the byte. A
+  texel is how bright, 0 drawn not at all: the characters are white with their
+  low values round the edge, so drawn in a colour they keep the dark outline
+  the HUD's names have. `cp16bi.ffn` is the HUD's bold italic at 16 points,
+  `cp1bi.ffn` the same at half the size, `small6.ffn` the smallest.
+- **Pictures, `.fsh`** (`"SHPI"`): the file's size, how many pictures (+8),
+  then from +16 a name of four letters and an offset each, 8 bytes. A
+  picture's 16-byte header: its format (the low 7 bits of +0 -- 0x7d 32-bit
+  BGRA, 0x7e 1555, 0x78 565, 0x6d 4444, 0x7f 24-bit, 0x7b 8-bit with its
+  palette attached after it), width at +4, height at +6; its pixels follow.
+  The name says nothing of the format: `hud98.fsh`'s `4444` is 32-bit.
+- **`.qfs`**: an `.fsh` packed with EA's RefPack (`refpackNative`,
+  `native_loading.cpp`, does it for the game).
+
+`tools/export_textures.py` writes every picture of the game out as a PNG, a
+folder per file, to look for one. Found that way:
+
+| What | Where |
+|---|---|
+| The NFS emblem, the ring and the letters, on a blue swoosh | `gamedata/dashhud/hud98.fsh`, picture `4444` at (130, 65), 64 square -- the race's own HUD art; also `fedata/art/mmnu.qfs`, `popu` (198x70, the menus' pop-up's) |
+| Small triangles, 12 square: yellow up and down, blue up and down | `fedata/art/mmnu.qfs`: `yup1`, `ydn1`, `bup1`, `bdn1` |
+| The menus' glowing yellow outlines (a square, triangles each way) | `mmnu.qfs`: `int2`..`int9`, `inta`.. |
+| The HUD's bars (navy, a grey bevel) | `hud98.fsh`, `4444` from y 128 |
+
 ### Network races
 
 The game's Connection screen offers IPX and TCP/IP; RaceNet, Modem and Serial
