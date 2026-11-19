@@ -1196,6 +1196,8 @@ bool firstSettings(win32::WinApplication* app)
 x86::reg32 takeArenaPeak();
 }
 
+namespace nfs3hp { void windSpeed(float speed); }   // native_mixer.cpp
+
 namespace
 {
 /* NFS_CAR_DETAIL_TRACE: once a second while a race is drawn, what car detail
@@ -2656,6 +2658,7 @@ void colourGradeTick(win32::WinApplication* app)
         s_clock = clock;
         // And whether it is night ([0x6fd4c8]): no motion blur then, and the night lift.
         win32::glide2x::motion(s_speed, app->getMemory<x86::reg32>(0x6fd4c8) != 0);
+        ::nfs3hp::windSpeed(s_speed);   // and the wind's roar (native_mixer.cpp)
     }
     win32::glide2x::colourGrade(grade.red, grade.green, grade.blue, grade.saturation, grade.contrast);
 }

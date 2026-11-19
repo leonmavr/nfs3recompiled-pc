@@ -49,6 +49,10 @@
 namespace nfs3hp
 {
 
+/* The game's mixing rate, for the port's own sounds (native_mixer.cpp's wind). */
+std::atomic<int> s_gameRate{22050};
+int gameSoundRate() { return s_gameRate.load(); }
+
 namespace
 {
 
@@ -217,6 +221,7 @@ bool startNative(win32::WinApplication* app, x86::CPU& cpu)
     else if (flags & isnd::kCaps8BitMono)
         game = {SDL_AUDIO_U8, 1, 0};
     game.freq = int(rate);
+    s_gameRate.store(int(rate));
     if (rate == 0 || game.channels == 0)
     {
         SDL_Log("[SND] start: no rate or format in 0x%x", flags);

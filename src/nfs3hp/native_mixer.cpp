@@ -2,6 +2,8 @@
 #include "native_thrash.h"
 #include <SDL3/SDL.h>
 #include <cstdint>
+#include <atomic>
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -43,6 +45,8 @@
 
 namespace nfs3hp
 {
+
+int gameSoundRate();   // native_sound.cpp
 
 namespace
 {
@@ -149,6 +153,61 @@ i16 mulHigh(i16 a, i16 b)
 {
     return i16((i32(a) * i32(b)) >> 16);
 }
+
+/* The wind (NFS_WIND, 1; up to 3 louder, 0 or off for none): the port's own
+ * roar of the air the car cuts through, which the game does not have.  Made
+ * here, sample by sample, from noise -- so it has no loop and no seam: a deep
+ * rumble and a low band of rushing air under it (120 Hz rising to about
+ * 380 Hz with the speed), each through two low passes so nothing hisses, and
+ * only slow, shallow swells in its level -- deep and steady.  (A brighter
+ * first one, a band to 1.5 kHz and a fluttering hiss over 3.5 kHz, sounded
+ * like a vacuum cleaner.)  From
+ * 80 km/h (silent) to 300 (all of it), the first player's speed (windSpeed,
+ * from the game thread; 0 in the menus and while the race stands).  Added to
+ * the game's accumulator before the race's reverb, and sent into the reverb
+ * as wet as the game's own sounds are sent at the time -- so a tunnel's echo,
+ * which the game makes by sending its channels harder, takes the wind too. */
+std::atomic<float> s_windSpeed{0.0f};
+
+namespace wind
+{
+constexpr float kFrom = 80.0f / 3.6f;
+constexpr float kFull = 300.0f / 3.6f;
+constexpr float kLevel = 2600.0f;    // the accumulator's units (doubled on the way out) at full, NFS_WIND 1
+constexpr float kEase = 0.35f;       // s for the level to follow the speed
+}  // namespace wind
+
+float windSetting()
+{
+    static const float value = [] {
+        const char* text = SDL_getenv("NFS_WIND");
+        if (!text || !*text || SDL_strcasecmp(text, "on") == 0)
+            return 1.0f;
+        if (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0)
+            return 0.0f;
+        const float parsed = float(SDL_atof(text));
+        return parsed > 0.0f ? SDL_min(parsed, 3.0f) : 1.0f;
+    }();
+    return value;
+}
+
+struct Wind
+{
+    std::uint32_t seed = 0x2545f491u;
+    float level = 0.0f, share = 0.0f;
+    float low[2] = {}, low2[2] = {}, band[2] = {}, bandLow[2] = {}, smooth[2] = {};
+    float gust = 1.0f, gustTo = 1.0f, gustLeft = 0.0f;
+
+    float noise()
+    {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        return float(seed >> 8) / 8388608.0f - 1.0f;
+    }
+    float random01() { return (noise() + 1.0f) * 0.5f; }
+};
+Wind s_wind;
 
 struct Mixer
 {
@@ -1429,6 +1488,81 @@ struct Mixer
         } while (at > 0);
     }
 
+    /* The wind (s_wind, above) into the block, and into the reverb's send as
+     * wet as the game's channels are sent now. */
+    void addWind(u32 frames, u32 accumulator)
+    {
+        Wind& w = s_wind;
+        const float setting = windSetting();
+        const float speed = s_windSpeed.load(std::memory_order_relaxed);
+        const float t = SDL_clamp((speed - wind::kFrom) / (wind::kFull - wind::kFrom), 0.0f, 1.0f);
+        const float target = setting * wind::kLevel * t * std::sqrt(t);
+        if (w.level < 0.5f && target <= 0.0f)
+        {
+            w.level = 0.0f;
+            return;
+        }
+        const float rate = float(SDL_max(gameSoundRate(), 8000));
+        const float ease = 1.0f - std::exp(-1.0f / (rate * wind::kEase));
+        // How wet: the game's channels' send against their volume, now.
+        float sent = 0.0f, loud = 0.0f;
+        for (u32 i = 0; i < kChannelCount; ++i)
+        {
+            const u32 ch = channel(i);
+            if (r8(ch) == 0)
+                continue;
+            loud += float(SDL_max(SDL_abs(i32(s8(ch + 1))), SDL_abs(i32(s8(ch + 2)))));
+            sent += float(r8(ch + 8));
+        }
+        const bool reverbOn = r32(kBeforeOutput) == kReverb && r8(kReverbInts) != 0;
+        const float wet = reverbOn && loud > 0.0f ? SDL_min(sent / loud, 1.0f) : 0.0f;
+        const float pi = 3.14159265f;
+        // The filters' coefficients, once a block (the speed and the swells move slowly).
+        const float centre = 120.0f + 260.0f * w.share + 40.0f * (w.gust - 1.0f);
+        const float f = 2.0f * std::sin(pi * SDL_min(centre, rate * 0.2f) / rate);
+        const float lowK = 1.0f - std::exp(-2.0f * pi * 70.0f / rate);
+        const float smoothK = 1.0f - std::exp(-2.0f * pi * 500.0f / rate);
+        for (u32 k = 0; k < frames; ++k)
+        {
+            w.level += (target - w.level) * ease;
+            w.share += (t - w.share) * ease;
+            // Slow, shallow swells in the level.
+            if ((w.gustLeft -= 1.0f / rate) <= 0.0f)
+            {
+                w.gustTo = 0.93f + 0.13f * w.random01();
+                w.gustLeft = 1.2f + 1.2f * w.random01();
+            }
+            w.gust += (w.gustTo - w.gust) * (1.0f / (rate * 0.9f));
+            const float common = w.noise();
+            float out[2];
+            for (int side = 0; side < 2; ++side)
+            {
+                const float n = 0.85f * common + 0.35f * w.noise();
+                // The rumble: noise through two low passes.
+                w.low[side] += (n - w.low[side]) * lowK;
+                w.low2[side] += (w.low[side] - w.low2[side]) * lowK;
+                // The rush: a low band pass (a state-variable filter, damping 1.4),
+                // then a low pass so none of the noise's top comes through.
+                const float high = n - w.bandLow[side] - 1.4f * w.band[side];
+                w.band[side] += f * high;
+                w.bandLow[side] += f * w.band[side];
+                w.smooth[side] += (w.band[side] - w.smooth[side]) * smoothK;
+                out[side] = w.level * w.gust * (7.0f * w.low2[side] + 3.6f * w.smooth[side]);
+            }
+            const u32 at = accumulator + ((k << (r8(kShift) & 31)) << 2);
+            w16(at, u16(saturate(i32(s16(at)) + i32(out[0]))));
+            w16(at + 2, u16(saturate(i32(s16(at + 2)) + i32(out[1]))));
+            if (wet > 0.0f)
+            {
+                const u32 send = kSend + ((k << (r8(kShift) & 31)) << 2);
+                w16(send, u16(saturate(i32(s16(send)) + i32(out[0] * wet))));
+                w16(send + 2, u16(saturate(i32(s16(send + 2)) + i32(out[1] * wet))));
+            }
+        }
+        if (wet > 0.0f)
+            w32(kReverbIdle, 0);
+    }
+
     /* sub_5006f8: one block of at most 256 frames. */
     void block(u32 target, u32 frames)
     {
@@ -1453,6 +1587,8 @@ struct Mixer
             afterChannel(ch, rest, source, ramped);
         }
         const u32 accumulator = r32(kAccumulator);
+        if (!checking)
+            addWind(frames, accumulator);
         beforeOutput(frames, accumulator);
         if (r32(kOutput) == 0x520920)
             output(frames, accumulator, target);
@@ -1648,6 +1784,13 @@ bool soundMix(win32::WinApplication* app, x86::CPU& cpu)
     mixer.mix(target, frames);
     cpu.esp += 4;
     return true;
+}
+
+/* The first player's speed, m/s, for the wind (0 for none): from the game
+ * thread each frame (nfs3hp_main.cpp's colourGradeTick). */
+void windSpeed(float speed)
+{
+    s_windSpeed.store(speed == speed ? speed : 0.0f, std::memory_order_relaxed);
 }
 
 }
