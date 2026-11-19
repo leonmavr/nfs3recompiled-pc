@@ -154,7 +154,7 @@ i16 mulHigh(i16 a, i16 b)
     return i16((i32(a) * i32(b)) >> 16);
 }
 
-/* The wind (NFS_WIND, 1; up to 3 louder, 0 or off for none): the port's own
+/* The wind (NFS_WIND, 2 by ear; up to 3, 0 or off for none): the port's own
  * roar of the air the car cuts through, which the game does not have.  Made
  * here, sample by sample, from noise -- so it has no loop and no seam: a deep
  * rumble and a low band of rushing air under it (120 Hz rising to about
@@ -173,7 +173,7 @@ namespace wind
 {
 constexpr float kFrom = 80.0f / 3.6f;
 constexpr float kFull = 300.0f / 3.6f;
-constexpr float kLevel = 2600.0f;    // the accumulator's units (doubled on the way out) at full, NFS_WIND 1
+constexpr float kLevel = 7000.0f;    // the accumulator's units (doubled on the way out) at full, NFS_WIND 1 (2600 was too quiet)
 constexpr float kEase = 0.35f;       // s for the level to follow the speed
 }  // namespace wind
 
@@ -182,11 +182,11 @@ float windSetting()
     static const float value = [] {
         const char* text = SDL_getenv("NFS_WIND");
         if (!text || !*text || SDL_strcasecmp(text, "on") == 0)
-            return 1.0f;
+            return 2.0f;
         if (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0)
             return 0.0f;
         const float parsed = float(SDL_atof(text));
-        return parsed > 0.0f ? SDL_min(parsed, 3.0f) : 1.0f;
+        return parsed > 0.0f ? SDL_min(parsed, 3.0f) : 2.0f;
     }();
     return value;
 }
@@ -1496,7 +1496,8 @@ struct Mixer
         const float setting = windSetting();
         const float speed = s_windSpeed.load(std::memory_order_relaxed);
         const float t = SDL_clamp((speed - wind::kFrom) / (wind::kFull - wind::kFrom), 0.0f, 1.0f);
-        const float target = setting * wind::kLevel * t * std::sqrt(t);
+        // Up as the speed's share to the 0.8th: heard well before the top (t^1.5 left it faint under 200 km/h).
+        const float target = setting * wind::kLevel * std::pow(t, 0.8f);
         if (w.level < 0.5f && target <= 0.0f)
         {
             w.level = 0.0f;

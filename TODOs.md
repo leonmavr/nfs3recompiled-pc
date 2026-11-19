@@ -865,9 +865,9 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     it (`NFS_NEXT_SONG_KEY`).
 - [ ] Radio: be able to add your own tracks.
 - [x] Crash sounds by how hard the hit was; metal scraping rising with speed.
-- [ ] Wind roar at speed: the air ripping past the car, louder with the speed,
+- [x] Wind roar at speed: the air ripping past the car, louder with the speed,
   echoing in tunnels as the game's own sounds do.
-  - Implemented (2026-11-19, `NFS_WIND`, 1; 0/off, up to 3), not yet heard:
+  - Done (2026-11-19, `NFS_WIND`, 2; 0/off, up to 3):
     made in the mixer from noise -- no loop, no seam: a deep rumble and a low
     band of rushing air (120 to about 380 Hz with the speed), no hiss, slow
     shallow swells -- from 80 km/h (silent) to 300, the player's speed; added
