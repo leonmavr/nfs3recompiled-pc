@@ -997,22 +997,6 @@ not a lamp itself. k is 0.45 times `NFS_LIGHT_TRAILS` (1), coming in from
 projection's (`[0x5600a4]`, `[0x5600a8]`). It costs a pass over the screen and
 a second draw of the few lamp sprites.
 
-### Brake discs glowing at night
-
-Braking hard at night, a car's brakes glow (`NFS_BRAKE_GLOW`,
-`brakeGlowFrame` in `native_particles.cpp`): at each wheel a pool of orange
-light on the road where it touches (`EffectParticle::Glow`, as an exhaust
-flame's) and a glow at the hub on the wheel's outer side
-(`EffectParticle::BrakeGlow`, round where the disc faces the view, narrowed as
-it turns edge on, fading rather than cut off behind the tyre). The first
-player's car brakes hard when its brake byte (`0x79c33a`, as the tyre marks
-read it) is past 0.55; any other car when it slows harder than 6 m/s² (and
-under 18, past which it is a hit) -- no other car's pedal can be read. While it
-brakes above 8 m/s the glow comes up in 0.35 s to as much as its speed gives
-(all of it from 30 m/s); off the brake it goes out over 1.25 s. Dull red
-coming up, orange at full; the fronts brighter than the rears (0.6 of them).
-Night only (`[0x6fd4c8]`); the tunables are `brakes::` in the same file.
-
 ### The cars' paint
 
 A car is drawn twice: its body with its own texture, then the reflection the
@@ -3018,7 +3002,6 @@ the next time the game starts.
 | `NFS_MOTION_BLUR` | on (`2`) | `0`/`off`: no motion blur. A number up to 2: how strong the streaks outside the sharp ellipse are (Speed you can feel). |
 | `NFS_LIGHT_GLOW` | on (`1`) | `0`/`off`: the lamps' glow as the game has it, a star of spikes. A number up to 3: how strong the halo round the soft glow (The lamps' glow, and their trails). |
 | `NFS_LIGHT_TRAILS` | on (`1`) | `0`/`off`: no streak. A number up to 3: how long the short streak under each lamp at speed, on the screen. |
-| `NFS_BRAKE_GLOW` | on (`1`) | `0`/`off`: no glow from the brakes at night. A number up to 3: how bright (Brake discs glowing at night). |
 | `NFS_TAILLIGHT_TRAILS` | on (`1`) | `0`/`off`: no trails behind the cars' tail lights. A number up to 3: how long they grow with speed, from 80 km/h (The lamps' glow, and their trails). |
 | `NFS_PARTICLES` | on (`1`) | `0`/`off`: the game's own dust and sparks. A number up to 3: how much dirt is thrown (Dust, grit and sparks of the port's own). |
 | `NFS_EXHAUST_FLAMES` | on (`1`) | `0`/`off`: no flames out of the cars' exhausts when they gear up (Exhaust flames when gearing up). |

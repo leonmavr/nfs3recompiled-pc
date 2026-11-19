@@ -58,6 +58,7 @@ each one does.
 # NFS_BLOOM = 0.6
 # NFS_GRADE = on
 # NFS_EXPOSURE = 0.7
+# NFS_NIGHT_LIGHT = 0.6
 # NFS_AA = on
 # NFS_GAMMA = 1.0
 # NFS_BRIGHTNESS = 1.0
@@ -83,7 +84,7 @@ each one does.
 # NFS_LIGHT_GLOW = 1
 # NFS_LIGHT_TRAILS = 1
 # NFS_TAILLIGHT_TRAILS = 1
-# NFS_BRAKE_GLOW = 1
+# NFS_COP_LIGHTS = 1
 # NFS_SPARKS = 2
 
 [The port's own particles]

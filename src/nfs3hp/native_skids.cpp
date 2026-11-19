@@ -504,7 +504,8 @@ bool skidPedals(win32::WinApplication* app, x86::CPU& cpu, x86::reg32 car)
     const bool revved = gear >= kFirstGear && speed < kSpinSpeed && limit
                         && float(app->getMemory<x86::sreg32>(car + kCarRevs)) > kSpinRevs * float(limit);
     const bool launching = gear == kFirstGear && speed < kLaunchSpeed;
-    const bool spinning = grounded && throttle > kSpinThrottle && (revved || launching);
+    static const bool markTest = SDL_getenv("NFS_MARK_TEST") != nullptr;   // debug: mark every frame on the move
+    const bool spinning = markTest || (grounded && throttle > kSpinThrottle && (revved || launching));
     /* The brake past half, or the handbrake (which locks the rear wheels
      * alone), the car moving: marks almost at once (2026-11-17: after a second
      * of it, they were hardly ever laid). */
@@ -517,7 +518,7 @@ bool skidPedals(win32::WinApplication* app, x86::CPU& cpu, x86::reg32 car)
     }
     else
         s_braking[slot] = 0;
-    const bool braking = s_braking[slot] && clock - s_braking[slot] >= kBrakeAfter;
+    const bool braking = markTest || (s_braking[slot] && clock - s_braking[slot] >= kBrakeAfter);
     if (!spinning && !braking)
     {
         for (Wheel& w : s_wheels[slot])
@@ -532,9 +533,9 @@ bool skidPedals(win32::WinApplication* app, x86::CPU& cpu, x86::reg32 car)
         float at[3];
         wheelContact(app, car, n, at);
         const float ahead = (at[0] - centre[0]) * forward[0] + (at[1] - centre[1]) * forward[1] + (at[2] - centre[2]) * forward[2];
-        if (spinning && !braking && ahead > 0.0f)
+        if (!markTest && spinning && !braking && ahead > 0.0f)
             continue;   // a spin marks under the driven end (the rear)
-        if (braking && !pedal && !spinning && ahead > 0.0f)
+        if (!markTest && braking && !pedal && !spinning && ahead > 0.0f)
             continue;   // the handbrake alone locks the rear wheels
         if (!layOwnPiece(app, cpu, s_wheels[slot][n], right, forward, at, spinning, clock))
             return false;

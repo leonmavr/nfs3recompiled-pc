@@ -402,7 +402,7 @@ struct ThrashDraw
     float                               sun[12];
     bool                                race;
     float                               speed;
-    bool                                blurOn;      // no motion blur at night
+    bool                                night;       // a night race: no motion blur, the night lift
     std::shared_ptr<const std::vector<EffectParticle>> particles;  // the port's own (drawParticles)
     float                               alphaTestRef;
     x86::reg32                          chromaKeyColor;
@@ -1165,7 +1165,7 @@ void ThrashRenderer::renderPending()
     std::copy(m_sun, m_sun + 12, draw->sun);
     draw->race = m_raceView;
     draw->speed = m_speed;
-    draw->blurOn = m_blurOn;
+    draw->night = m_night;
     draw->particles = m_particles;
     draw->chromaKeyColor = m_chromaKeyColor;
     draw->width = m_renderer->m_width;
@@ -1387,6 +1387,7 @@ static const char g_compositeShader[] =
 "uniform vec3 u_up;"
 "uniform vec2 u_size;"
 "uniform float u_blur;"
+"uniform float u_nightLift;"   // NFS_NIGHT_LIGHT at night, else 0
 "uniform float u_blurDebug;"   // NFS_BLUR_TRACE=2: what the blur did, in colours
 "uniform float u_blurRadius;"   // the sharp middle band's half width over the picture's, 1 for all of it
 "uniform sampler2D u_light;"
@@ -1631,8 +1632,14 @@ static const char g_compositeShader[] =
  * past the band's edge, the faster (u_blur, the speed's share times
  * NFS_MOTION_BLUR times 2) and the nearer it is (as a star near the eye crosses
  * the screen fastest: 20 m / its distance, between 0.3 and 1.6) the longer, to
- * at most 6% of the view's height (65 pixels at 1080p).  Eight samples, their
- * start jittered pixel by pixel so a long streak does not show as copies.
+ * at most 4% of the view's height at the band's edge, growing with the square
+ * of how far across the side band the pixel is to 12% at the picture's edge.
+ * The side bands are stretched outwards too, more the further out: a pixel's
+ * streak starts back towards the middle by up to 3.5% of the height (warp,
+ * the same square, by the speed), so what is near the band's edge is pulled
+ * out across it -- a warp at no cost, the samples merely start further in.
+ * Eight samples, their start jittered pixel by pixel so a long streak does not
+ * show as copies.
  * Left sharp, and never taken into a smear: the cars (0 in the picture's
  * alpha); the lamps (where the light layer is lit, while it is drawn: u_halo
  * or u_trailOn; only the pixel itself is tested, a lamp next to a streak may
@@ -1655,23 +1662,28 @@ static const char g_compositeShader[] =
 "    }"
 "    float z = 1.0 / max(1.0 - d, 1e-5);"
 "    float near = clamp(20.0 / max(z, 1.0), 0.3, 1.6);"
-"    float len = min(over * u_blur * near * 0.18 * u_size.y, 0.06 * u_size.y);"
-"    if (debug) return mix(c, vec3(0.0, 1.0, 0.0), 0.25 + 0.75 * len / (0.06 * u_size.y));"   /* green: blurred, by how long */
+"    float side = clamp(over / max(1.0 - u_blurRadius, 0.05), 0.0, 1.0);"
+"    float aggr = side * side;"
+"    float most = (0.04 + 0.08 * aggr) * u_size.y;"
+"    float len = min(over * u_blur * near * 0.18 * (0.6 + 1.4 * aggr) * u_size.y, most);"
+"    if (debug) return mix(c, vec3(0.0, 1.0, 0.0), 0.25 + 0.75 * len / (0.12 * u_size.y));"   /* green: blurred, by how long */
 "    if (len < 1.0) return c;"
-"    vec2 trail = normalize(fromMiddle * u_size) * len;"
+"    vec2 dir = normalize(fromMiddle * u_size);"
+"    vec2 warp = dir * (aggr * min(u_blur, 4.0) * 0.25 * 0.035 * u_size.y);"
+"    vec2 trail = dir * len;"
 "    float jitter = fract(sin(dot(uv * u_size, vec2(12.9898, 78.233))) * 43758.5453);"
-"    vec3 sum = c;"
-"    float n = 1.0;"
+"    vec3 sum = vec3(0.0);"
+"    float n = 0.0;"
 "    for (int i = 0; i < 8; ++i) {"
 "        float t = (float(i) + jitter) / 8.0;"
-"        vec2 at = uv - trail * t / u_size;"
+"        vec2 at = uv - (warp + trail * t) / u_size;"
 "        vec4 s = texture(u_source, at);"
 "        if (s.a < 0.5) continue;"
 "        float w = 1.0 - 0.6 * t;"
 "        sum += s.rgb * w;"
 "        n += w;"
 "    }"
-"    return sum / n;"
+"    return n > 0.0 ? sum / n : c;"
 "}"
 "vec3 fxaa(vec2 uv)"
 "{"
@@ -1754,6 +1766,16 @@ static const char g_compositeShader[] =
 "        c = glare(c);"
 "    if (u_exposure.x > 0.0)"
 "        c *= exposureGain();"
+/* Night (NFS_NIGHT_LIGHT): the game's night tracks are lit by little but the
+ * headlights, and away from them all but black.  A lift of the darks -- a
+ * gamma of 1 / (1 + u_nightLift) -- that raises them far more than the lights
+ * (0.1 comes to 0.24 at the default 0.6, 0.5 to 0.65, white stays white), the
+ * part it adds a little cool, as moonlight.  Before the lamps' halos, trails
+ * and glow are added, so those are not lifted with it. */
+"    if (u_nightLift > 0.0) {"
+"        vec3 lifted = pow(max(c, vec3(0.0)), vec3(1.0 / (1.0 + u_nightLift)));"
+"        c += (lifted - c) * vec3(0.92, 0.97, 1.08);"
+"    }"
 /* The lamps (initPost): a soft halo round each, from the light layer's
  * smaller levels -- wide and faint over narrow -- and, at speed, their
  * trails: what the lamps nearer the middle of the view than this pixel, on the
@@ -1824,7 +1846,7 @@ static std::string particleTypeNames()
         { "kSpike", EffectParticle::Spike },     { "kStreak", EffectParticle::Streak },
         { "kFlame", EffectParticle::Flame },     { "kGlow", EffectParticle::Glow },
         { "kSmoke", EffectParticle::Smoke },     { "kDroplet", EffectParticle::Droplet },
-        { "kFlake", EffectParticle::Flake },     { "kBrakeGlow", EffectParticle::BrakeGlow },
+        { "kFlake", EffectParticle::Flake },
         { "kFrost", EffectParticle::Frost },
     };
     std::string names;
@@ -1903,7 +1925,7 @@ static const char g_particleShader[] =
 "    float behind = texture(u_depth, gl_FragCoord.xy * u_fragScale / u_size).r;"
 "    float zBehind = 1.0 / max(1.0 - behind, 1e-5);"
 "    float room = zBehind - z;"
-"    if (room < (type == kSpike ? -0.4 : type == kBrakeGlow ? -0.45 : -0.05)) discard;"
+"    if (room < (type == kSpike ? -0.4 : -0.05)) discard;"
 "    if (type == kStreak) {"   /* a piece of an air trail: thin, even, soft at its sides */
 "        o_color = vec4(v_color.rgb, exp(-v_uv.y * v_uv.y * 4.0) * v_color.a);"
 "        return;"
@@ -1942,23 +1964,6 @@ static const char g_particleShader[] =
 "        a *= v_color.a;"
 "        if (a <= 0.002) discard;"
 "        o_color = vec4(v_color.rgb * (0.75 + 0.5 * a), a);"
-"        return;"
-"    }"
-/* A hot brake disc: a soft glow round the hub, its ring a little hotter
- * than its middle, as a disc glows through the spokes; narrowed sideways as the
- * disc turns edge on (v_from.x, 0 to 1, how round it is seen).  Added, like a
- * flame's light.  It may lie up to 45 cm behind what is drawn in front of it --
- * the tyre's tread, from behind the car -- and fades the deeper it lies, so a
- * glow behind the tyre is a faint warmth round the wheel, not cut off. */
-"    if (type == kBrakeGlow) {"
-"        vec2 q = vec2(v_uv.x / max(v_from.x, 0.2), v_uv.y);"
-"        float rr = length(q);"
-"        if (rr >= 1.0) discard;"
-"        float soft = (1.0 - rr) * (1.0 - rr);"
-"        float ring = exp(-(rr - 0.55) * (rr - 0.55) / 0.04);"
-"        float a = (soft * 0.7 + ring * 0.3) * v_color.a * clamp(room / 0.45 + 1.0, 0.0, 1.0);"
-"        if (a <= 0.002) discard;"
-"        o_color = vec4(v_color.rgb * (0.85 + 0.4 * soft), a);"
 "        return;"
 "    }"
 /* A snowflake: a small soft speck, ragged by its seed -- soft at the ends
@@ -2354,6 +2359,14 @@ void ThrashRenderer::initPost()
     m_headStrength = onOff("NFS_HEADLIGHT_OBJECTS", 1.6f);
     m_motionBlur = onOff("NFS_MOTION_BLUR", 2.0f);
     m_blurTrace = SDL_getenv("NFS_BLUR_TRACE") != nullptr;
+    {
+        // NFS_NIGHT_LIGHT: how much the darks are lifted at night, 0.6 by default, 0 or off for none, up to 2.
+        const char* value = SDL_getenv("NFS_NIGHT_LIGHT");
+        float parsed = 0.6f;
+        if (value && *value && SDL_strcasecmp(value, "on") != 0)
+            parsed = (SDL_strcmp(value, "0") == 0 || SDL_strcasecmp(value, "off") == 0) ? 0.0f : float(SDL_atof(value));
+        m_nightLift = parsed >= 0.0f && parsed <= 2.0f ? parsed : 0.6f;
+    }
     m_blurDebug = m_blurTrace && SDL_atoi(SDL_getenv("NFS_BLUR_TRACE")) >= 2;
     m_lightGlow = lightGlowSetting();
     m_lightTrails = lightTrailSetting();
@@ -2416,6 +2429,7 @@ void ThrashRenderer::initPost()
         m_compositeBlur = glGetUniformLocation(m_compositeProgram, "u_blur");
         m_compositeBlurRadius = glGetUniformLocation(m_compositeProgram, "u_blurRadius");
         m_compositeBlurDebug = glGetUniformLocation(m_compositeProgram, "u_blurDebug");
+        m_compositeNightLift = glGetUniformLocation(m_compositeProgram, "u_nightLift");
         m_compositeLight = glGetUniformLocation(m_compositeProgram, "u_light");
         m_compositeHalo = glGetUniformLocation(m_compositeProgram, "u_halo");
         m_compositeTrailOn = glGetUniformLocation(m_compositeProgram, "u_trailOn");
@@ -2564,8 +2578,7 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
         const bool stretch = p.type == EffectParticle::Spark || p.type == EffectParticle::Streak
                              || p.type == EffectParticle::Droplet || p.type == EffectParticle::Flake;
         const bool additive = (stretch && p.type != EffectParticle::Flake)
-                              || p.type == EffectParticle::Flame || p.type == EffectParticle::Glow
-                              || p.type == EffectParticle::BrakeGlow;
+                              || p.type == EffectParticle::Flame || p.type == EffectParticle::Glow;
         float ax, ay, bx, by;   // the quad's two axes, half its length and width
         if (stretch)
         {
@@ -2898,8 +2911,8 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
     /* The motion blur (motionBlur): the speed's share from 80 km/h to 250,
      * smoothstepped and held from there -- how much (twice NFS_MOTION_BLUR at
      * the whole: four times what it first was, 2026-11-19) and how far the
-     * sharp middle band has narrowed.  None at night (draw.blurOn). */
-    const float ramp = draw.blurOn ? SDL_max(0.0f, SDL_min(1.0f, (draw.speed - 80.0f / 3.6f) / (170.0f / 3.6f))) : 0.0f;
+     * sharp middle band has narrowed.  None at night (draw.night). */
+    const float ramp = !draw.night ? SDL_max(0.0f, SDL_min(1.0f, (draw.speed - 80.0f / 3.6f) / (170.0f / 3.6f))) : 0.0f;
     const float blurShare = ramp * ramp * (3.0f - 2.0f * ramp);
     const float blur = 2.0f * m_motionBlur * blurShare;
     const bool particles = m_particlesOn && draw.particles && !draw.particles->empty();
@@ -3003,6 +3016,7 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
     glUniform1f(m_compositeBlurRadius, 1.0f - 0.5f * blurShare);
     glUniform2f(m_compositeSize, float(width), float(height));   // the blur's
     glUniform1f(m_compositeBlurDebug, m_blurDebug ? 1.0f : 0.0f);
+    glUniform1f(m_compositeNightLift, draw.night ? m_nightLift : 0.0f);
     if (m_blurTrace)
     {
         static Uint64 s_lastNs = 0;
@@ -3250,7 +3264,7 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
      * the glow and FXAA over the menu's lettering, ghosting it. */
     const bool post = draw.race && m_compositeProgram
                       && (m_bloom > 0.0f || m_gradeOn || m_antialias || draw.sun[0] > 0.0f || draw.sun[11] > 0.0f || m_motionBlur > 0.0f
-                          || m_lightGlow > 0.0f || m_lightTrails > 0.0f);
+                          || m_lightGlow > 0.0f || m_lightTrails > 0.0f || (draw.night && m_nightLift > 0.0f));
     const float haze = draw.race ? m_haze : 0.0f;
     const bool wet = draw.wetness > 0.0f && m_reflectionValid && m_reflectionW == int(draw.width)
                      && m_reflectionH == int(draw.height);

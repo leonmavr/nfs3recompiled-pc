@@ -2654,8 +2654,8 @@ void colourGradeTick(win32::WinApplication* app)
         else if (now - s_tickedNs > 250000000)
             s_speed = 0.0f;
         s_clock = clock;
-        // No motion blur at night ([0x6fd4c8]); the speed still goes to the snow on the lens.
-        win32::glide2x::motion(s_speed, app->getMemory<x86::reg32>(0x6fd4c8) == 0);
+        // And whether it is night ([0x6fd4c8]): no motion blur then, and the night lift.
+        win32::glide2x::motion(s_speed, app->getMemory<x86::reg32>(0x6fd4c8) != 0);
     }
     win32::glide2x::colourGrade(grade.red, grade.green, grade.blue, grade.saturation, grade.contrast);
 }

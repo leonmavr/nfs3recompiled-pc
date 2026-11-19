@@ -93,83 +93,48 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     length with a faint gap now and then. The game marked only the player's
     slides, so the port lays a sliding car's marks itself -- every car, the
     opponents' and cops' too (`skidPedals`, on pavement, 30 cm a piece).
-- [x] Marks of their own on loose ground -- dirt, sand, gravel, mud, grass,
+- [ ] Marks of their own on loose ground -- dirt, sand, gravel, mud, grass,
   snow -- where the asphalt's black rubber is not what a tyre would leave.
-  - Done (2026-11-19): the per-surface table (tint, alpha, width, life), the
-    rut's colour in the piece's +0x310 byte and the patched draw (`markTint`),
-    and the four pictures recognised at upload by their alpha hash -- the
-    game's own pointers are useless there, it uploads everything through one
-    shared staging buffer. Pavement unchanged; `NFS_SURFACE_TEST` now makes
-    every wheel that ground, so each surface is testable anywhere. See
-    TECHNICAL.md, "A mark in the ground's own colour".
-  - Researched (2026-11-19): a piece keeps only a shape and two alphas --
-    one of four `skd` pictures, black RGB with the shape in the alpha, drawn
-    by `sub_4c6f00`. Black blended over the ground darkens it, but darkening
-    is not colour: over Redrock's sand it is dark tan, not the burnt orange a
-    dug rut is; over grass it is green only as much as the ground already was;
-    over snow only grey. A terrain mark wants a hue of its own.
-  - The game already has the slot for it. `sub_4c6f00` builds each piece's
-    polygon colour as `alpha << 24 | 0xffffff` (0x4c705e): a per-piece RGB
-    that is simply always white. The world shader mixes the texture's RGB
-    into that only while `v_combine.s` is on (`thrashrenderer.cpp`). So:
-    - let the four `skd` batches leave the picture's RGB out of the mix (the
-      records are the four at 0x8b41c8 once the sfx textures load, so the
-      renderer can know them; the alpha still shapes the mark), and
-    - patch that one colour build to OR in an RGB from a small palette
-      instead of `0xffffff`.
-    The surface has to reach the draw: the piece's byte at +0x310 holds the
-    shape in its low two bits and has six to spare, so `skidLaid` (which runs
-    at the end of every piece, the game's and the port's) writes
-    `tint << 2 | shape` from `groundAt` at the piece, the texture lookup masks
-    the low two, and the patched colour build uses the rest. No new pictures,
-    no new draws, no shadow array -- one byte already stored and a palette
-    lookup a piece.
-  - Palette (a rut's own colour, dark because it is a rut; the alpha still
-    follows the speed, the handbrake and the surface scales below):
-    - pavement `#000000`, the black rubber it is now;
-    - dirt and gravel `#6a3d1c`, Redrock sand `#7a4a22` -- burnt orange-brown,
-      not the ground washed down to grey;
-    - grass `#223d18` -- a dark green of its own;
-    - mud `#2e2114` -- a wet, nearly black brown;
-    - snow `#b9c6cf` -- now that the colour is the vertex RGB and not the
-      black picture, a pale packed-snow line is possible; a low alpha, or no
-      ring at all (see below);
-    - other `#4a3a2a`.
-    If dug-up dry soil should read lighter than a wet rut, the same tint can
-    be lightened by the wheel's slip; one palette entry a surface is enough
-    for a first cut.
+  - Researched (2026-11-19): a piece keeps no colour. It is one of four `skd`
+    pictures, black and alpha only, and two alphas, drawn by `sub_4c6f00`;
+    tinting it by the terrain would take a renderer path of its own for those
+    batches or four more pictures, and a decal would take ground-mapped quads
+    the particle pool cannot draw. But black blended over the ground is the
+    ground's own colour, darkened -- so the terrain's hue comes for free and
+    one alpha multiplier a surface is all the colour needed.
   - Plan, cheapest first:
     - Dirt, sand and gravel (kind 2; surfaces 8, 9, 13) and mud (kind 4):
-      real marks through the same ring and picture, the palette's tint, alpha
-      x 0.5 and x 0.7 of the asphalt's, a little narrower (x 0.8) -- a turned
-      rut over brown ground, a deep one over mud -- with the clods and the
-      dust the wheels already throw on top.
-    - Grass (kind 1): the dark green tint, alpha x 0.3 and a life a third of
-      the asphalt's, a flattened dark strip rather than a scar; the blades
-      carry the rest.
-    - Snow (kind 3): the pale tint at a low alpha (about 0.2) for a few
-      seconds, or no ring and the frost chips and spray alone -- those are
-      the digging effect already.
+      real marks through the same ring and picture, alpha x 0.5 and x 0.7 of
+      the asphalt's, a little narrower (x 0.8) -- a turned rut over brown
+      ground, a deep one over mud -- with the clods and the dust the wheels
+      already throw on top.
+    - Grass (kind 1): alpha x 0.3 and a life a third of the asphalt's, a
+      flattened dark strip rather than a scar; the blades carry the rest. If
+      it still reads as a black line, lay no ring here and leave the digging
+      to the blades and a few dark grains of soil.
+    - Snow (kind 3): no black ring -- over white it would read as asphalt
+      showing through. The frost chips and spray are the digging effect
+      already; if a mark is wanted, alpha x 0.1 for a few seconds, which only
+      greys the snow. A pale, packed-snow mark cannot be made with the black
+      pictures (nothing lightens with them) and would need a blend of its own,
+      which is not worth it.
     - Other (kind 5): as dirt, alpha x 0.4.
-  - Colour by rpm or gear: no. The terrain sets the hue; rpm, slip and the
-    handbrake set how much (the alpha already follows the speed and the
-    handbrake). One palette entry a surface, not one a frame.
-  - Sketch: the table in `native_skids.cpp` becomes kind -> { on, tint, alpha
-    scale, width scale, life scale }; `skidPedals` and `skidLaid` look it up
-    where they skip `groundUnder(...) != 0` today, multiply the piece's alpha,
-    cap its life, and stamp the tint into +0x310. The ring, the fade, the
-    smoke hook and the particle side stay as they are -- the wheels already
-    throw the right dirt, blades and frost on those grounds. One lookup and
-    one multiply a piece, no new draws and no new particles.
-  - If patching the draw's colour build proves awkward, the fallback is four
-    pre-tinted copies of each of the four pictures (twenty tiny textures),
-    selected by the same tint bits -- same ring, same byte, no shader or
-    vertex change, a little more to load.
+  - Colour by rpm or gear: no. A black picture has no hue to set, and a rut's
+    colour is whichever ground it is cut into; rpm and slip should say how
+    much (the alpha already follows the speed and the handbrake) rather than
+    what colour. One scale a surface, not one a frame.
+  - Sketch: a table in `native_skids.cpp` (kind -> on, alpha scale, width
+    scale, life scale) looked up where `skidPedals` and `skidLaid` skip
+    `groundUnder(...) != 0` today (`groundAt`, already exported by
+    `native_particles.cpp`, gives the kind at a game-laid piece); multiply the
+    piece's alpha and cap its life by it. The ring, the fade, the smoke hook
+    and the particle side stay as they are -- the wheels already throw the
+    right dirt, blades and frost on those grounds. One lookup and one multiply
+    a piece; no new draws and no new particles.
   - Tests: Country Woods' dirt, Summit's snow, Atlantica's grass, a mud
     stretch (and `NFS_SURFACE_TEST` for each); a launch, a lock-up and a slide
-    at 30 and 100 km/h. Watch that a tinted mark does not read as paint, that
-    a low alpha still reads at a grazing angle, and the game's lift (`kLift`)
-    so a rut does not z-fight the terrain.
+    at 30 and 100 km/h. Watch the game's lift (`kLift`) so a rut does not
+    z-fight the terrain, and that a low alpha still reads at a grazing angle.
 - [x] Tyre smoke on wheelspin and lock-up, taken over from the game's kind 6
   and made procedural.
   - Done (`NFS_TYRE_SMOKE`, on): dark clouds of its own, ragged by noise. It is
@@ -184,6 +149,8 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     orange light on the road at each wheel and a glow at its hub, up in 0.35 s
     and out over 1.25 s after; every car, fronts brighter, night only (Brake
     discs glowing at night).
+  - Removed (2026-11-19): more complex than it looked and never read well;
+    `NFS_BRAKE_GLOW` and `EffectParticle::BrakeGlow` are gone.
 - [x] Two broken shadows behind the rear wheels (2026-11-17): the tail lights'
   glow squares marked the road as car in the picture's alpha; light leaves it.
 - [x] Wet road dry for frames at a time in the rain (2026-11-17): a flat draw
@@ -232,15 +199,6 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   - [x] Next: shadows for trackside objects.
     - Done: cast from the depth buffer towards the sun onto level ground
       (`NFS_OBJECT_SHADOWS`, 0.45); not by cars, which have their own.
-  - Reworked (2026-11-19): a sharp band down the middle, the whole width at
-    80 km/h, narrowing to the middle half by 250 (held above; none at night); the outer quarters streak
-    away from the middle like a star field -- longer the further out, the
-    faster and the nearer (up to 6% of the view's height). Cars, lamps and the
-    sky (so the sun and its glare) stay sharp. Fixed on the way: the speed was
-    sent as 0 on every frame the race's 64 Hz clock had not ticked; and the
-    picture's alpha took the whole world for car (any 8888/4444 batch wrote 0
-    there), so nothing was blurred -- and the object shadows were never cast.
-    `NFS_BLUR_TRACE=1`/`2` to check.
 - [x] More details environment (buildings, grass, fences, rocks, etc.) textures,
   better sampled maybe?
   - Done: textures seen larger than they are drawn Catmull-Rom instead of
@@ -276,6 +234,15 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   - Done: the world smeared away from the screen's centre by speed over its
     distance (from the depth buffer), from 10 m/s, whole from 35; the cars
     stay sharp (`NFS_MOTION_BLUR`, 2).
+  - Reworked (2026-11-19): a sharp band down the middle, the whole width at
+    80 km/h, narrowing to the middle half by 250 (held above; none at night); the outer quarters streak
+    away from the middle like a star field -- longer the further out, the
+    faster and the nearer (up to 6% of the view's height). Cars, lamps and the
+    sky (so the sun and its glare) stay sharp. Fixed on the way: the speed was
+    sent as 0 on every frame the race's 64 Hz clock had not ticked; and the
+    picture's alpha took the whole world for car (any 8888/4444 batch wrote 0
+    there), so nothing was blurred -- and the object shadows were never cast.
+    `NFS_BLUR_TRACE=1`/`2` to check.
 - [x] Exhaust flames; when gearing up transmission, eject exhaust flames behind
   each exhaust of each cars. However before doing that, exhaust positions
   (notice that exhausts are symmetrical in terms of width axis) will need to be
@@ -349,31 +316,6 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   it.
 - [x] Snow particles effect on screen; similar to rain, but pre-baked hexagons/snowflakes
   /other shapes. Please don't make them look cheap. They should have various sizes. 
-- [ ] Speed FOV kick: the chase view widens a few degrees from 150 km/h to
-  300, eased like the camera pull. (A vignette was tried with it and dropped:
-  the motion blur alone shows the speed.)
-  - Implemented (2026-11-19, `NFS_SPEED_FOV`, 1; 0/off for none, 0.5 weaker,
-    up to 3 stronger), not yet seen in a race: `cameraToView` eases a factor
-    on the tangents (up to 1.1 at 300 km/h, by the switch), `projectionSet`
-    (the top of `sub_4bf260`) widens both half angles of the main view's float
-    projection by it. The edge blur is the motion blur already there. To check:
-    no popping at the screen's edges (whether culling uses the same angles),
-    the mirror untouched, in-car and replay cameras unchanged.
-- [ ] Cop lights on the world at night: pulsing red and blue pools of light on
-  the road and the walls beside each cop car (the light pools of
-  `NFS_FLAME_LIGHT`/`NFS_BRAKE_GLOW`, the headlights' light on objects).
-- [ ] Dirty lens behind other cars: close behind a car on a wet road the lens
-  rain gets more drops (`NFS_LENS_RAIN`, `NFS_WHEEL_SPRAY`); on dirt or snow, a
-  few specks.
-- [ ] A puff of dust or snow where a car lands from a jump, sparks on a hard
-  landing (the landing of `NFS_BODY_MOTION`, `NFS_PARTICLES`, `NFS_SPARKS`).
-- [ ] Lightning in night rain: now and then a flash over the whole picture,
-  thunder a second or two later (the exposure pass, the mixer).
-- [ ] Reversing lights: a white glow and a small pool of light behind a car in
-  reverse (`NFS_LIGHT_GLOW`, the light pools).
-- [ ] Sparks on car-to-car scrapes, not only on walls (`NFS_SPARKS`).
-- [ ] Headlight beams seen in rain and haze: a soft additive cone ahead of each
-  lit lamp, only when it rains or the air is hazy.
   and there's no need for refraction on them - only semi-transparency.
   There are mostly transparent - towards the edges they're more transparent but
   their main lines are less transparent. Note that snow particles will be
@@ -409,9 +351,63 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 - [ ] After extracting assets, make 3d models such as cops animating (e.g when
   fined/arrested) or be able to add custom model in whatever format the game
   uses (e.g. girls/crowd before race begins)
+- [ ] Speed FOV kick: the chase view widens a few degrees from 150 km/h to
+  300, eased like the camera pull. (A vignette was tried with it and dropped:
+  the motion blur alone shows the speed.)
+  - Implemented (2026-11-19, `NFS_SPEED_FOV`, 1; 0/off for none, 0.5 weaker,
+    up to 3 stronger), not yet seen in a race: `cameraToView` eases a factor
+    on the tangents (up to 1.1 at 300 km/h, by the switch), `projectionSet`
+    (the top of `sub_4bf260`) widens both half angles of the main view's float
+    projection by it. The edge blur is the motion blur already there. To check:
+    no popping at the screen's edges (whether culling uses the same angles),
+    the mirror untouched, in-car and replay cameras unchanged.
+- [ ] Cop lights on the world at night: pulsing red and blue pools of light on
+  the road and the walls beside each cop car (the light pools of
+  `NFS_FLAME_LIGHT`, the headlights' light on objects).
+  - Implemented (2026-11-19, `NFS_COP_LIGHTS`, 1; 0/off, up to 3), not yet
+    seen in a race: at night every cop within 200 m of the player lays three
+    red pools down its left and three blue down its right, and a fainter wash
+    of each out and up beside it (verge, wall, fence), flashing red twice then
+    blue twice every 0.8 s by the race's clock (`native_particles.cpp`,
+    `coplights`). The game's own "bar lit" state is not found yet, so a
+    patrolling cop near the player flashes too.
+- [ ] Dirty lens behind other cars: close behind a car on a wet road the lens
+  rain gets more drops (`NFS_LENS_RAIN`, `NFS_WHEEL_SPRAY`); on dirt or snow, a
+  few specks.
+- [ ] A puff of dust or snow where a car lands from a jump, sparks on a hard
+  landing (the landing of `NFS_BODY_MOTION`, `NFS_PARTICLES`, `NFS_SPARKS`).
+- [ ] Lightning in night rain: now and then a flash over the whole picture,
+  thunder a second or two later (the exposure pass, the mixer).
+- [ ] Reversing lights: a white glow and a small pool of light behind a car in
+  reverse (`NFS_LIGHT_GLOW`, the light pools).
+- [ ] Sparks on car-to-car scrapes, not only on walls (`NFS_SPARKS`).
+- [ ] Headlight beams seen in rain and haze: a soft additive cone ahead of each
+  lit lamp, only when it rains or the air is hazy.
+- [ ] Tracks at light are very dark. Needs higher ambient light or some other
+  way to consistence keep tracks brighter at night.
+  - Implemented (2026-11-19, `NFS_NIGHT_LIGHT`, 0.6; 0/off for none, up to
+    2), not yet seen in a race: at night the whole-picture pass lifts the
+    darks by a gamma of 1 / (1 + it) -- 0.1 to 0.24, 0.5 to 0.65, white kept
+    -- the added part a little cool, before the lamps' halos and glow so they
+    are not lifted with it.
+- [ ] Some speed feel immersion imrovements: the more the sideways the motion
+  blurred area is, the more aggressive streak outwards is applied by blur.At
+  higher speeds; camea has some subtle smooth up/down vibrations to enhance the
+  level of speed. Not constant sinusoidal ones, but like: no, no, no, no, yes up
+  down vibration, no, no, no, no, ec. also at high speed when switching up
+  transmission, we feel the same camera vibration but 2x than wha the normal one
+  would be. The vibration amplitude and frequency depends on speed; ramps up from 150kph to
+  300kph, where it saturates. amplitude doubles from 150 to 300 and frequency
+  goes up by 1.5x. These can also be configured in NFS_ variables.
+  - The streaks (2026-11-19, not yet seen in a race; the camera's vibration
+    still to do): across each side band
+    the streak's longest grows with the square of how far out the pixel is
+    (4% of the view's height at the band's edge to 12% at the picture's), and
+    the bands are stretched outwards -- each pixel's samples start up to 3.5%
+    of the height further in, by the same square and the speed. Same eight
+    samples, no new pass.
 
 ### Races/locations
-
 - [x] Double the distance that headlights light up when on. Add smoother light,
   more realistic than before light that lights environment more naturally.
   - Done: the headlights' patch reaches twice as far and is 1.4x as wide
@@ -582,8 +578,10 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   longer, disappear from maps if it has lost target, wait (cool down) for some
   period (e.g. 10-15 sec) and respawn in a position pretty close to target to
   chaseagain.
-- [ ] Lap delta on the HUD: +/-0.00 against the best lap at each split, green
-  or red, in a panel like the Now Playing one (`drawOverlay`, the HUD's font).
+- [ ] Should be easier for cops to arrest you; currently I understand that to
+  arrent you cops should slow you down to almost being still for some time and be close
+  to you at the same time; halve this required duration for arrest/fine
+  condition.
 
 ### UI
 - [ ] Figure out how to add/create menu elements without breaking the visual
@@ -619,6 +617,8 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   scheme (red and blue). Also instead of a solid grey light for a road, have a
   grey straight line about 12px thick with darker grey outline on each side
   that's 3px thick.
+- [ ] Lap delta on the HUD: +/-0.00 against the best lap at each split, green
+  or red, in a panel like the Now Playing one (`drawOverlay`, the HUD's font).
 
 ### Driving/Gameplay
 - [x] Tire grip by surface: less on snow, sand and grass than on asphalt. Each
@@ -767,8 +767,6 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   sideways, is still drives but very slow, doesn't reset but keep driving. i
   know it's against physics but when a car is in two sideways wheels, it should
   have some artificial gravity to bring it back to 4 wheels. To be more precise:
-- [ ] BUG: before race begins, right before counting down 3,2,1 before 3, one
-  entire frame gets filled with a single color.
   if two or more wheels lose contact with ground and the sideways tilt is close to 90 degrees
   (around 70 to 90) roll it back to the ground smoothy so all 4 wheels make
   contact. If it is moving too slow (<60kph) on two or more wheels of contact and it's toppling ( >
@@ -797,10 +795,6 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     clouds is 3-6 ticks a car. It comes off every piece of tyre mark
     (`tyreMarkSmoke`, from `skidLaid`), a wheel spun up at low speed, the
     player's brake and handbrake, and the game's own kind 6. Holding its speed
-- [ ] A smaller first Doppler: the cops' sirens only, pitched by how fast they
-  close or open on the player.
-- [ ] Blow-off valve / shift crack on an upshift, timed with the exhaust flame
-  and pitched like the crash sounds.
     for a second while smoking switches a car to the drifting clouds: they
     start smaller, billow instead of falling, and grow unevenly to saturation,
     about 1.5x as wide and 2x as tall as the ordinary ones. Its look is the
@@ -808,6 +802,18 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     150-200/4 s, 200+/4 s, with a third at once -- and the throttle or the
     slide's sideways drag where there is no brake (`throwSmoke`, `tyreSmoke`,
     `native_particles.cpp`; `NFS_TYRE_SMOKE`).
+- [ ] BUG: before race begins, right before counting down 3,2,1 before 3, one
+  entire frame gets filled with a single color.
+- [ ] Photo/screenshot mode: HAve a keybind for it; you already know  how to add
+  a keybind in controls, e.g. ] for next song. By default have 'p' for 'Photo
+  mode'. During photo mode, keys change; car and environment stay still and keys
+  change; arrows rotate camera, p toggles the mode (returns to setting), +-
+  change distance (up to a cap), space
+  takes a photo, displays a flash effect and sound on screen and saves the pic
+  in some default location in game's root folder. In photo mode,  HUD and racing
+  overlay is temporarily remove and have simply an overlay on bottom right
+  explaining the keys: Arrows: rotate camera (new line) Space: take photo (new
+  line) p: return to settings (new line) +/-: change distance.
 
 ### Music/Sound
 - [x] Sound quality is great and sound works well but volume is still too
@@ -816,10 +822,6 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     peaks); now the peaks are rounded off and a look-ahead limiter catches the
     rest (`NFS_VOLUME`, 1.8 by ear).
 - [x] In a brief popup on the bottom left whose visual style is consistent with game, show
-- [ ] Screenshot sweep: an `NFS_TOUCH_SCRIPT` run that drives every track in
-  each weather, by day and night, and saves frames (`NFS_FRAME_DUMP`), so a
-  visual regression shows at a glance (the boxes, rectangles and broken
-  shadows of 2026-11-17 would have).
   cyrretnly plating song when it starts and then slide the popup away.
   Background same as HUD background, on the let there's the nfs icon attached
   that's found also in main menu when selecting single play, two player, hot
@@ -840,6 +842,10 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 - [ ] Doppler Effect: Passing rival cars, tunnel walls, and roadside barriers 
 creates rapid whooshing sounds that rise and fall in pitch as you fly past them. 
 Obviously this effect depends on speed.
+- [ ] A smaller first Doppler: the cops' sirens only, pitched by how fast they
+  close or open on the player.
+- [ ] Blow-off valve / shift crack on an upshift, timed with the exhaust flame
+  and pitched like the crash sounds.
 
 
 ### Career mode
@@ -855,6 +861,10 @@ Obviously this effect depends on speed.
     here instead of 13.5.
 
 ### Infrastructure
+- [ ] Screenshot sweep: an `NFS_TOUCH_SCRIPT` run that drives every track in
+  each weather, by day and night, and saves frames (`NFS_FRAME_DUMP`), so a
+  visual regression shows at a glance (the boxes, rectangles and broken
+  shadows of 2026-11-17 would have).
 - [ ] Asset extractor (roads, signposts, lamps including emmission, buildings, etc) and re-injecter. Figure
   out a way to export assets and view/edit them in a tool, or add custom assets
   and place them in locations in games. 3D model (such as for cops etc) extractor.

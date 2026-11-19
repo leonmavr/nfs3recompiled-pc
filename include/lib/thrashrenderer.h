@@ -122,7 +122,7 @@ public:
             m_particles.reset();   // none left over for the next race's first frame
     }
     /* How fast the first player goes, m/s (glide2x::motion): the motion blur's. */
-    void setMotion(float speed, bool blur) { m_speed = speed; m_blurOn = blur; }
+    void setMotion(float speed, bool night) { m_speed = speed; m_night = night; }
     /* The port's own particles for this frame (glide2x::effectParticles). */
     void setParticles(std::vector<EffectParticle>&& particles)
     {
@@ -323,7 +323,8 @@ private:
     bool                    m_hudBegun = false;     // this frame's
     bool                    m_raceView = false;     // the game thread's
     float                   m_speed = 0.0f;         // the game thread's
-    bool                    m_blurOn = true;        // the game thread's: no motion blur at night
+    bool                    m_night = false;        // the game thread's: a night race (no motion blur, the night lift)
+    float                   m_nightLift = 0.0f;     // NFS_NIGHT_LIGHT
     float                   m_motionBlur = 0.0f;    // NFS_MOTION_BLUR
     bool                    m_blurTrace = false;    // NFS_BLUR_TRACE: [BLUR] once a second
     bool                    m_blurDebug = false;    // NFS_BLUR_TRACE=2: the blur's decisions drawn in colours
@@ -350,7 +351,7 @@ private:
                             m_compositePixel = -1, m_compositeBloom = -1, m_compositeGrade = -1,
                             m_compositeTint = -1, m_compositeAa = -1, m_compositeDepth = -1, m_compositeShadow = -1,
                             m_compositeSun = -1, m_compositeScale = -1, m_compositeCentre = -1, m_compositeUp = -1,
-                            m_compositeSize = -1, m_compositeBlur = -1, m_compositeBlurRadius = -1, m_compositeBlurDebug = -1, m_compositeLight = -1, m_compositeHalo = -1,
+                            m_compositeSize = -1, m_compositeBlur = -1, m_compositeBlurRadius = -1, m_compositeBlurDebug = -1, m_compositeNightLift = -1, m_compositeLight = -1, m_compositeHalo = -1,
                             m_compositeTrailOn = -1, m_compositeGlare = -1, m_compositeGlareAt = -1,
                             m_compositeAdapt = -1, m_compositeExposure = -1, m_compositeSnow = -1,
                             m_compositeSnowSprites = -1;
