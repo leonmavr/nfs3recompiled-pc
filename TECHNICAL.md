@@ -944,6 +944,18 @@ once a second (`[BLUR]`); `NFS_BLUR_TRACE=2` draws what the blur did in
 colours (dark: sharp; green: blurred, brighter the longer; red: a car; blue:
 the sky; yellow: a lamp; a magenta tint: no blur sent).
 
+The streaks follow the camera's own motion where it is known (2026-11-19):
+each frame's main view hands the renderer how a point in it was placed in the
+last tick's view (`noteSun`, `native_render.cpp`: R = M^T M', T = t' - t R from
+the view's matrix at +0x44 and translation at +0x38, kept between ticks, none
+on a new race, a cut of more than 8 m a tick or a stopped clock). The shader
+puts each pixel back in the view from its depth, moves it by R and T and
+projects it: the streak is how far it moved over the tick, times 0.35 of the
+strength and the side band's growth, to the band's cap. So the road streaks
+along itself, what stands close beside it hard, the distance hardly at all,
+and a turn smears the picture sideways; the outward stretch stays radial. Cars
+-- moving with the camera -- are left sharp as before.
+
 The speed sent used to be 0 on any frame where the race's clock (64 ticks a
 second) had not moved since the last one -- at a frame rate over 64 most
 frames, so the blur was mostly not there. It now keeps the last speed, and goes

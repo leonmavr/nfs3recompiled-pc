@@ -15988,6 +15988,64 @@ static bool noteSun(win32::WinApplication* app, x86::reg32 view)
         sun[0] = 0.15f; sun[1] = 0.25f; sun[2] = 0.956f;
     }
     win32::glide2x::sunShadows(amount, sun, up, f(0x56009c), f(0x5600a0), f(0x5600a4), f(0x5600a8), glare);
+    /* The camera's motion over the race's last tick, for the motion blur
+     * (thrashrenderer.cpp, motionBlur): a point is p M + t in the view (M at
+     * +0x44, rows of three; t at +0x38), so one in this view was at
+     * p (M^T M') + (t' - t M^T M') in the last tick's, M' and t' that tick's.
+     * Kept from tick to tick -- a frame between two ticks has the camera where
+     * the last one left it -- and none on a new race, a jump of more than four
+     * ticks or 8 m (a replay's cut), or once the clock has stood a quarter of a
+     * second. */
+    {
+        static float s_M[9], s_t[3], s_R[9], s_T[3];
+        static x86::sreg32 s_clock = -1;
+        static bool s_known = false, s_have = false;
+        static Uint64 s_tickedNs = 0;
+        const x86::sreg32 clock = x86::sreg32(m.word(0x7d3684));
+        const Uint64 now = SDL_GetTicksNS();
+        float M[9], t[3];
+        for (int k = 0; k < 9; ++k)
+            M[k] = f(view + 0x44 + 4 * x86::reg32(k));
+        for (int k = 0; k < 3; ++k)
+            t[k] = f(view + 0x38 + 4 * x86::reg32(k));
+        if (clock != s_clock)
+        {
+            const x86::sreg32 ticks = clock - s_clock;
+            s_known = false;
+            if (s_have && ticks > 0 && ticks <= 4)
+            {
+                float R[9];
+                for (int i = 0; i < 3; ++i)
+                    for (int j = 0; j < 3; ++j)
+                        R[i * 3 + j] = M[0 * 3 + i] * s_M[0 * 3 + j] + M[1 * 3 + i] * s_M[1 * 3 + j] + M[2 * 3 + i] * s_M[2 * 3 + j];
+                float T[3], cam[3], was[3];
+                for (int j = 0; j < 3; ++j)
+                    T[j] = s_t[j] - (t[0] * R[0 * 3 + j] + t[1] * R[1 * 3 + j] + t[2] * R[2 * 3 + j]);
+                // The cameras' places (-t M^T), for a cut.
+                for (int i = 0; i < 3; ++i)
+                {
+                    cam[i] = -(t[0] * M[i * 3] + t[1] * M[i * 3 + 1] + t[2] * M[i * 3 + 2]);
+                    was[i] = -(s_t[0] * s_M[i * 3] + s_t[1] * s_M[i * 3 + 1] + s_t[2] * s_M[i * 3 + 2]);
+                }
+                const float d2 = (cam[0] - was[0]) * (cam[0] - was[0]) + (cam[1] - was[1]) * (cam[1] - was[1])
+                                 + (cam[2] - was[2]) * (cam[2] - was[2]);
+                if (d2 < 64.0f * float(ticks * ticks))
+                {
+                    SDL_memcpy(s_R, R, sizeof R);
+                    SDL_memcpy(s_T, T, sizeof T);
+                    s_known = true;
+                }
+            }
+            SDL_memcpy(s_M, M, sizeof M);
+            SDL_memcpy(s_t, t, sizeof t);
+            s_clock = clock;
+            s_have = true;
+            s_tickedNs = now;
+        }
+        else if (now - s_tickedNs > 250000000)
+            s_known = false;
+        win32::glide2x::cameraMotion(s_known, s_R, s_T);
+    }
     return true;
 }
 

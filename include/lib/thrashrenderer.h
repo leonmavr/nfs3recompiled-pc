@@ -113,6 +113,16 @@ public:
         }
         m_sun[4] = scaleX; m_sun[5] = scaleY; m_sun[6] = centreX; m_sun[7] = centreY;
     }
+    /* The camera's motion over the last tick (glide2x::cameraMotion): R, T and
+     * whether they are known, for the motion blur. */
+    void setCameraMotion(bool known, const float R[9], const float T[3])
+    {
+        m_camera[12] = known ? 1.0f : 0.0f;
+        for (int k = 0; k < 9; ++k)
+            m_camera[k] = R[k];
+        for (int k = 0; k < 3; ++k)
+            m_camera[9 + k] = T[k];
+    }
     /* Whether a race is being drawn (glide2x::raceView): the haze and the
      * whole-picture pass are for it alone, never the menus. */
     void setRaceView(bool race)
@@ -295,6 +305,8 @@ private:
     float                   m_head[14] = {};        // the game thread's: on, origin, direction, projection, up
     float                   m_headStrength = 0.0f;  // NFS_HEADLIGHT_OBJECTS
     float                   m_sun[12] = {};         // the game thread's: strength, sun, projection, up, glare
+    float                   m_camera[13] = {};      // the game thread's: R, T, known (setCameraMotion)
+    int                     m_compositeCamR[3] = { -1, -1, -1 };   // u_camR0..2
     unsigned int            m_postDepth = 0, m_depthFramebuffer = 0;  // the GL thread's: the depth, copied
     float                   m_haze = 0.0f;          // NFS_HAZE
     float                   m_bloom = 0.0f;         // NFS_BLOOM
@@ -351,7 +363,7 @@ private:
                             m_compositePixel = -1, m_compositeBloom = -1, m_compositeGrade = -1,
                             m_compositeTint = -1, m_compositeAa = -1, m_compositeDepth = -1, m_compositeShadow = -1,
                             m_compositeSun = -1, m_compositeScale = -1, m_compositeCentre = -1, m_compositeUp = -1,
-                            m_compositeSize = -1, m_compositeBlur = -1, m_compositeBlurRadius = -1, m_compositeBlurDebug = -1, m_compositeNightLift = -1, m_compositeLight = -1, m_compositeHalo = -1,
+                            m_compositeSize = -1, m_compositeBlur = -1, m_compositeBlurRadius = -1, m_compositeBlurDebug = -1, m_compositeNightLift = -1, m_compositeCamT = -1, m_compositeCamOn = -1, m_compositeLight = -1, m_compositeHalo = -1,
                             m_compositeTrailOn = -1, m_compositeGlare = -1, m_compositeGlareAt = -1,
                             m_compositeAdapt = -1, m_compositeExposure = -1, m_compositeSnow = -1,
                             m_compositeSnowSprites = -1;

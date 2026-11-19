@@ -405,6 +405,10 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     the bands are stretched outwards -- each pixel's samples start up to 3.5%
     of the height further in, by the same square and the speed. Same eight
     samples, no new pass.
+  - Less uniform (2026-11-19, not yet seen in a race): the streaks follow the
+    camera's own motion over the last tick, per pixel from the depth -- the
+    road along itself, near scenery hard, the distance hardly, a turn's
+    sideways sweep -- within the same side bands and caps.
   - The vibration (2026-11-19, `NFS_SPEED_SHAKE` 2.5, `NFS_SPEED_SHAKE_RATE`
     3.5, by eye): from 150 km/h, now and then (gaps of 0.5 to 1.6 s over the
     rate) one smooth up-and-down bump of the camera, 1.2 cm times the size at

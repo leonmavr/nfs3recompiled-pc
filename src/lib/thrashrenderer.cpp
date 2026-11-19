@@ -400,6 +400,7 @@ struct ThrashDraw
     float                               grade[5];
     float                               head[14];
     float                               sun[12];
+    float                               camera[13];   // setCameraMotion's
     bool                                race;
     float                               speed;
     bool                                night;       // a night race: no motion blur, the night lift
@@ -1163,6 +1164,7 @@ void ThrashRenderer::renderPending()
     std::copy(m_grade, m_grade + 5, draw->grade);
     std::copy(m_head, m_head + 14, draw->head);
     std::copy(m_sun, m_sun + 12, draw->sun);
+    std::copy(m_camera, m_camera + 13, draw->camera);
     draw->race = m_raceView;
     draw->speed = m_speed;
     draw->night = m_night;
@@ -1387,6 +1389,11 @@ static const char g_compositeShader[] =
 "uniform vec3 u_up;"
 "uniform vec2 u_size;"
 "uniform float u_blur;"
+"uniform vec3 u_camR0;"   // R's rows: a point in this view was at p.x R0 + p.y R1 + p.z R2 + u_camT a tick ago
+"uniform vec3 u_camR1;"
+"uniform vec3 u_camR2;"
+"uniform vec3 u_camT;"
+"uniform float u_camOn;"
 "uniform float u_nightLift;"   // NFS_NIGHT_LIGHT at night, else 0
 "uniform float u_blurDebug;"   // NFS_BLUR_TRACE=2: what the blur did, in colours
 "uniform float u_blurRadius;"   // the sharp middle band's half width over the picture's, 1 for all of it
@@ -1671,6 +1678,24 @@ static const char g_compositeShader[] =
 "    vec2 dir = normalize(fromMiddle * u_size);"
 "    vec2 warp = dir * (aggr * min(u_blur, 4.0) * 0.25 * 0.035 * u_size.y);"
 "    vec2 trail = dir * len;"
+/* Where the camera's motion is known, the streak follows how this pixel
+ * actually moved over the last tick: its place in the view from the depth
+ * (as the sun's shadows find it), where that was in the last tick's view, and
+ * the two through the projection.  So the road streaks along itself, what
+ * stands close beside it streaks hard, what is far hardly at all -- and in a
+ * turn the whole picture is smeared sideways with it. */
+"    if (u_camOn > 0.5) {"
+"        vec3 p = vec3((uv * u_size - u_centre) * z / u_scale, z);"
+"        vec3 q = p.x * u_camR0 + p.y * u_camR1 + p.z * u_camR2 + u_camT;"
+"        if (q.z > 0.5) {"
+"            vec2 was = q.xy * u_scale / q.z + u_centre;"
+"            vec2 moved = uv * u_size - was;"
+"            vec2 streak = moved * (0.35 * u_blur) * (0.6 + 1.4 * aggr);"
+"            float l = length(streak);"
+"            trail = l > most ? streak * (most / l) : streak;"
+"            if (length(trail) < 1.0) return c;"
+"        }"
+"    }"
 "    float jitter = fract(sin(dot(uv * u_size, vec2(12.9898, 78.233))) * 43758.5453);"
 "    vec3 sum = vec3(0.0);"
 "    float n = 0.0;"
@@ -2430,6 +2455,11 @@ void ThrashRenderer::initPost()
         m_compositeBlurRadius = glGetUniformLocation(m_compositeProgram, "u_blurRadius");
         m_compositeBlurDebug = glGetUniformLocation(m_compositeProgram, "u_blurDebug");
         m_compositeNightLift = glGetUniformLocation(m_compositeProgram, "u_nightLift");
+        m_compositeCamR[0] = glGetUniformLocation(m_compositeProgram, "u_camR0");
+        m_compositeCamR[1] = glGetUniformLocation(m_compositeProgram, "u_camR1");
+        m_compositeCamR[2] = glGetUniformLocation(m_compositeProgram, "u_camR2");
+        m_compositeCamT = glGetUniformLocation(m_compositeProgram, "u_camT");
+        m_compositeCamOn = glGetUniformLocation(m_compositeProgram, "u_camOn");
         m_compositeLight = glGetUniformLocation(m_compositeProgram, "u_light");
         m_compositeHalo = glGetUniformLocation(m_compositeProgram, "u_halo");
         m_compositeTrailOn = glGetUniformLocation(m_compositeProgram, "u_trailOn");
@@ -3017,6 +3047,10 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
     glUniform2f(m_compositeSize, float(width), float(height));   // the blur's
     glUniform1f(m_compositeBlurDebug, m_blurDebug ? 1.0f : 0.0f);
     glUniform1f(m_compositeNightLift, draw.night ? m_nightLift : 0.0f);
+    for (int row = 0; row < 3; ++row)   // R row by row
+        glUniform3f(m_compositeCamR[row], draw.camera[row * 3], draw.camera[row * 3 + 1], draw.camera[row * 3 + 2]);
+    glUniform3f(m_compositeCamT, draw.camera[9], draw.camera[10], draw.camera[11]);
+    glUniform1f(m_compositeCamOn, draw.camera[12] > 0.5f && draw.sun[4] != 0.0f && draw.sun[5] != 0.0f ? 1.0f : 0.0f);
     if (m_blurTrace)
     {
         static Uint64 s_lastNs = 0;

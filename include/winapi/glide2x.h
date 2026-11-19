@@ -73,6 +73,11 @@ void headlights(bool on, const float origin[3], const float direction[3], const 
 void sunShadows(float strength, const float sun[3], const float up[3], float scaleX, float scaleY, float centreX,
                 float centreY, float glare);
 
+/* The camera's motion over the race's last tick, for the motion blur: a point
+ * p in this view was at p R + T in the last tick's (R row-major); on false,
+ * none known. */
+void cameraMotion(bool known, const float R[9], const float T[3]);
+
 /* The texture atlas: free texels, whole 256x256 tiles among them, and its size
  * in texels.  False while no Glide window is open. */
 bool atlasFreeSpace(x86::reg32& freeTexels, x86::reg32& freeTiles, x86::reg32& totalTexels);

@@ -165,6 +165,12 @@ void sunShadows(float strength, const float sun[3], const float up[3], float sca
         s_directRenderer->setSunShadows(strength, sun, up, scaleX, scaleY, centreX, centreY, glare);
 }
 
+void cameraMotion(bool known, const float R[9], const float T[3])
+{
+    if (s_directRenderer)
+        s_directRenderer->setCameraMotion(known, R, T);
+}
+
 void raceView(bool race)
 {
     if (s_directRenderer)
