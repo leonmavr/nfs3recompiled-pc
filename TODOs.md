@@ -95,46 +95,74 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     opponents' and cops' too (`skidPedals`, on pavement, 30 cm a piece).
 - [ ] Marks of their own on loose ground -- dirt, sand, gravel, mud, grass,
   snow -- where the asphalt's black rubber is not what a tyre would leave.
-  - Researched (2026-11-19): a piece keeps no colour. It is one of four `skd`
-    pictures, black and alpha only, and two alphas, drawn by `sub_4c6f00`;
-    tinting it by the terrain would take a renderer path of its own for those
-    batches or four more pictures, and a decal would take ground-mapped quads
-    the particle pool cannot draw. But black blended over the ground is the
-    ground's own colour, darkened -- so the terrain's hue comes for free and
-    one alpha multiplier a surface is all the colour needed.
+  - Researched (2026-11-19): a piece keeps only a shape and two alphas --
+    one of four `skd` pictures, black RGB with the shape in the alpha, drawn
+    by `sub_4c6f00`. Black blended over the ground darkens it, but darkening
+    is not colour: over Redrock's sand it is dark tan, not the burnt orange a
+    dug rut is; over grass it is green only as much as the ground already was;
+    over snow only grey. A terrain mark wants a hue of its own.
+  - The game already has the slot for it. `sub_4c6f00` builds each piece's
+    polygon colour as `alpha << 24 | 0xffffff` (0x4c705e): a per-piece RGB
+    that is simply always white. The world shader mixes the texture's RGB
+    into that only while `v_combine.s` is on (`thrashrenderer.cpp`). So:
+    - let the four `skd` batches leave the picture's RGB out of the mix (the
+      records are the four at 0x8b41c8 once the sfx textures load, so the
+      renderer can know them; the alpha still shapes the mark), and
+    - patch that one colour build to OR in an RGB from a small palette
+      instead of `0xffffff`.
+    The surface has to reach the draw: the piece's byte at +0x310 holds the
+    shape in its low two bits and has six to spare, so `skidLaid` (which runs
+    at the end of every piece, the game's and the port's) writes
+    `tint << 2 | shape` from `groundAt` at the piece, the texture lookup masks
+    the low two, and the patched colour build uses the rest. No new pictures,
+    no new draws, no shadow array -- one byte already stored and a palette
+    lookup a piece.
+  - Palette (a rut's own colour, dark because it is a rut; the alpha still
+    follows the speed, the handbrake and the surface scales below):
+    - pavement `#000000`, the black rubber it is now;
+    - dirt and gravel `#6a3d1c`, Redrock sand `#7a4a22` -- burnt orange-brown,
+      not the ground washed down to grey;
+    - grass `#223d18` -- a dark green of its own;
+    - mud `#2e2114` -- a wet, nearly black brown;
+    - snow `#b9c6cf` -- now that the colour is the vertex RGB and not the
+      black picture, a pale packed-snow line is possible; a low alpha, or no
+      ring at all (see below);
+    - other `#4a3a2a`.
+    If dug-up dry soil should read lighter than a wet rut, the same tint can
+    be lightened by the wheel's slip; one palette entry a surface is enough
+    for a first cut.
   - Plan, cheapest first:
     - Dirt, sand and gravel (kind 2; surfaces 8, 9, 13) and mud (kind 4):
-      real marks through the same ring and picture, alpha x 0.5 and x 0.7 of
-      the asphalt's, a little narrower (x 0.8) -- a turned rut over brown
-      ground, a deep one over mud -- with the clods and the dust the wheels
-      already throw on top.
-    - Grass (kind 1): alpha x 0.3 and a life a third of the asphalt's, a
-      flattened dark strip rather than a scar; the blades carry the rest. If
-      it still reads as a black line, lay no ring here and leave the digging
-      to the blades and a few dark grains of soil.
-    - Snow (kind 3): no black ring -- over white it would read as asphalt
-      showing through. The frost chips and spray are the digging effect
-      already; if a mark is wanted, alpha x 0.1 for a few seconds, which only
-      greys the snow. A pale, packed-snow mark cannot be made with the black
-      pictures (nothing lightens with them) and would need a blend of its own,
-      which is not worth it.
+      real marks through the same ring and picture, the palette's tint, alpha
+      x 0.5 and x 0.7 of the asphalt's, a little narrower (x 0.8) -- a turned
+      rut over brown ground, a deep one over mud -- with the clods and the
+      dust the wheels already throw on top.
+    - Grass (kind 1): the dark green tint, alpha x 0.3 and a life a third of
+      the asphalt's, a flattened dark strip rather than a scar; the blades
+      carry the rest.
+    - Snow (kind 3): the pale tint at a low alpha (about 0.2) for a few
+      seconds, or no ring and the frost chips and spray alone -- those are
+      the digging effect already.
     - Other (kind 5): as dirt, alpha x 0.4.
-  - Colour by rpm or gear: no. A black picture has no hue to set, and a rut's
-    colour is whichever ground it is cut into; rpm and slip should say how
-    much (the alpha already follows the speed and the handbrake) rather than
-    what colour. One scale a surface, not one a frame.
-  - Sketch: a table in `native_skids.cpp` (kind -> on, alpha scale, width
-    scale, life scale) looked up where `skidPedals` and `skidLaid` skip
-    `groundUnder(...) != 0` today (`groundAt`, already exported by
-    `native_particles.cpp`, gives the kind at a game-laid piece); multiply the
-    piece's alpha and cap its life by it. The ring, the fade, the smoke hook
-    and the particle side stay as they are -- the wheels already throw the
-    right dirt, blades and frost on those grounds. One lookup and one multiply
-    a piece; no new draws and no new particles.
+  - Colour by rpm or gear: no. The terrain sets the hue; rpm, slip and the
+    handbrake set how much (the alpha already follows the speed and the
+    handbrake). One palette entry a surface, not one a frame.
+  - Sketch: the table in `native_skids.cpp` becomes kind -> { on, tint, alpha
+    scale, width scale, life scale }; `skidPedals` and `skidLaid` look it up
+    where they skip `groundUnder(...) != 0` today, multiply the piece's alpha,
+    cap its life, and stamp the tint into +0x310. The ring, the fade, the
+    smoke hook and the particle side stay as they are -- the wheels already
+    throw the right dirt, blades and frost on those grounds. One lookup and
+    one multiply a piece, no new draws and no new particles.
+  - If patching the draw's colour build proves awkward, the fallback is four
+    pre-tinted copies of each of the four pictures (twenty tiny textures),
+    selected by the same tint bits -- same ring, same byte, no shader or
+    vertex change, a little more to load.
   - Tests: Country Woods' dirt, Summit's snow, Atlantica's grass, a mud
     stretch (and `NFS_SURFACE_TEST` for each); a launch, a lock-up and a slide
-    at 30 and 100 km/h. Watch the game's lift (`kLift`) so a rut does not
-    z-fight the terrain, and that a low alpha still reads at a grazing angle.
+    at 30 and 100 km/h. Watch that a tinted mark does not read as paint, that
+    a low alpha still reads at a grazing angle, and the game's lift (`kLift`)
+    so a rut does not z-fight the terrain.
 - [x] Tyre smoke on wheelspin and lock-up, taken over from the game's kind 6
   and made procedural.
   - Done (`NFS_TYRE_SMOKE`, on): dark clouds of its own, ragged by noise. It is
