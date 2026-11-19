@@ -1396,7 +1396,7 @@ static const char g_compositeShader[] =
 "uniform float u_camOn;"
 "uniform float u_nightLift;"   // NFS_NIGHT_LIGHT at night, else 0
 "uniform float u_blurDebug;"   // NFS_BLUR_TRACE=2: what the blur did, in colours
-"uniform float u_blurRadius;"   // the sharp middle band's half width over the picture's, 1 for all of it
+"uniform float u_blurRadius;"   // where the blurred triangles' tips are: 1 at the edges' middles, 0 at the picture's
 "uniform sampler2D u_light;"
 "uniform float u_halo;"
 "uniform float u_trailOn;"
@@ -1627,23 +1627,23 @@ static const char g_compositeShader[] =
 "    return shade * level * smoothstep(0.0, 0.06, min(edge.x, edge.y));"
 "}"
 /* Speed you can feel, 2 (initPost, NFS_MOTION_BLUR): the world streaking out
- * from the middle at speed, as a star field does.  A band down the middle of
- * the picture is left sharp: at 80 km/h and under it is the whole width and
- * nothing is smeared; faster, its sides close in with the speed
- * (u_blurRadius, the band's half width over the picture's: 1 to 0.5 at
- * 250 km/h and over), leaving the middle half sharp and the outer quarters streaked.
- * (An ellipse round the middle did this first; the bands blur less of the
- * picture -- half of it at full speed against more than four fifths -- which
- * is most of what the pass costs.)  A pixel in a side band is smeared along
+ * from the middle at speed, as a star field does.  What is blurred is the left
+ * and the right of the four triangles the picture's two diagonals cut it into
+ * -- growing with the speed: each a triangle of the same shape, its tip moving
+ * in from the middle of its edge (u_blurRadius, 1 there at 80 km/h and under,
+ * nothing blurred) to the picture's middle at 250 km/h and over (the whole
+ * triangle; none of it at night).  The top and bottom triangles -- the sky
+ * ahead, the road under the car -- are never streaked.  (Two side bands came
+ * before, and an ellipse before them.)  A pixel in a triangle is smeared along
  * the line from the middle through it, back towards the middle -- the further
- * past the band's edge, the faster (u_blur, the speed's share times
+ * past the triangle's edge, the faster (u_blur, the speed's share times
  * NFS_MOTION_BLUR times 2) and the nearer it is (as a star near the eye crosses
  * the screen fastest: 20 m / its distance, between 0.3 and 1.6) the longer, to
- * at most 4% of the view's height at the band's edge, growing with the square
- * of how far across the side band the pixel is to 12% at the picture's edge.
- * The side bands are stretched outwards too, more the further out: a pixel's
+ * at most 4% of the view's height at the triangle's edge, growing with the square
+ * of how far across the triangle the pixel is to 12% at the picture's edge.
+ * The triangles are stretched outwards too, more the further out: a pixel's
  * streak starts back towards the middle by up to 3.5% of the height (warp,
- * the same square, by the speed), so what is near the band's edge is pulled
+ * the same square, by the speed), so what is near the triangle's edge is pulled
  * out across it -- a warp at no cost, the samples merely start further in.
  * Eight samples, their start jittered pixel by pixel so a long streak does not
  * show as copies.
@@ -1657,8 +1657,8 @@ static const char g_compositeShader[] =
 "    bool debug = u_blurDebug > 0.0;"
 "    if (debug && u_blur <= 0.0) return mix(c, vec3(1.0, 0.0, 1.0), 0.35);"   /* magenta: no blur sent */
 "    vec2 fromMiddle = (uv - 0.5) * 2.0;"
-"    float over = abs(fromMiddle.x) - u_blurRadius;"
-"    if (over <= 0.0) return debug ? c * 0.5 : c;"                            /* dark: the sharp band */
+"    float over = abs(fromMiddle.x) - abs(fromMiddle.y) - u_blurRadius;"
+"    if (over <= 0.0) return debug ? c * 0.5 : c;"                            /* dark: left sharp */
 "    if (texture(u_source, uv).a < 0.5) return debug ? vec3(1.0, 0.0, 0.0) : c;"   /* red: taken for a car */
 "    float d = texture(u_depth, uv).r;"
 "    if (d >= 0.9999) return debug ? vec3(0.0, 0.3, 1.0) : c;"                  /* blue: the sky */
@@ -2395,7 +2395,7 @@ void ThrashRenderer::initPost()
     m_blurDebug = m_blurTrace && SDL_atoi(SDL_getenv("NFS_BLUR_TRACE")) >= 2;
     m_lightGlow = lightGlowSetting();
     m_lightTrails = lightTrailSetting();
-    m_bloom = onOff("NFS_BLOOM", 0.6f);
+    m_bloom = onOff("NFS_BLOOM", 0.9f);
     m_gradeOn = onOff("NFS_GRADE", 1.0f) > 0.0f;
     m_antialias = onOff("NFS_AA", 1.0f) > 0.0f;
     m_exposure = SDL_min(onOff("NFS_EXPOSURE", exposure::kStrength), 1.0f);
@@ -3043,7 +3043,7 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
     glUniform1i(m_compositeAa, m_antialias && !without(kPerfAa) ? 1 : 0);
     glUniform1f(m_compositeShadow, shadows && !without(kPerfShadows) ? draw.sun[0] : 0.0f);
     glUniform1f(m_compositeBlur, without(kPerfBlur) ? 0.0f : blur);
-    glUniform1f(m_compositeBlurRadius, 1.0f - 0.5f * blurShare);
+    glUniform1f(m_compositeBlurRadius, 1.0f - blurShare);
     glUniform2f(m_compositeSize, float(width), float(height));   // the blur's
     glUniform1f(m_compositeBlurDebug, m_blurDebug ? 1.0f : 0.0f);
     glUniform1f(m_compositeNightLift, draw.night ? m_nightLift : 0.0f);
@@ -3058,8 +3058,8 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
         if (now - s_lastNs > 1000000000)
         {
             s_lastNs = now;
-            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[BLUR] %.0f km/h: strength %.2f, sharp band %.2f of the width",
-                        double(draw.speed * 3.6f), double(blur), double(1.0f - 0.5f * blurShare));
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[BLUR] %.0f km/h: strength %.2f, the triangles' tips at %.2f of the half width",
+                        double(draw.speed * 3.6f), double(blur), double(1.0f - blurShare));
         }
     }
     if (needDepth)

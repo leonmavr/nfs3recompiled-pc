@@ -405,6 +405,9 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     the bands are stretched outwards -- each pixel's samples start up to 3.5%
     of the height further in, by the same square and the speed. Same eight
     samples, no new pass.
+  - The mask (2026-11-19, not yet seen in a race): the left and right
+    triangles of the picture's diagonals instead of side bands, each growing
+    from the middle of its edge at 80 km/h to the whole triangle at 250.
   - Less uniform (2026-11-19, not yet seen in a race): the streaks follow the
     camera's own motion over the last tick, per pixel from the depth -- the
     road along itself, near scenery hard, the distance hardly, a turn's

@@ -275,7 +275,7 @@ road's reflection is taken -- the picture is copied and drawn back over itself
 
 - FXAA (Lottes's original): five reads a pixel, and a blur along the edge
   where it finds one (`NFS_AA`).
-- A glow (`NFS_BLOOM`, 0.6): what stands brighter than the sky behind it --
+- A glow (`NFS_BLOOM`, 0.9): what stands brighter than the sky behind it --
   lamps, headlights, tail lights at night, the sun's disc, but not a pale
   horizon by day -- kept at half size, spread down that texture's levels and
   added back from five of them.
@@ -943,6 +943,12 @@ most of the pass's cost. `NFS_BLUR_TRACE=1` logs the speed, strength and band
 once a second (`[BLUR]`); `NFS_BLUR_TRACE=2` draws what the blur did in
 colours (dark: sharp; green: blurred, brighter the longer; red: a car; blue:
 the sky; yellow: a lamp; a magenta tint: no blur sent).
+
+The blurred part is the left and right of the four triangles the picture's
+two diagonals cut it into (2026-11-19, after side bands): each grows with the
+speed, a triangle of the same shape whose tip moves in from the middle of its
+edge at 80 km/h to the picture's middle at 250 km/h -- the top and bottom
+triangles, the sky ahead and the road under the car, never streak.
 
 The streaks follow the camera's own motion where it is known (2026-11-19):
 each frame's main view hands the renderer how a point in it was placed in the
