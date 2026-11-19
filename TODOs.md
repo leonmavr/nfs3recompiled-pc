@@ -405,6 +405,9 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     the bands are stretched outwards -- each pixel's samples start up to 3.5%
     of the height further in, by the same square and the speed. Same eight
     samples, no new pass.
+  - A lens fringe (2026-11-19, `NFS_BLUR_FRINGE` 0.6, 0/off, up to 1; not
+    yet seen): the streak's own samples weighed apart by colour -- red at its
+    head, blue at its tail -- more the further out and the faster.
   - The mask (2026-11-19, not yet seen in a race): the left and right
     triangles of the picture's diagonals instead of side bands, each growing
     from the middle of its edge at 80 km/h to the whole triangle at 250.
@@ -593,6 +596,12 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   arrent you cops should slow you down to almost being still for some time and be close
   to you at the same time; halve this required duration for arrest/fine
   condition.
+  - Looked for (2026-11-19), not found yet: the arrest is in cop code the
+    port has not decompiled. Leads: a racer's end state at [0x725278 + ...]
+    (1 = arrested, read by sub_48a660 for the results, text 0x14a
+    kTextHudArrested); the player's reset bit at [0x79c4ab] goes to
+    sub_405220 instead of sub_429100 for a cop. Next: find what writes 1
+    there, and the timer before it.
 
 ### UI
 - [ ] Figure out how to add/create menu elements without breaking the visual
@@ -783,6 +792,12 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   contact. If it is moving too slow (<60kph) on two or more wheels of contact and it's toppling ( >
   90 degrees between base of car and horizon) for more than 0.5 sec, auto-reset
   it (like pressing r key).
+  - Implemented (2026-11-19, `NFS_SELF_RIGHT`, 1; 0/off, up to 3 quicker),
+    not yet seen in a race: a car 65-120 degrees over is rolled back towards
+    upright at up to 2.2 rad/s (every car); the player's on its roof under
+    60 km/h for half a second is put back as the R key does (bit 2 of
+    [0x79c4ab] set at sub_431430's top, which calls sub_429100). The wheels'
+    contact is not tested -- the tilt alone decides.
 - [ ] Gimmicky but fun: windshield wiper + graphic that wipes off snow/raindrops
   from screen.
 - [x] More realistic tire smoke: tire smoke particles and color area great, but

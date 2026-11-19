@@ -1394,6 +1394,7 @@ static const char g_compositeShader[] =
 "uniform vec3 u_camR2;"
 "uniform vec3 u_camT;"
 "uniform float u_camOn;"
+"uniform float u_fringe;"   // NFS_BLUR_FRINGE, 0 for none
 "uniform float u_nightLift;"   // NFS_NIGHT_LIGHT at night, else 0
 "uniform float u_blurDebug;"   // NFS_BLUR_TRACE=2: what the blur did, in colours
 "uniform float u_blurRadius;"   // where the blurred triangles' tips are: 1 at the edges' middles, 0 at the picture's
@@ -1697,18 +1698,25 @@ static const char g_compositeShader[] =
 "        }"
 "    }"
 "    float jitter = fract(sin(dot(uv * u_size, vec2(12.9898, 78.233))) * 43758.5453);"
+/* A faint lens fringe (NFS_BLUR_FRINGE): the same samples weighed apart by
+ * colour along the streak -- red more at its head, blue more at its tail -- so
+ * each channel's streak sits a little behind the other's, more the further
+ * out and the faster; no sample more. */
+"    float fringe = u_fringe * aggr * min(u_blur, 4.0) * 0.25;"
 "    vec3 sum = vec3(0.0);"
-"    float n = 0.0;"
+"    vec3 n = vec3(0.0);"
 "    for (int i = 0; i < 8; ++i) {"
 "        float t = (float(i) + jitter) / 8.0;"
 "        vec2 at = uv - (warp + trail * t) / u_size;"
 "        vec4 s = texture(u_source, at);"
 "        if (s.a < 0.5) continue;"
 "        float w = 1.0 - 0.6 * t;"
-"        sum += s.rgb * w;"
-"        n += w;"
+"        float lean = fringe * (0.5 - t) * 2.0;"
+"        vec3 wc = w * vec3(1.0 + lean, 1.0, 1.0 - lean);"
+"        sum += s.rgb * wc;"
+"        n += wc;"
 "    }"
-"    return n > 0.0 ? sum / n : c;"
+"    return n.g > 0.0 ? sum / max(n, vec3(1e-4)) : c;"
 "}"
 "vec3 fxaa(vec2 uv)"
 "{"
@@ -2385,6 +2393,14 @@ void ThrashRenderer::initPost()
     m_motionBlur = onOff("NFS_MOTION_BLUR", 2.0f);
     m_blurTrace = SDL_getenv("NFS_BLUR_TRACE") != nullptr;
     {
+        // NFS_BLUR_FRINGE: the lens fringe in the blur, 0.6 by default, 0 or off for none, up to 1.
+        const char* value = SDL_getenv("NFS_BLUR_FRINGE");
+        float parsed = 0.6f;
+        if (value && *value && SDL_strcasecmp(value, "on") != 0)
+            parsed = (SDL_strcmp(value, "0") == 0 || SDL_strcasecmp(value, "off") == 0) ? 0.0f : float(SDL_atof(value));
+        m_blurFringe = parsed >= 0.0f && parsed <= 1.0f ? parsed : 0.6f;
+    }
+    {
         // NFS_NIGHT_LIGHT: how much the darks are lifted at night, 0.6 by default, 0 or off for none, up to 2.
         const char* value = SDL_getenv("NFS_NIGHT_LIGHT");
         float parsed = 0.6f;
@@ -2455,6 +2471,7 @@ void ThrashRenderer::initPost()
         m_compositeBlurRadius = glGetUniformLocation(m_compositeProgram, "u_blurRadius");
         m_compositeBlurDebug = glGetUniformLocation(m_compositeProgram, "u_blurDebug");
         m_compositeNightLift = glGetUniformLocation(m_compositeProgram, "u_nightLift");
+        m_compositeFringe = glGetUniformLocation(m_compositeProgram, "u_fringe");
         m_compositeCamR[0] = glGetUniformLocation(m_compositeProgram, "u_camR0");
         m_compositeCamR[1] = glGetUniformLocation(m_compositeProgram, "u_camR1");
         m_compositeCamR[2] = glGetUniformLocation(m_compositeProgram, "u_camR2");
@@ -3047,6 +3064,7 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
     glUniform2f(m_compositeSize, float(width), float(height));   // the blur's
     glUniform1f(m_compositeBlurDebug, m_blurDebug ? 1.0f : 0.0f);
     glUniform1f(m_compositeNightLift, draw.night ? m_nightLift : 0.0f);
+    glUniform1f(m_compositeFringe, m_blurFringe);
     for (int row = 0; row < 3; ++row)   // R row by row
         glUniform3f(m_compositeCamR[row], draw.camera[row * 3], draw.camera[row * 3 + 1], draw.camera[row * 3 + 2]);
     glUniform3f(m_compositeCamT, draw.camera[9], draw.camera[10], draw.camera[11]);

@@ -337,6 +337,8 @@ private:
     float                   m_speed = 0.0f;         // the game thread's
     bool                    m_night = false;        // the game thread's: a night race (no motion blur, the night lift)
     float                   m_nightLift = 0.0f;     // NFS_NIGHT_LIGHT
+    float                   m_blurFringe = 0.0f;    // NFS_BLUR_FRINGE
+    int                     m_compositeFringe = -1;
     float                   m_motionBlur = 0.0f;    // NFS_MOTION_BLUR
     bool                    m_blurTrace = false;    // NFS_BLUR_TRACE: [BLUR] once a second
     bool                    m_blurDebug = false;    // NFS_BLUR_TRACE=2: the blur's decisions drawn in colours

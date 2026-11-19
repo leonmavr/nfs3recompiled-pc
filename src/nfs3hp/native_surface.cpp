@@ -540,6 +540,106 @@ static void slipstream(win32::WinApplication* app, int ticks)
     }
 }
 
+/* A car on its side rights itself, and the player's on its roof is put back
+ * (NFS_SELF_RIGHT, 1; a number up to 3 for quicker, 0 or off for neither).
+ * Since the air steering and the damped roll, a car toppled onto its side
+ * could drive on slowly on two wheels and never be put back.
+ *
+ * - On its side -- its up (+0xcc) 65 to 120 degrees off the world's (y up) --
+ *   every car of the race is turned back about its own forward axis (+0xd8)
+ *   towards upright, its roll speed eased to kRightRate (by the setting) in
+ *   kRightEase, the spin set as airRoll sets it (world +0xe4, the car's own
+ *   +0x500, the part about forward).  With w x v the way a spin moves a
+ *   vector (up x forward is right), turning up towards the sky wants a roll
+ *   of minus the sign of the right axis's height.
+ * - On its roof (up below the horizon) and under 60 km/h for half a second,
+ *   the player's car is put back on the road as its reset key does: bit 2 of
+ *   the player's actions at [0x79c4ab], set as sub_431430 reads them
+ *   (playerControls, native_effects.cpp), which calls sub_429100. */
+namespace selfright
+{
+constexpr float kFrom = 65.0f;          // degrees off upright: from here
+constexpr float kTo = 120.0f;           // to here, rolled back
+constexpr float kRightRate = 2.2f;      // rad/s
+constexpr float kRightEase = 0.25f;     // s
+constexpr float kResetSpeed = 60.0f / 3.6f;
+constexpr x86::sreg32 kResetTicks = 32; // half a second
+}  // namespace selfright
+
+static float selfRightSetting()
+{
+    static const float value = [] {
+        const char* text = SDL_getenv("NFS_SELF_RIGHT");
+        if (!text || !*text || SDL_strcasecmp(text, "on") == 0)
+            return 1.0f;
+        if (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0)
+            return 0.0f;
+        const float parsed = float(SDL_atof(text));
+        return parsed > 0.0f ? SDL_min(parsed, 3.0f) : 1.0f;
+    }();
+    return value;
+}
+
+static bool s_resetWanted = false;   // the player's car to be put back, at its next controls
+static x86::reg32 s_resetCar = 0;
+
+static void selfRight(win32::WinApplication* app, int ticks, x86::reg32 player)
+{
+    static x86::sreg32 s_roofTicks = 0;
+    const float setting = selfRightSetting();
+    if (setting <= 0.0f || ticks <= 0)
+        return;
+    const float cosFrom = SDL_cosf(selfright::kFrom * SDL_PI_F / 180.0f);
+    const float cosTo = SDL_cosf(selfright::kTo * SDL_PI_F / 180.0f);
+    const x86::reg32 count = SDL_min(word(app, 0x5efda0), x86::reg32(16));
+    bool playerOnRoof = false;
+    for (x86::reg32 k = 0; k < count; ++k)
+    {
+        const x86::reg32 car = word(app, 0x5efc48 + 4 * k);
+        if (car < 0x5e1120 || car >= 0x5e1120 + 16 * 0x9ac || (car - 0x5e1120) % 0x9ac != 0)
+            continue;
+        const float upY = value(app, car + 0xd0);    // the car's up, its height
+        const float rightY = value(app, car + 0xc4); // the car's right, its height
+        if (car == player)
+        {
+            const float speed = SDL_fabsf(value(app, car + 0xb8));
+            playerOnRoof = upY < 0.0f && speed < selfright::kResetSpeed;
+        }
+        if (!(upY < cosFrom && upY > cosTo))
+            continue;   // upright enough, or on its roof
+        float w[3], f[3];
+        for (int i = 0; i < 3; ++i)
+        {
+            w[i] = value(app, car + 0xe4 + 4 * x86::reg32(i));
+            f[i] = value(app, car + 0xd8 + 4 * x86::reg32(i));
+        }
+        const float roll = w[0] * f[0] + w[1] * f[1] + w[2] * f[2];
+        const float target = (rightY > 0.0f ? -1.0f : 1.0f) * selfright::kRightRate * setting;
+        const float step = (target - roll) * SDL_min(1.0f, float(ticks) / 64.0f / selfright::kRightEase);
+        for (int i = 0; i < 3; ++i)
+            put(app, car + 0xe4 + 4 * x86::reg32(i), w[i] + f[i] * step);
+        put(app, car + 0x500, value(app, car + 0x500) + step);
+    }
+    s_roofTicks = playerOnRoof ? s_roofTicks + ticks : 0;
+    if (s_roofTicks >= selfright::kResetTicks && player)
+    {
+        s_resetWanted = true;
+        s_resetCar = player;
+        s_roofTicks = 0;
+        SDL_Log("[SELFRIGHT] the player's car on its roof: put back on the road");
+    }
+}
+
+/* sub_431430's top (playerControls): whether the player's car is to be put
+ * back now -- once. */
+bool takeReset(x86::reg32 car)
+{
+    if (!s_resetWanted || car != s_resetCar)
+        return false;
+    s_resetWanted = false;
+    return true;
+}
+
 void objectsFrame(win32::WinApplication* app);   // native_objects.cpp
 void crashFrame(win32::WinApplication* app);     // native_crash.cpp
 void skidFrame(win32::WinApplication* app);      // native_skids.cpp
@@ -585,6 +685,7 @@ void surfaceFrame(win32::WinApplication* app)
         airSteer(app, ticks);
         airPitch(app, ticks);
         slipstream(app, ticks);
+        selfRight(app, ticks, player);
     }
     if (!player || ticks <= 0 || setting() <= 0.0f || app->getMemory<x86::reg32>(0x6fd3b0) == 1)
         return;

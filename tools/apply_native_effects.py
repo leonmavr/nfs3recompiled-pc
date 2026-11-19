@@ -17,6 +17,8 @@ SITES = [
     # The float projection made for a view: the main view widened at speed
     # (NFS_SPEED_FOV).
     ("nfs3hp", "sub_4bf260", "projectionSet"),
+    # A car's controls taken: a car on its roof put back (NFS_SELF_RIGHT).
+    ("nfs3hp", "sub_431430", "playerControls"),
     # A particle made (its kind in eax): the dust, dirt, snow and sparks taken
     # over by the port's own (native_particles.cpp).
     ("nfs3hp", "sub_4ca850", "particleSpawn"),

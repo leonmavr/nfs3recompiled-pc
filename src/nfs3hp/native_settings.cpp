@@ -67,6 +67,7 @@ each one does.
 # NFS_CAR_DETAIL_FULL = on
 # NFS_MIRROR_FULL = on
 # NFS_MOTION_BLUR = 2
+# NFS_BLUR_FRINGE = 0.6
 
 [The cars, and the light round them]
 # NFS_CAR_SHINE = 1
@@ -111,6 +112,7 @@ each one does.
 # NFS_LAMP_MASS = 1
 # NFS_KNOCK_RESPAWN = 10
 # NFS_AIR_ROLL_DAMP = 1
+# NFS_SELF_RIGHT = 1
 # NFS_AIR_SPEED = on
 # NFS_AIR_STEER = 0.2
 # NFS_AIR_PITCH = 0.2
