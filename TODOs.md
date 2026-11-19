@@ -38,6 +38,14 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     It was off while the game's own sprites still showed as turned squares;
     the game's particle sprites are not drawn any more, so the port's spray is
     what a wet road throws.
+- [x] Frost and snow spray off tyres on snow: sharp ice chips and a lot of
+  light spray, white/cyan/light grey, lighter and spreading more than dirt.
+  - Done (`NFS_SNOW_SPRAY`, on): every wheel on snow over 6 m/s throws small
+    faceted ice chips (`EffectParticle::Frost`, three to six flat sides,
+    tumbling, gone where they land) and many fine light grains plus now and
+    then a soft cloud -- their own white, cyan and light grey, never the
+    ground's. The game's own dust on snow is taken over as frost too
+    (`throwFrost`, `frostFromWheels`).
 - [x] The turned squares over the view in the rain and snow (the game's own
   particle sprites).
   - Done (`NFS_GAME_SPRITES`, off): nothing the game draws of its particle set
@@ -75,18 +83,21 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     game draws, with its box and its picture -- the tools that found it.)
 - [x] Tyre marks that last the lap, darker and softer than the game's.
   - Done (`NFS_TYRE_MARKS`, `native_skids.cpp`): a minute by default
-    (`NFS_TYRE_MARKS_LIFE`, seconds, fading over the last six), a ring of 256
-    blocks where the game had 64; darker (the game's were 28 of 255) and a
-    little wider the faster the car laying them, uneven along their length
-    with a faint gap now and then.
+    (`NFS_TYRE_MARKS_LIFE`, seconds, fading over the last six), a ring of 8192
+    blocks where the game had 64 (one shared ring, so the opponents' and cops'
+    churn used to fill a small one in seconds), darker (the game's were 28 of
+    255) and a little wider the faster the car laying them, uneven along their
+    length with a faint gap now and then. The game marked only the player's
+    slides, so the port lays a sliding car's marks itself -- every car, the
+    opponents' and cops' too (`skidPedals`, on pavement, 30 cm a piece).
 - [x] Tyre smoke on wheelspin and lock-up, taken over from the game's kind 6
   and made procedural.
-  - Done (`NFS_TYRE_SMOKE`, on): dark clouds of its own, ragged by noise, more
-    and thicker the faster the wheel was going -- no gravity and no ground,
-    rising and spreading, gone in one to two seconds. On grass the same kind is
-    still grass thrown up. It comes whenever a tyre is scrubbed, which is
-    whenever the game lays a tyre mark: sliding sideways, a wheel spun up from a
-    standstill, a wheel locked under braking.
+  - Done (`NFS_TYRE_SMOKE`, on): dark clouds of its own, ragged by noise. It is
+    heavy now -- it hangs low, falls, lies on the road and is gone by six
+    seconds (More realistic tire smoke below). On grass the same kind is still
+    grass thrown up. It comes whenever a tyre is scrubbed, which is whenever the
+    game lays a tyre mark: sliding sideways, a wheel spun up from a standstill,
+    a wheel locked under braking.
 - [ ] Heat haze over the road on desert tracks by day.
 - [x] Brake discs glowing faintly orange after hard braking at night.
   - Done (2026-11-17, `NFS_BRAKE_GLOW`): braking hard above 8 m/s, a pool of
@@ -489,7 +500,9 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   pseudo-voxel triangles, i.e. they consist of an invest Y shape with the bottom                                                             
   of Y as the top and lines that connect the tips. Note just flat single-color 
   triangles but pseudo-shaded. Cop triangles should ofc pulse in cop light color 
-  scheme (red and blue).
+  scheme (red and blue). Also instead of a solid grey light for a road, have a
+  grey straight line about 12px thick with darker grey outline on each side
+  that's 3px thick.
 
 ### Driving/Gameplay
 - [x] Tire grip by surface: less on snow, sand and grass than on asphalt. Each
@@ -645,7 +658,7 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   it (like pressing r key).
 - [ ] Gimmicky but fun: windshield wiper + graphic that wipes off snow/raindrops
   from screen.
-- [ ] More realistic tire smoke: tire smoke particles and color area great, but 
+- [x] More realistic tire smoke: tire smoke particles and color area great, but
    tire smoke shouldn't spread as rise as it does now - it's
   supposed to be kind of heavy and fall on the ground pretty quickly. Also it's
   generated either at high RPM when car is still or barely moving (e.g. start line, slamming the 
@@ -659,6 +672,20 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   and break duration - we have different scales depending on speed - [0, 50],
   [50, 100], [100, 150], [150, 200], [200, inf] kph and duration of braking [0, 1],
   [1, 2], [1,2], [2,4], [2, inf]. Choose the easier to implement approach.
+  - Done: the smoke is heavy now -- it leaves the tread with almost no upward
+    speed, drags hard, falls and lies on the road, and is gone in 6.5-8 s from
+    being made (fading gradually over its last seconds). Its life, size and
+    height-to-width vary a little from cloud to cloud, and the gap between two
+    clouds is 3-6 ticks a car. It comes off every piece of tyre mark
+    (`tyreMarkSmoke`, from `skidLaid`), a wheel spun up at low speed, the
+    player's brake and handbrake, and the game's own kind 6. Holding its speed
+    for a second while smoking switches a car to the drifting clouds: they
+    start smaller, billow instead of falling, and grow unevenly to saturation,
+    about 1.5x as wide and 2x as tall as the ordinary ones. Its look is the
+    speed + braking-duration table -- 0-50/1 s, 50-100/2 s, 100-150/2 s,
+    150-200/4 s, 200+/4 s, with a third at once -- and the throttle or the
+    slide's sideways drag where there is no brake (`throwSmoke`, `tyreSmoke`,
+    `native_particles.cpp`; `NFS_TYRE_SMOKE`).
 
 ### Music/Sound
 - [x] Sound quality is great and sound works well but volume is still too

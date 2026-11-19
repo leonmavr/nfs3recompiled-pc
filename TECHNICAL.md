@@ -13,6 +13,10 @@ Android target: a launcher, touch controls, gamepad handling, widescreen races,
 and a number of fixes in the Glide layer that only showed up once the game ran
 on a phone.
 
+NOTE: the Android implementation is not meant to be modified. In this repo, the
+PC port only is maintained. Android serves only as a reference for
+recompilation. Features are exclusively implemented in the PC version.
+
 ## Game data you supply
 
 The executables are in the repository, as upstream, so a clone builds and runs
@@ -619,31 +623,64 @@ smoke off a wheel on grass (the nearest wheel to where it starts,
 `groundAt`) is taken over as grass instead.
 `NFS_WHEEL_SPRAY` (on; `0`/`off` for none).
 
+### Frost off snow
+
+Snow is surface 15 (`groundUnder` 3), and the game throws nothing for a car
+merely driving over it either. So each frame every wheel on snow of every car
+faster than 6 m/s throws frost (`frostFromWheels`, `native_particles.cpp`),
+and the game's own dust off a wheel on snow (kind 2, or kind 5) is taken over
+as frost too (`throwFrost`): sharp chips of ice (`EffectParticle::Frost`) --
+small faceted solids, a few sizes, thrown up and out, tumbling as they fall and
+gone where they land -- and a lot of fine snow spray after them: light grains
+that drift and spread wider than dirt, and now and then a soft cloud of it.
+All in a colour of their own -- white, cyan and light grey -- never the
+ground's. `NFS_SNOW_SPRAY` (on; `0`/`off` for none).
+
 ### Tyre smoke
 
 Smoke comes off a tyre whenever it is being scrubbed -- **whenever the game
 lays a tyre mark**: cornering at the limit or sliding, a wheel spun up out of a
-standstill, a wheel locked under braking. The port asks that of the car itself
-each frame (`tyreSmoke`, `native_particles.cpp`) rather than waiting for the
-game's own smoke: how much of the velocity is across the car (`+0xc0` is its
-right -- over 1.2 m/s the tyres are being dragged over a road they no longer
-roll along, full smoke at 4), and for the player's car the pedals -- throttle
-`0x79c339` with the revs over half the redline and the car under 12 m/s (spun
-up), brake `0x79c33a` above five eighths over 8 m/s (locked). It comes off one
-of the wheels that is scrubbing, on **pavement only** (`groundUnder`; grass,
-dirt and snow throw their own dust) and at the driven end when it is a wheel
-spinning -- the end found by where the contact point lies along the car's
-forward axis, not by the wheels' order. The game's own particle kind 6 is taken
-over as well (`throwSmoke`), for the wheel it names with the speed it names.
+standstill, a wheel locked under braking, the handbrake pulled. The port asks
+that of the car itself each frame (`tyreSmoke`, `native_particles.cpp`) rather
+than waiting for the game's own smoke: how much of the velocity is across the
+car (`+0xc0` is its right -- over 1.2 m/s the tyres are being dragged over a
+road they no longer roll along, full smoke at 4), and for the player's car the
+pedals -- throttle `0x79c339` with the revs over half the redline (or pulling
+away in first) and the car under 12 m/s (spun up), brake `0x79c33a` above a
+half or the handbrake in the bits of `0x79c33b` over 3 m/s (locked); the
+opponents' hard braking is a fall in their speed. And every piece of a tyre
+mark, as `sub_4c6cb0` lays it, calls back into the same thickness
+(`tyreMarkSmoke`, from `skidLaid` in `native_skids.cpp`): the marks and the
+smoke are the same event, so an opponent's slide smokes too and no wheel the
+game marks -- or the port's own launch and pedal marks -- is left out. It comes
+off one of the wheels that is scrubbing, on **pavement only** (`groundUnder`;
+grass, dirt and snow throw their own dust) and at the driven end when it is a
+wheel spinning -- the end found by where the contact point lies along the
+car's forward axis, not by the wheels' order. The game's own particle kind 6
+is taken over as well (`throwSmoke`), for the wheel it names with the speed it
+names.
 
 What comes off is `EffectParticle::Smoke`, blended over the picture like a puff
 rather than added to it: a dark cloud of its own colour (`noGround`), almost
-black at its heart and grey as the sky catches its top, ragged by its own noise
--- more of it and thicker the faster the wheel was going, one to four clouds a
-call. Each rises: it has **no gravity and no ground to settle on** (a small
-upward pull instead), slowing and spreading as it grows, and is gone in one to
-two seconds. `NFS_TYRE_SMOKE` (on; a number up to 3 for more and thicker, `0`/
-`off` for none).
+black at its heart and grey as the sky catches its top, ragged by its own noise.
+How thick it looks is the speed it is scrubbed at and the seconds the brake has
+been held: the speed bands are 0-50, 50-100, 100-150, 150-200 and 200 km/h and
+up, and each thickens fully over 1, 2, 2, 4 and 4 s of braking (a third of the
+way at once); the speed's own share goes from a third at rest to all of it at
+200. A wheel spun up uses the throttle for its thickness and a slide its
+sideways drag, so smoke comes off at a standstill too. More of it and thicker
+the denser the scrub: one to three clouds a call, a cloud every three to six
+ticks a car (the gap drawn afresh each time). Each cloud's life, size, and its
+height over its width are its own within a little, so no two are quite alike.
+It is **heavy**: it leaves the tread with almost no upward speed, drags hard,
+falls and lies on the road, no longer growing -- and is gone in six and a half
+to eight seconds, fading out gradually over its last seconds. A car that holds
+its speed -- hardly accelerating either way -- for a second while its tyres
+smoke is **drifting**, and its clouds are the big growing ones: they start
+smaller, are lighter and billow rather than fall, and keep growing, unevenly,
+until they saturate -- fully grown about 1.5 times as wide and twice as tall as
+the ordinary cloud. `NFS_TYRE_SMOKE` (on; a number up to 3 for more and
+thicker, `0`/`off` for none).
 
 On grass the same kind is grass thrown up instead -- see above -- so a wheel
 sliding on grass throws blades and no smoke.
@@ -1826,9 +1863,14 @@ a wheel's step) into a ring of blocks at `[0x560110]` -- 0x340 bytes each,
 how many, their four corners from +0x10, which of `skd0`-`skd3` from +0x310,
 the alpha at each piece's start and end from +0x320 -- and draws them in
 `sub_4c6f00`. Nothing fades: a piece lasts until its block is taken again, and
-there were 64 blocks. `native_skids.cpp` (`tools/apply_tyre_marks.py`) makes
-the ring 256 blocks (the allocation at 0x4c70f5, the bounds at 0x4c6dfc and
-0x4c6e16) and, at `sub_4c6cb0`'s end (`skidLaid`), reshades the piece just
+there were 64 blocks -- a few seconds of a whole field sliding, since one ring
+is shared by every car and is written over first-in-first-out, so the
+opponents' and the cops' churn filled it at once. `native_skids.cpp`
+(`tools/apply_tyre_marks.py`) makes the ring 8192 blocks (the allocation at
+0x4c70f5, the bounds at 0x4c6dfc and 0x4c6e16) -- about 6.5 MB of the guest's
+memory, freed with the race, two minutes of four cars sliding at racing speed,
+so what ends a mark is its life and no longer the ring being taken -- and, at
+`sub_4c6cb0`'s end (`skidLaid`), reshades the piece just
 laid by the nearest car's speed: 0.9 to 1.15 of its width about its middle,
 1.6 to 3.4 times its alpha (the game's was 28 of 255), full at 40 m/s; each
 piece a little lighter at random, one in twelve all but a gap, starting at the
@@ -1837,15 +1879,18 @@ over its last six seconds of `NFS_TYRE_MARKS_LIFE` (60). `NFS_TYRE_MARKS`
 (on; `0`/`off` the game's ring and shading). `NFS_TYRE_MARKS_TRACE=1` logs
 each piece.
 
-The game lays marks only for a slide. `skidPedals` (from `collisionEffects`,
-the first player's car) lays the port's own through `sub_4c6cb0` too
-(`guest::call`; the two pairs in scratch below the stack, 48 of 255 before
-`skidLaid`'s shading), on pavement only, 30 cm a piece: under the rear wheels
-while they spin -- full throttle pulling away in first below 8 m/s, or revved
-past half the redline below 12 m/s -- under all four once the brake is past 0.5
-above 3 m/s, and under the rear two with the handbrake on, both from a
-sixteenth of a second of it (a second of the brake past 0.55 until
-2026-11-17: they were hardly ever laid). The handbrake (bit 0x04 of
+The game lays marks only for the player's slide. `skidPedals` (from
+`collisionEffects`, once for every car each frame) lays the port's own through
+`sub_4c6cb0` too (`guest::call`; the two pairs in scratch below the stack, 48
+of 255 before `skidLaid`'s shading), on pavement only, 30 cm a piece. For the
+first player's car: under the rear wheels while they spin -- full throttle
+pulling away in first below 8 m/s, or revved past half the redline below
+12 m/s -- under all four once the brake is past 0.5 above 3 m/s, and under the
+rear two with the handbrake on, both from a sixteenth of a second of it (a
+second of the brake past 0.55 until 2026-11-17: they were hardly ever laid).
+And for **every car**, the opponents' and the cops' too: its velocity across it
+over 1.2 m/s -- sliding -- marks the road under each wheel on pavement, since
+the game left the AI's slides with no mark at all. The handbrake (bit 0x04 of
 `0x79c33b`) makes a piece 1.7 times darker, and a wet road (`0x6fd4cc`) every
 piece 1.6 times: the wet road darkens the road, and its reflection is not
 added over what lies on the road half seen (alpha under 0.98), so the marks
@@ -2935,6 +2980,7 @@ the next time the game starts.
 | `NFS_TYRE_SMOKE` | on (`1`) | `0`/`off`: the game's own pictures for the smoke off a wheel spinning or locked. A number up to 3: how much more of the port's, and thicker (Tyre smoke). |
 | `NFS_EXHAUSTS_TRACE` | unset | `1`: print each car's exhausts, every tip's place and the flame colour, as the loader read them, before the game starts, and during a race a line for each car the first time it shifts up, pops on a downshift, crackles on the overrun, revs at a standstill, or is given the defaults -- and the revs a car at rest climbs to, every 1000 rpm. |
 | `NFS_WHEEL_SPRAY` | on | `0`/`off`: the game's own spray off a wet road instead of the port's (Grass, and spray off a wet road). |
+| `NFS_SNOW_SPRAY` | on | `0`/`off`: no frost off a tyre on snow (Frost off snow). |
 | `NFS_GAME_SPRITES` | off | `1`/`on`: the game's own particle sprites drawn again -- the pool's turned squares and the drops that land on the camera, none of them cut out by anything. Off, they are drawn only where the port leaves a kind to the game: its particles or one of their switches off, or split screen (The game's own sprites are not drawn). |
 | `NFS_SUN_GLARE` | on (`1`) | `0`/`off`: no glare from the sun. A number up to 3: how strong (Sun glare); by day with no weather only. |
 | `NFS_GRIP_ON_OPPONENTS` | on (`1`) | `0`/`off`: grip by terrain for the player's car only, not every car (Grip by terrain). |

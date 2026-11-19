@@ -19,7 +19,10 @@
  *
  * Now (tools/apply_tyre_marks.py):
  *   - the ring is kBlocks blocks (the allocation at 0x4c70f5 and the two
- *     bounds at 0x4c6dfc and 0x4c6e16), enough for a lap of sliding;
+ *     bounds at 0x4c6dfc and 0x4c6e16): one ring, shared by every car and
+ *     written over in turn, so it has to hold what the opponents and the cops
+ *     lay as well as the player's -- eight thousand pieces, a couple of minutes
+ *     of a whole field sliding, where the 256 it had first went in seconds;
  *   - each piece, as it is laid (skidLaid, at sub_4c6cb0's end), is darker and
  *     a little wider the faster the car laying it goes (the nearest car to the
  *     piece: kWidthSlow to kWidthFast of its width about its middle, kDarkSlow
@@ -27,7 +30,10 @@
  *     length -- each piece's darkness a little different, now and then a
  *     faint one, so the mark has gaps -- starting where the last one ended;
  *   - and every frame (skidFrame) a piece older than NFS_TYRE_MARKS_LIFE
- *     seconds (60) fades over its last kFadeSeconds and is gone.
+ *     seconds (60) fades over its last kFadeSeconds and is gone;
+ *   - and every piece laid is a tyre scrubbing, so the port's smoke comes off
+ *     where the mark is (tyreMarkSmoke, native_particles.cpp) -- whether the
+ *     port's own marks are on or not.
  * NFS_TYRE_MARKS (on; 0/off: the game's, as they were). */
 namespace nfs3hp
 {
@@ -77,8 +83,14 @@ constexpr x86::reg8 kOwnAlpha = 48;                      // before skidLaid's sh
 
 }  // namespace
 
-// The ring's size (tools/apply_tyre_marks.py's patches read it).
-constexpr x86::reg32 kBlocks = 256;
+/* The ring's size (tools/apply_tyre_marks.py's patches read it).  The game's
+ * 64 blocks held a few seconds of a whole field dragging its tyres; the ring is
+ * one for every car and is written over first-in-first-out, so the opponents'
+ * and the cops' churn filled the port's 256 in seconds too, and their marks
+ * went long before the 60 their life allows.  8192 blocks -- some 6.5 MB of the
+ * guest's memory, freed at the end of a race -- hold two minutes of four cars
+ * sliding at racing speed, so the life is what ends a mark now. */
+constexpr x86::reg32 kBlocks = 8192;
 
 namespace
 {
@@ -121,6 +133,10 @@ float clamp01(float x) { return x < 0.0f ? 0.0f : x > 1.0f ? 1.0f : x; }
 
 }  // namespace
 
+/* From native_particles.cpp: a tyre mark has been laid, so the tyre is being
+ * scrubbed and its smoke comes off there (at, and the car laying it). */
+void tyreMarkSmoke(win32::WinApplication* app, x86::reg32 car, const float at[3], float speed);
+
 bool tyreMarksOn()
 {
     static const bool on = settingOf("NFS_TYRE_MARKS", 1.0f) > 0.0f;
@@ -135,8 +151,6 @@ x86::reg32 tyreMarkBlocks()
 /* At sub_4c6cb0's end, after a piece is laid (its count just raised). */
 void skidLaid(win32::WinApplication* app)
 {
-    if (!tyreMarksOn())
-        return;
     const x86::reg32 ring = app->getMemory<x86::reg32>(kRing);
     const x86::reg32 index = app->getMemory<x86::reg32>(kFilling);
     if (!ring || index >= kBlocks)
@@ -175,6 +189,14 @@ void skidLaid(win32::WinApplication* app)
             nearestCar = car;
         }
     }
+    /* Smoke off the scrubbing tyre, where the mark is (tyreMarkSmoke): the
+     * port marks a sliding wheel of every car (skidPedals) and the game its
+     * own, so this is what makes the smoke follow the marks -- and the squeak
+     * -- and not only the first player's pedals. */
+    if (nearestCar)
+        tyreMarkSmoke(app, nearestCar, c[3], speed);
+    if (!tyreMarksOn())
+        return;
     const float fast = clamp01(speed / kFullSpeed);
     // A little wider the faster, about each edge pair's middle.
     const float width = kWidthSlow + (kWidthFast - kWidthSlow) * fast;
@@ -287,40 +309,138 @@ struct Wheel
     float pair[6] = {};          // the last piece's end: its two edges
     x86::sreg32 at = -1000;      // when
 };
-Wheel s_wheels[4];
-x86::sreg32 s_braking = -1;      // since when the brake has been held on
-x86::reg32 s_pedalCar = 0;
+Wheel s_wheels[16][4];           // the first player's pedals, and every car's slide
+x86::sreg32 s_braking[16] = {};  // since when the brake has been held on, a car
+constexpr float kSlideSpeed = 3.0f;      // m/s: a car slower than this is not sliding
+constexpr float kSlideLateral = 1.2f;    // m/s across the car: the tyres are dragged
+
+/* A piece of the port's own mark for one wheel, from where its last one ended
+ * to where it is now -- 30 cm, or a short first one.  hold: lay the same patch
+ * again where the wheel spins on the spot.  False when the game stopped in it. */
+bool layOwnPiece(win32::WinApplication* app, x86::CPU& cpu, Wheel& w, const float right[3], const float forward[3],
+                 const float at[3], bool hold, x86::sreg32 clock)
+{
+    float pair[6];
+    for (int i = 0; i < 3; ++i)
+    {
+        pair[i] = at[i] - right[i] * kMarkHalfWidth;
+        pair[3 + i] = at[i] + right[i] * kMarkHalfWidth;
+    }
+    float moved = 0.0f;
+    for (int i = 0; i < 3; ++i)
+        moved += (pair[i] - w.pair[i]) * (pair[i] - w.pair[i]);
+    moved = std::sqrt(moved);
+    float from[6];
+    if (!w.laid || moved > 3.0f)
+    {
+        // A first piece: a short one about where it is.
+        for (int i = 0; i < 3; ++i)
+        {
+            from[i] = pair[i] - forward[i] * kStep;
+            from[3 + i] = pair[3 + i] - forward[i] * kStep;
+        }
+    }
+    else if (moved >= kStep)
+        SDL_memcpy(from, w.pair, sizeof from);
+    else if (hold && clock - w.at >= kSpinEvery)
+    {
+        // On the spot: the same patch laid again, a little darker each time.
+        for (int i = 0; i < 3; ++i)
+        {
+            from[i] = pair[i] - forward[i] * kStep;
+            from[3 + i] = pair[3 + i] - forward[i] * kStep;
+        }
+    }
+    else
+        return true;   // not far enough yet
+    const x86::reg32 scratch = cpu.esp - 0x400;
+    for (int i = 0; i < 6; ++i)
+    {
+        app->getMemory<float>(scratch + 4 * x86::reg32(i)) = from[i];
+        app->getMemory<float>(scratch + 0x18 + 4 * x86::reg32(i)) = pair[i];
+    }
+    const x86::reg32 saved[] = { cpu.eax, cpu.ebx, cpu.ecx, cpu.edx, cpu.esi, cpu.edi, cpu.ebp };
+    cpu.eax = scratch;
+    cpu.edx = scratch + 0x18;
+    cpu.ebx = kOwnAlpha;
+    cpu.ecx = kOwnAlpha;
+    if (!guest::call(app, cpu, kLayPiece, { 1 }))
+        return false;
+    cpu.eax = saved[0]; cpu.ebx = saved[1]; cpu.ecx = saved[2]; cpu.edx = saved[3];
+    cpu.esi = saved[4]; cpu.edi = saved[5]; cpu.ebp = saved[6];
+    w.laid = true;
+    w.at = clock;
+    SDL_memcpy(w.pair, pair, sizeof pair);
+    return true;
+}
 }  // namespace
 
-/* Marks the game lays none of (from collisionEffects, each car, each frame):
- * for the first player's car, a wheel spun up on the spot -- throttle down, in
+/* Marks the game lays none of (from collisionEffects, each car, each frame).
+ * For the first player's car: a wheel spun up on the spot -- throttle down, in
  * gear, revs up and the car slow -- marks the road under the driven wheels, a
  * short dark patch laid again and again where it stands; the brake past half
- * while the car moves marks it under all four, and the handbrake under the
- * rear two.  Each piece is the
- * game's own (sub_4c6cb0), shaded by skidLaid as every piece is.  False when
- * the game stopped in it. */
+ * while the car moves marks it under all four, and the handbrake under the rear
+ * two.  And every car, the opponents' and the cops' too, **sliding** -- its
+ * velocity across it over a metre a second -- marks the road under each wheel
+ * on pavement: the game lays the AI's slides nowhere, so without this their
+ * tyres left no trace at all.  Each piece is the game's own (sub_4c6cb0),
+ * shaded by skidLaid as every piece is.  False when the game stopped in it. */
 bool skidPedals(win32::WinApplication* app, x86::CPU& cpu, x86::reg32 car)
 {
-    if (!tyreMarksOn() || car != app->getMemory<x86::reg32>(0x5efa48) || app->getMemory<x86::reg32>(0x6fd3b0) == 1)
+    if (!tyreMarksOn() || app->getMemory<x86::reg32>(0x6fd3b0) == 1)
         return true;
+    if (car < 0x5e1120 || car >= 0x5e1120 + 16 * 0x9ac || (car - x86::reg32(0x5e1120)) % 0x9ac)
+        return true;
+    const x86::reg32 slot = (car - x86::reg32(0x5e1120)) / 0x9ac;
     const x86::sreg32 clock = x86::sreg32(app->getMemory<x86::reg32>(kRaceClock));
-    if (car != s_pedalCar || clock < s_braking)
+    static x86::sreg32 s_lastClock = 0;
+    if (clock < s_lastClock)
     {
-        s_pedalCar = car;
-        for (Wheel& w : s_wheels)
-            w = Wheel{};
-        s_braking = -1;
+        for (auto& wheels : s_wheels)
+            for (Wheel& w : wheels)
+                w = Wheel{};
+        for (x86::sreg32& braking : s_braking)
+            braking = 0;
+        s_lastClock = clock;
     }
     auto f = [app](x86::reg32 a) { return float(app->getMemory<float>(a)); };
+    const bool player = car == app->getMemory<x86::reg32>(0x5efa48);
+    const bool grounded = app->getMemory<uint16_t>(car + kCarAir) == 0;
+    const float velocity[3] = { f(car + kCarVelocity), f(car + kCarVelocity + 4), f(car + kCarVelocity + 8) };
+    const float speed = std::sqrt(velocity[0] * velocity[0] + velocity[1] * velocity[1] + velocity[2] * velocity[2]);
+    float right[3], forward[3], centre[3];
+    for (int i = 0; i < 3; ++i)
+    {
+        right[i] = f(car + kCarRight + 4 * x86::reg32(i));
+        forward[i] = f(car + kCarForward + 4 * x86::reg32(i));
+        centre[i] = f(car + kCarPosition + 4 * x86::reg32(i));
+    }
+    if (!player)
+    {
+        /* An opponent's or a cop's slide: the velocity across the car over a
+         * metre a second means the tyres are dragged over the road, and every
+         * wheel on pavement lays its mark. */
+        const float lateral = SDL_fabsf(velocity[0] * right[0] + velocity[1] * right[1] + velocity[2] * right[2]);
+        if (!grounded || speed < kSlideSpeed || lateral < kSlideLateral)
+        {
+            for (Wheel& w : s_wheels[slot])
+                w.laid = false;
+            return true;
+        }
+        for (int n = 0; n < 4; ++n)
+        {
+            if (groundUnder(app, car, n) != 0)
+                continue;   // pavement only
+            float at[3];
+            wheelContact(app, car, n, at);
+            if (!layOwnPiece(app, cpu, s_wheels[slot][n], right, forward, at, false, clock))
+                return false;
+        }
+        return true;
+    }
     const float throttle = float(app->getMemory<x86::reg8>(kThrottle)) / 255.0f;
     const float brake = float(app->getMemory<x86::reg8>(kBrake)) / 255.0f;
-    float speed = 0.0f;
-    for (int i = 0; i < 3; ++i)
-        speed += f(car + kCarVelocity + 4 * x86::reg32(i)) * f(car + kCarVelocity + 4 * x86::reg32(i));
-    speed = std::sqrt(speed);
     static const bool traced = SDL_getenv("NFS_TYRE_MARKS_TRACE") != nullptr;
-    const bool grounded = app->getMemory<uint16_t>(car + kCarAir) == 0;
     const x86::reg32 limit = redline(app, car);
     if (traced && clock % 16 == 0)
         SDL_Log("[SKIDPEDAL] t %d throttle %.2f brake %.2f bits %02x speed %.1f gear %u revs %d of %u", int(clock),
@@ -342,24 +462,17 @@ bool skidPedals(win32::WinApplication* app, x86::CPU& cpu, x86::reg32 car)
     const bool pedal = brake > kBrakeHard;
     if (grounded && (pedal || handbrake) && speed > kBrakeSpeed)
     {
-        if (s_braking < 0)
-            s_braking = clock;
+        if (!s_braking[slot])
+            s_braking[slot] = clock;
     }
     else
-        s_braking = -1;
-    const bool braking = s_braking >= 0 && clock - s_braking >= kBrakeAfter;
+        s_braking[slot] = 0;
+    const bool braking = s_braking[slot] && clock - s_braking[slot] >= kBrakeAfter;
     if (!spinning && !braking)
     {
-        for (Wheel& w : s_wheels)
+        for (Wheel& w : s_wheels[slot])
             w.laid = false;
         return true;
-    }
-    float right[3], forward[3], centre[3];
-    for (int i = 0; i < 3; ++i)
-    {
-        right[i] = f(car + kCarRight + 4 * x86::reg32(i));
-        forward[i] = f(car + kCarForward + 4 * x86::reg32(i));
-        centre[i] = f(car + kCarPosition + 4 * x86::reg32(i));
     }
     for (int n = 0; n < 4; ++n)
     {
@@ -372,58 +485,8 @@ bool skidPedals(win32::WinApplication* app, x86::CPU& cpu, x86::reg32 car)
             continue;   // a spin marks under the driven end (the rear)
         if (braking && !pedal && !spinning && ahead > 0.0f)
             continue;   // the handbrake alone locks the rear wheels
-        Wheel& w = s_wheels[n];
-        float pair[6];
-        for (int i = 0; i < 3; ++i)
-        {
-            pair[i] = at[i] - right[i] * kMarkHalfWidth;
-            pair[3 + i] = at[i] + right[i] * kMarkHalfWidth;
-        }
-        float moved = 0.0f;
-        for (int i = 0; i < 3; ++i)
-            moved += (pair[i] - w.pair[i]) * (pair[i] - w.pair[i]);
-        moved = std::sqrt(moved);
-        float from[6];
-        if (!w.laid || moved > 3.0f)
-        {
-            // A first piece: a short one about where it is.
-            for (int i = 0; i < 3; ++i)
-            {
-                from[i] = pair[i] - forward[i] * kStep;
-                from[3 + i] = pair[3 + i] - forward[i] * kStep;
-            }
-        }
-        else if (moved >= kStep)
-            SDL_memcpy(from, w.pair, sizeof from);
-        else if (spinning && clock - w.at >= kSpinEvery)
-        {
-            // On the spot: the same patch laid again, a little darker each time.
-            for (int i = 0; i < 3; ++i)
-            {
-                from[i] = pair[i] - forward[i] * kStep;
-                from[3 + i] = pair[3 + i] - forward[i] * kStep;
-            }
-        }
-        else
-            continue;
-        const x86::reg32 scratch = cpu.esp - 0x400;
-        for (int i = 0; i < 6; ++i)
-        {
-            app->getMemory<float>(scratch + 4 * x86::reg32(i)) = from[i];
-            app->getMemory<float>(scratch + 0x18 + 4 * x86::reg32(i)) = pair[i];
-        }
-        const x86::reg32 saved[] = { cpu.eax, cpu.ebx, cpu.ecx, cpu.edx, cpu.esi, cpu.edi, cpu.ebp };
-        cpu.eax = scratch;
-        cpu.edx = scratch + 0x18;
-        cpu.ebx = kOwnAlpha;
-        cpu.ecx = kOwnAlpha;
-        if (!guest::call(app, cpu, kLayPiece, { 1 }))
+        if (!layOwnPiece(app, cpu, s_wheels[slot][n], right, forward, at, spinning, clock))
             return false;
-        cpu.eax = saved[0]; cpu.ebx = saved[1]; cpu.ecx = saved[2]; cpu.edx = saved[3];
-        cpu.esi = saved[4]; cpu.edi = saved[5]; cpu.ebp = saved[6];
-        w.laid = true;
-        w.at = clock;
-        SDL_memcpy(w.pair, pair, sizeof pair);
     }
     return true;
 }

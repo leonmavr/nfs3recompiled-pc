@@ -1787,6 +1787,7 @@ static std::string particleTypeNames()
         { "kFlame", EffectParticle::Flame },     { "kGlow", EffectParticle::Glow },
         { "kSmoke", EffectParticle::Smoke },     { "kDroplet", EffectParticle::Droplet },
         { "kFlake", EffectParticle::Flake },     { "kBrakeGlow", EffectParticle::BrakeGlow },
+        { "kFrost", EffectParticle::Frost },
     };
     std::string names;
     for (const auto& type : types)
@@ -1951,6 +1952,26 @@ static const char g_particleShader[] =
 "        float up = clamp(v_uv.y * 0.6 + 0.5, 0.0, 1.0);"
 "        vec3 c = v_color.rgb * (0.7 + 0.7 * up) + vec3(0.045) * up;"
 "        o_color = vec4(c, a * clamp(room / 0.3 + 0.25, 0.0, 1.0));"
+"        return;"
+"    }"
+/* A chip of ice off a tyre on snow: a little faceted solid, three to six flat
+ * sides, each its own shade and its own reach, brightest along the edges where
+ * it catches the light, tumbling by its seed (v_params.w is its turn).  White,
+ * cyan or light grey from the particle's colour; blended over the picture. */
+"    if (type == kFrost) {"
+"        float ang = atan(v_uv.y, v_uv.x) + v_params.w;"
+"        int facets = 3 + int(seed * 3.99);"
+"        float sector = 6.283185 / float(facets);"
+"        float side = mod(ang, sector) - sector * 0.5;"
+"        float facet = floor(ang / sector);"
+"        float circum = 0.55 + 0.30 * fract(sin(seed * 97.0 + facet * 13.7) * 43758.55);"
+"        float radius = circum * cos(sector * 0.5) / max(cos(side), 1e-3);"
+"        float r = length(v_uv);"
+"        if (r > radius) discard;"
+"        float rim = smoothstep(0.72, 1.0, r / radius);"
+"        float shade = 0.72 + 0.28 * fract(sin(seed * 41.0 + facet * 7.3) * 24634.6);"
+"        vec3 c = mix(v_color.rgb, vec3(1.0), 0.2 + 0.5 * rim) * (0.85 + 0.3 * shade);"
+"        o_color = vec4(c, v_color.a * (0.55 + 0.45 * rim));"
 "        return;"
 "    }"
 "    if (type == kSpark) {"
@@ -2525,7 +2546,9 @@ void ThrashRenderer::drawParticles(const ThrashDraw& draw, int width, int height
             ax = p.size;
             ay = 0.0f;
             bx = 0.0f;
-            by = p.size;
+            /* A smoke cloud's height is its own, over its width (p.turn): the
+             * drifting one is taller than it is wide. */
+            by = p.size * (p.type == EffectParticle::Smoke ? p.turn : 1.0f);
         }
         const bool cloud = !additive && m_softHalf
                            && (p.type == EffectParticle::Puff || p.type == EffectParticle::Smoke);
@@ -3719,8 +3742,8 @@ void ThrashRenderer::swap()
         static const int dumpCount =
             SDL_getenv("NFS_FRAME_DUMP_COUNT") ? SDL_atoi(SDL_getenv("NFS_FRAME_DUMP_COUNT")) : 90;
         static int raceFrames = 0, dumped = 0;
-        if (dumpTo && m_sceneDrawn && (m_postDone || m_traceWetness > 0.0f) && dumped < dumpCount
-            && ++raceFrames >= dumpAt)
+        if (dumpTo && (SDL_getenv("NFS_FRAME_DUMP_ALL") != nullptr || (m_sceneDrawn && (m_postDone || m_traceWetness > 0.0f)))
+            && dumped < dumpCount && ++raceFrames >= dumpAt)
         {
             glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_renderer->m_texture, 0);

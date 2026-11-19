@@ -31,12 +31,21 @@
  * - Off grass the grains are blades: long, thin and a little bent, tumbling
  *   as they flutter down (EffectParticle::turn), a greener shade of the
  *   ground -- and grains after all where that ground is not green.
+ * - On snow the game's dust becomes frost, and every wheel on snow throws it:
+ *   sharp chips of ice in white, cyan and light grey, and a lot of fine snow
+ *   spray, lighter and spreading wider than dirt (throwFrost,
+ *   frostFromWheels, NFS_SNOW_SPRAY).
  * - Spray off a wet road (kind 10) becomes a pale mist billowing out behind
  *   the wheels and fine drops thrown up, both more the faster (throwSpray).
  * - The smoke off a wheel spinning or locked (kind 6) becomes the port's own
- *   (throwSmoke, NFS_TYRE_SMOKE): dark clouds of its own colour that rise and
- *   spread -- no gravity, no ground to settle on -- and are gone in a second or
- *   two.  Off a wheel on grass that kind is still grass thrown up instead.
+ *   (throwSmoke, NFS_TYRE_SMOKE): a heavy dark cloud of its own colour that
+ *   comes off the tread low, drags, falls and lies on the road, and is gone in
+ *   its six and a half to eight seconds -- thicker the harder the tyre is
+ *   scrubbed, from the speed and
+ *   the seconds of braking (tyreSmoke).  It comes off whenever a tyre mark is
+ *   laid, when a wheel spins up at low speed, and whenever the game's squeak
+ *   would sound: a slide, a spin, a locked wheel.  Off a wheel on grass that
+ *   kind is still grass thrown up instead.
  * - A spark is a short white-hot streak that cools through yellow and orange
  *   to red as it falls, thrown at the game's speed with a little scatter.
  *
@@ -76,7 +85,9 @@ struct Particle
     float origin[3];       // where it was thrown from, for the ground's colour
     float floor;           // the height it settles at
     float age, life;
-    float size, grow;      // metres; per second
+    float size, grow;      // metres; per second (a saturating cloud: a share of the way a second)
+    float sizeMax;         // where a saturating cloud's size stops (0: it just grows)
+    float aspect;          // its height over its width (1: square)
     float seed;
     float alpha;
     float colour[3];
@@ -84,6 +95,7 @@ struct Particle
     bool hasLast;
     bool settled;
     bool noGround;         // its own colour, not the ground's (spray)
+    bool light;            // snow: it drifts down, lighter and spreading more than dirt
     int type;              // EffectParticle::Type
 };
 
@@ -196,6 +208,17 @@ bool spraySetting()
     return value;
 }
 
+/* Frost off a tyre on snow (throwFrost, frostFromWheels): NFS_SNOW_SPRAY, on;
+ * 0 or off for none. */
+bool snowSetting()
+{
+    static const bool value = [] {
+        const char* text = SDL_getenv("NFS_SNOW_SPRAY");
+        return !(text && (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0));
+    }();
+    return value;
+}
+
 float argument(win32::WinApplication* app, x86::CPU& cpu, int k)
 {
     return app->getMemory<float>(cpu.esp + 4 + 4 * x86::reg32(k));
@@ -220,6 +243,20 @@ bool perfTracing()
  * moved down a place -- 300 KB moved for each one added once the rain's spray
  * filled the pool, hundreds a frame: the rain's lag). */
 std::size_t s_replace = 0;   // the next to give up its place in a full pool
+
+/* Tyre smoke, per car of the race: how thick it is now (tyreSmoke), how long
+ * the brake has been held, the speed a frame ago (the opponents have no pedals
+ * to read), how long its hard accelerating has eased off while it smoked (a
+ * drift), and when it last made a cloud and how many ticks until the next (race
+ * ticks). */
+float s_smokeThick[16];
+float s_brakeSeconds[16];
+float s_wasSpeed[16];
+bool s_wasMoving[16];
+float s_easySeconds[16];   // its acceleration has been low this long, and it smokes
+bool s_drifting[16];
+x86::sreg32 s_smokeAt[16];
+x86::sreg32 s_smokeGap[16];
 
 void add(const Particle& particle)
 {
@@ -285,6 +322,98 @@ void throwDirt(const float at[3], const float velocity[3], bool grass, int most 
         d.colour[0] = 0.7f; d.colour[1] = 0.63f; d.colour[2] = 0.52f;
         d.type = EffectParticle::Puff;
         add(d);
+    }
+}
+
+/* Frost off a tyre on snow (throwFrost): a handful of small, sharp chips of
+ * ice -- a few sizes, a few more and reaching further the faster the wheel --
+ * and a lot of fine snow spray after them: light grains that drift and spread
+ * wider than dirt, and now and then a soft cloud of it.  White, cyan and light
+ * grey, all their own colour rather than the ground's. */
+void throwFrost(const float at[3], const float velocity[3])
+{
+    const float snow = snowSetting() ? setting() : 0.0f;
+    if (snow <= 0.0f)
+        return;
+    const float speed = std::sqrt(velocity[0] * velocity[0] + velocity[1] * velocity[1] + velocity[2] * velocity[2]);
+    const float pace = SDL_min(speed / 30.0f, 1.5f);
+    auto tint = [](float r) {
+        if (r < 0.5f)
+            return std::array<float, 3>{ 0.92f, 0.96f, 1.0f };   // white
+        if (r < 0.78f)
+            return std::array<float, 3>{ 0.62f, 0.88f, 0.98f };  // cyan
+        return std::array<float, 3>{ 0.80f, 0.84f, 0.88f };      // light grey
+    };
+    // Chips of ice: sharp, of a few sizes, thrown up and out.
+    const int chips = int((1.0f + pace * 1.8f) * SDL_min(snow, 2.0f) + random01() * 1.4f);
+    for (int k = 0; k < SDL_min(chips, 6); ++k)
+    {
+        Particle s{};
+        for (int i = 0; i < 3; ++i)
+            s.p[i] = at[i] + randomRange(-0.22f, 0.22f);
+        s.p[1] = at[1] + randomRange(0.02f, 0.16f);
+        for (int i = 0; i < 3; i += 2)
+            s.v[i] = velocity[i] * randomRange(0.25f, 0.55f) + randomRange(-1.8f, 1.8f) * (0.5f + pace);
+        s.v[1] = randomRange(1.0f, 3.0f) * (0.5f + 0.5f * pace);
+        s.floor = at[1] - 0.05f;
+        s.life = randomRange(0.55f, 1.3f);
+        s.size = randomRange(0.015f, 0.04f) * (random01() < 0.2f ? 1.8f : 1.0f);
+        s.seed = random01();
+        s.alpha = randomRange(0.65f, 0.95f);
+        const auto colour = tint(random01());
+        for (int i = 0; i < 3; ++i)
+            s.colour[i] = colour[std::size_t(i)];
+        s.noGround = true;
+        s.type = EffectParticle::Frost;
+        add(s);
+    }
+    // Snow spray: many small light grains, spreading wider and drifting down.
+    const int spray = int((5.0f + pace * 8.0f) * SDL_min(snow, 2.0f) + random01() * 2.0f);
+    for (int k = 0; k < SDL_min(spray, 16); ++k)
+    {
+        Particle d{};
+        for (int i = 0; i < 3; ++i)
+            d.p[i] = at[i] + randomRange(-0.3f, 0.3f);
+        d.p[1] = at[1] + randomRange(0.05f, 0.3f);
+        for (int i = 0; i < 3; i += 2)
+            d.v[i] = velocity[i] * randomRange(0.2f, 0.5f) + randomRange(-2.2f, 2.2f) * (0.4f + 0.5f * pace);
+        d.v[1] = randomRange(0.5f, 1.8f) * (0.5f + 0.4f * pace);
+        d.floor = at[1] - 0.05f;
+        d.life = randomRange(1.0f, 2.4f);
+        d.size = randomRange(0.008f, 0.022f);
+        d.grow = 0.05f;
+        d.seed = random01();
+        d.alpha = randomRange(0.3f, 0.6f);
+        const auto colour = tint(random01() < 0.7f ? 0.0f : 0.6f);
+        for (int i = 0; i < 3; ++i)
+            d.colour[i] = colour[std::size_t(i)];
+        d.noGround = true;
+        d.light = true;
+        d.type = EffectParticle::Grain;
+        add(d);
+    }
+    // Now and then the spray's own soft cloud, hanging over the wheel.
+    if (random01() < 0.45f * SDL_min(snow, 2.0f))
+    {
+        Particle c{};
+        for (int i = 0; i < 3; ++i)
+            c.p[i] = at[i] + randomRange(-0.25f, 0.25f);
+        c.p[1] = at[1] + randomRange(0.1f, 0.3f);
+        for (int i = 0; i < 3; i += 2)
+            c.v[i] = velocity[i] * randomRange(0.25f, 0.5f) + randomRange(-1.0f, 1.0f);
+        c.v[1] = randomRange(0.3f, 1.0f) * (0.5f + pace);
+        c.floor = at[1] - 0.05f;
+        c.life = randomRange(1.0f, 2.0f);
+        c.size = randomRange(0.18f, 0.34f) * (0.8f + 0.3f * pace);
+        c.grow = randomRange(0.7f, 1.3f) * (0.7f + 0.3f * pace);
+        c.seed = random01();
+        c.alpha = randomRange(0.16f, 0.28f);
+        const auto colour = tint(random01() < 0.6f ? 0.0f : 0.55f);
+        for (int i = 0; i < 3; ++i)
+            c.colour[i] = colour[std::size_t(i)];
+        c.noGround = true;
+        c.type = EffectParticle::Puff;
+        add(c);
     }
 }
 
@@ -354,32 +483,121 @@ void throwSpray(win32::WinApplication* app, const float at[3], const float veloc
     }
 }
 
-/* Smoke off a wheel spinning or locked -- the game's kind 6, taken over: a dark
- * cloud that comes off the tread, flies up and spreads, and is gone in a second
- * or two.  No gravity and no ground to settle on (it rises, thinning as it
- * grows), more of it and thicker the faster the wheel was going. */
-void throwSmoke(const float at[3], const float velocity[3])
+/* Tyre smoke's density and its way with the air (TODOs.md, 2026-11-19): how
+ * thick it is comes from the speed the tyre is scrubbed at and how long the
+ * brake has been held -- the speed's bands are 0-50, 50-100, 100-150, 150-200
+ * and 200 km/h and up, and the seconds of braking each takes to thicken fully
+ * are 1, 2, 2, 4 and 4.  A wheel spun up has the throttle for its density, and
+ * a slide how far sideways the tyres are dragged, so smoke comes off even at a
+ * standstill.  It is heavy: it leaves the tread with almost no upward speed,
+ * drags hard, falls and lies on the road, and is gone by six seconds. */
+namespace smoke
 {
-    const float smoke = smokeSetting();
-    if (smoke <= 0.0f)
+struct Band
+{
+    float kph;       // the top of the band
+    float seconds;   // how long the brake takes to make the smoke full
+};
+constexpr Band kBands[] = { { 50.0f, 1.0f }, { 100.0f, 2.0f }, { 150.0f, 2.0f }, { 200.0f, 4.0f }, { 1e9f, 4.0f } };
+constexpr std::size_t kBandCount = sizeof(kBands) / sizeof(kBands[0]);
+constexpr float kLeastBrake = 0.3f;                  // of the density, at the first touch of the pedal
+constexpr float kSlowShare = 0.35f, kFastShare = 1.0f;   // the speed's share at 0 and 200 km/h
+constexpr float kDrag = 2.2f;                        // a second
+constexpr float kGravity = 3.5f;                     // m/s^2 down
+constexpr float kGone = 8.0f;                        // seconds at most, from the moment it is made
+constexpr float kGrounding = 0.35f;                  // of its size, its middle above the road once it lies
+constexpr float kRise = 0.45f;                       // m/s up at most, before the speed's share
+constexpr float kSizeSlow = 0.7f, kSizeFast = 1.05f;
+constexpr float kGrow = 0.93f;                       // m a second, while it is in the air
+constexpr x86::sreg32 kGapLeast = 3, kGapMost = 6;   // ticks between two clouds from one car
+/* The drifting cloud -- a car that holds its speed for a second while its
+ * tyres smoke: lighter and slower to fall, it keeps growing until it is full.
+ * Its start is set so that, grown, it is about 1.5 times as wide and twice as
+ * tall as the ordinary cloud. */
+constexpr float kDriftGravity = -0.4f;              // m/s^2 up: it billows
+constexpr float kDriftDrag = 1.4f;                   // a second
+constexpr float kDriftStart = 0.8f;                  // of the ordinary size, where it begins
+constexpr float kDriftWidth = 2.0f, kDriftHeight = 2.8f;   // of the ordinary cloud, fully grown
+constexpr float kDriftGrowLeast = 0.8f, kDriftGrowMost = 1.65f;   // share of the way a second
+constexpr float kDriftRiseLeast = 0.7f, kDriftRiseMost = 1.8f;     // m/s up
+constexpr float kDriftSeconds = 1.0f;                // of low acceleration before it is a drift
+constexpr float kEasyAccel = 1.5f;                   // m/s^2: under this is not accelerating hard
+}  // namespace smoke
+
+/* The speed's share of the smoke's density, a third at a standstill to all of
+ * it from 200 km/h (NFS_TYRE_SMOKE's speed bands). */
+float speedShare(float speed)
+{
+    return smoke::kSlowShare + (smoke::kFastShare - smoke::kSlowShare) * SDL_min(speed * 3.6f / 200.0f, 1.0f);
+}
+
+/* How thick a braking wheel's smoke is: a third of the way at once, the rest
+ * over the band's seconds, times the speed's share. */
+float brakeDensity(float speed, float seconds)
+{
+    const float kph = speed * 3.6f;
+    float span = smoke::kBands[smoke::kBandCount - 1].seconds;
+    for (const smoke::Band& band : smoke::kBands)
+    {
+        if (kph < band.kph)
+        {
+            span = band.seconds;
+            break;
+        }
+    }
+    const float built = SDL_min(seconds / span, 1.0f);
+    return speedShare(speed) * (smoke::kLeastBrake + (1.0f - smoke::kLeastBrake) * built);
+}
+
+/* Smoke off a wheel spinning, locked or sliding -- the game's kind 6, taken
+ * over: a heavy dark cloud that comes off the tread near the ground, drags and
+ * falls, and lies there a moment before it fades out.  More of it and thicker
+ * the denser the scrub (density, 0 to 1: see smoke above).  A drifting cloud
+ * (drifting: the car has held its speed a second while its tyres smoke) starts
+ * smaller and lighter, and keeps growing to a size of its own -- about half as
+ * wide again and twice as tall. */
+void throwSmoke(const float at[3], const float velocity[3], float density, bool drifting)
+{
+    const float amount = smokeSetting();
+    if (amount <= 0.0f)
         return;
+    density = SDL_clamp(density, 0.0f, 1.0f);
     const float speed = std::sqrt(velocity[0] * velocity[0] + velocity[1] * velocity[1] + velocity[2] * velocity[2]);
     const float pace = SDL_min(speed / 30.0f, 1.2f);
-    const int clouds = int((1.0f + speed / 10.0f) * smoke + random01());
+    const int clouds = int(1.0f + density * 2.0f * amount + random01() * 0.6f);
     for (int k = 0; k < SDL_min(clouds, 3); ++k)
     {
         Particle m{};
+        // Its own size, and its own a little taller or wider than it is.
+        const float base = randomRange(0.18f, 0.34f) * (smoke::kSizeSlow + (smoke::kSizeFast - smoke::kSizeSlow) * pace);
+        m.size = base;
+        m.aspect = randomRange(0.85f, 1.15f);
         for (int i = 0; i < 3; ++i)
-            m.p[i] = at[i] + randomRange(-0.2f, 0.2f);
-        m.p[1] = at[1] + randomRange(0.02f, 0.2f);
+            m.p[i] = at[i] + randomRange(-0.16f, 0.16f);
+        m.p[1] = at[1] + randomRange(0.01f, 0.12f);
         for (int i = 0; i < 3; i += 2)
-            m.v[i] = velocity[i] * randomRange(0.2f, 0.45f) + randomRange(-0.9f, 0.9f) * (0.5f + pace);
-        m.v[1] = randomRange(0.6f, 1.7f) * (0.5f + pace);
-        m.life = randomRange(1.1f, 2.1f);
-        m.size = randomRange(0.2f, 0.4f) * (0.7f + 0.5f * pace);
-        m.grow = randomRange(1.3f, 2.5f) * (0.6f + pace);
+            m.v[i] = velocity[i] * randomRange(0.15f, 0.35f) + randomRange(-1.0f, 1.0f) * (0.3f + 0.35f * pace);
+        m.v[1] = randomRange(0.05f, smoke::kRise) * (0.4f + 0.4f * pace);
+        m.floor = at[1] - 0.05f;
+        m.life = SDL_min(smoke::kGone, randomRange(smoke::kGone - 1.5f, smoke::kGone) * randomRange(0.97f, 1.03f));
+        m.grow = smoke::kGrow * (0.5f + 0.4f * pace) * (0.7f + 0.3f * density);
+        if (drifting)
+        {
+            /* Lighter and slower to fall, and growing until it is full: its
+             * grow is the share of the way there a second, its sizeMax where
+             * it stops.  Grown, it is kDriftWidth as wide and kDriftHeight as
+             * tall as the ordinary cloud. */
+            m.size = base * smoke::kDriftStart * randomRange(0.9f, 1.1f);
+            m.sizeMax = base * smoke::kDriftWidth * randomRange(0.9f, 1.1f);
+            m.aspect = (smoke::kDriftHeight / smoke::kDriftWidth) * randomRange(0.9f, 1.1f);
+            m.p[1] = at[1] + randomRange(0.01f, 0.16f);
+            m.v[1] = randomRange(smoke::kDriftRiseLeast, smoke::kDriftRiseMost) * (0.5f + 0.5f * pace);
+            m.grow = randomRange(smoke::kDriftGrowLeast, smoke::kDriftGrowMost) * (0.85f + 0.3f * pace);
+        }
         m.seed = random01();
-        m.alpha = randomRange(0.22f, 0.42f) * SDL_min(1.0f, 0.55f + pace);
+        m.alpha = randomRange(0.26f, 0.44f) * (0.45f + 0.55f * density) * SDL_min(1.0f, 0.6f + pace);
+        if (drifting)
+            m.alpha *= 0.9f;   // a bigger cloud is a little thinner
         const float grey = randomRange(0.14f, 0.21f);
         for (int i = 0; i < 3; ++i)
             m.colour[i] = grey;
@@ -938,19 +1156,24 @@ void move(float dt)
         q.age += dt;
         if (q.settled)
             continue;
-        const float drag = q.type == EffectParticle::Puff    ? 1.6f
+        const bool billowing = q.type == EffectParticle::Smoke && q.sizeMax > 0.0f;
+        const float drag = q.light ? 1.9f   // snow spray drifts
+                           : q.type == EffectParticle::Puff    ? 1.6f
                            : q.type == EffectParticle::Spark ? 0.4f
                            : q.type == EffectParticle::Blade ? 1.8f   // a blade flutters down
-                           : q.type == EffectParticle::Smoke ? 1.15f
+                           : q.type == EffectParticle::Smoke ? (billowing ? smoke::kDriftDrag : smoke::kDrag)
                            : q.type == EffectParticle::Droplet ? 0.2f   // it falls as it was thrown
                            : q.type == EffectParticle::Flake ? 1.2f     // a flake drifts
+                           : q.type == EffectParticle::Frost ? 0.6f     // an ice chip is thrown clean
                                                              : 0.9f;
-        /* Smoke has no ground to fall to and nothing weighing it down: it rises,
-         * slowing and spreading, until it is gone. */
-        const float gravity = q.type == EffectParticle::Puff     ? -0.15f
-                              : q.type == EffectParticle::Smoke  ? -0.5f
+        /* Smoke is heavy: it barely rises and falls to the road, where it
+         * lies and fades (below).  A drifting cloud is lighter and billows. */
+        const float gravity = q.light ? 1.8f   // snow spray: lighter than dirt
+                              : q.type == EffectParticle::Puff     ? -0.15f
+                              : q.type == EffectParticle::Smoke  ? (billowing ? smoke::kDriftGravity : smoke::kGravity)
                               : q.type == EffectParticle::Droplet ? 9.8f
                               : q.type == EffectParticle::Flake  ? 0.8f
+                              : q.type == EffectParticle::Frost  ? 7.5f
                                                                  : 9.8f;
         const float keep = std::exp(-drag * dt);
         for (int i = 0; i < 3; ++i)
@@ -958,24 +1181,41 @@ void move(float dt)
         q.v[1] -= gravity * dt;
         for (int i = 0; i < 3; ++i)
             q.p[i] += q.v[i] * dt;
-        q.size += q.grow * dt;
-        if (q.type != EffectParticle::Puff && q.type != EffectParticle::Smoke && q.p[1] < q.floor
-            && q.v[1] < 0.0f)
+        if (billowing)
         {
-            q.p[1] = q.floor;
-            if (q.type == EffectParticle::Droplet || q.type == EffectParticle::Flake)
-                q.life = q.age;   // a drop or a flake on the ground is gone
-            else if (q.type == EffectParticle::Grain || q.type == EffectParticle::Blade)
+            // Growing all the way to its own size, a little unevenly on the way.
+            const float wobble = 1.0f + 0.15f * SDL_sinf(q.seed * 6.2832f + q.age * 2.3f);
+            q.size += (q.sizeMax - q.size) * SDL_min(q.grow * wobble * dt, 1.0f);
+        }
+        else
+            q.size += q.grow * dt;
+        if (q.type != EffectParticle::Puff && !billowing && q.p[1] < q.floor && q.v[1] < 0.0f)
+        {
+            if (q.type == EffectParticle::Smoke)
             {
-                // Down: it lies there a moment, then is gone.
+                // Down on the road: it lies there, no longer growing, and fades.
+                q.p[1] = q.floor + smoke::kGrounding * q.size;
+                q.v[0] = q.v[1] = q.v[2] = 0.0f;
                 q.settled = true;
-                q.life = SDL_min(q.life, q.age + 0.35f);
             }
             else
             {
-                q.v[1] = -q.v[1] * 0.3f;   // a spark skips off the ground
-                q.v[0] *= 0.6f;
-                q.v[2] *= 0.6f;
+                q.p[1] = q.floor;
+                if (q.type == EffectParticle::Droplet || q.type == EffectParticle::Flake)
+                    q.life = q.age;   // a drop or a flake on the ground is gone
+                else if (q.type == EffectParticle::Grain || q.type == EffectParticle::Blade
+                         || q.type == EffectParticle::Frost)
+                {
+                    // Down: it lies there a moment, then is gone.
+                    q.settled = true;
+                    q.life = SDL_min(q.life, q.age + 0.35f);
+                }
+                else
+                {
+                    q.v[1] = -q.v[1] * 0.3f;   // a spark skips off the ground
+                    q.v[0] *= 0.6f;
+                    q.v[2] *= 0.6f;
+                }
             }
         }
     }
@@ -1054,64 +1294,127 @@ void grassFromWheels(win32::WinApplication* app, float dt)
     }
 }
 
+/* Snow under a moving car's wheels throws frost -- chips of ice and a lot of
+ * fine spray, lighter and wider than the dirt of a dry track.  The game throws
+ * nothing for a car only driving over it (kinds 2 and 5 are its slides), so
+ * every frame, from each wheel on snow (surface 15, `groundUnder` 3) of each
+ * car going faster than 6 m/s, more often the faster. */
+void frostFromWheels(win32::WinApplication* app, float dt)
+{
+    if (!snowSetting())
+        return;
+    for (x86::reg32 k = 0; k < 16; ++k)
+    {
+        const x86::reg32 car = 0x5e1120 + k * 0x9ac;
+        const float speed = std::fabs(float(app->getMemory<float>(car + 0xb8)));
+        if (!(speed > 6.0f) || app->getMemory<uint16_t>(car + 0x164) != 0)
+            continue;
+        const float velocity[3] = { app->getMemory<float>(car + 0xa4), app->getMemory<float>(car + 0xa8),
+                                    app->getMemory<float>(car + 0xac) };
+        for (int w = 0; w < 4; ++w)
+        {
+            if (random01() >= SDL_min(speed / 25.0f, 1.2f) * 3.0f * dt * setting()
+                || groundUnder(app, car, w) != 3)
+                continue;
+            float at[3];
+            wheelContact(app, car, w, at);
+            throwFrost(at, velocity);
+        }
+    }
+}
+
 /* What makes a tyre smoke: a wheel scrubbed sideways -- cornering at the limit,
  * or sliding -- a wheel spun up from low speed, a wheel locked under braking.
- * That is when the game lays its tyre marks, so it is when smoke comes off them
- * (the game's own kind 6, throwSmoke, only ever came off some ground).  Each
- * frame, each car of the race, from one of the wheels that is scrubbing, on
- * pavement: more often and thicker the harder it scrubs. */
+ * That is when a tyre mark is laid (skidLaid in native_skids.cpp, which asks
+ * back through tyreMarkSmoke what this frame's thickness is), so it is when
+ * smoke comes off them.  Every frame, every car of the race, this works out how
+ * thick the smoke should be -- the slide's sideways drag, the spin's throttle,
+ * the brake's speed band and how long it has been held (smoke:: above) -- and
+ * now and then makes a cloud at a wheel that is scrubbing, on pavement: a spin
+ * at the driven end, a handbrake at the rear.  It also keeps the brake's seconds
+ * and the speed a frame ago for the opponents, whose pedals are not ours. */
 void tyreSmoke(win32::WinApplication* app, float dt)
 {
-    const float smoke = smokeSetting();
-    if (smoke <= 0.0f || dt <= 0.0f)
+    if (smokeSetting() <= 0.0f || dt <= 0.0f)
         return;
     auto f = [app](x86::reg32 address) { return app->getMemory<float>(address); };
     const x86::reg32 player = playerCar(app);
+    const x86::sreg32 clock = x86::sreg32(app->getMemory<x86::reg32>(0x7d3684));
     for (x86::reg32 k = 0; k < 16; ++k)
     {
         const x86::reg32 car = 0x5e1120 + k * 0x9ac;
         const x86::reg32 record = app->getMemory<x86::reg32>(car + 0x220);
         if (record < 0x6fd52c || record >= 0x6fd52c + 16 * 0x6c || (record - 0x6fd52c) % 0x6c)
             continue;   // not in the race
-        if (app->getMemory<uint16_t>(car + 0x164) != 0)
-            continue;   // in the air, nothing on the road
+        const std::size_t slot = std::size_t(k);
+        const bool grounded = app->getMemory<uint16_t>(car + 0x164) == 0;
         const float velocity[3] = { f(car + 0xa4), f(car + 0xa8), f(car + 0xac) };
         const float speed = SDL_sqrtf(velocity[0] * velocity[0] + velocity[1] * velocity[1]
                                       + velocity[2] * velocity[2]);
-        if (!(speed > 4.0f))
-            continue;
         /* Sideways is the velocity across the car (+0xc0 is its right): over a
          * metre a second the tyres are being dragged over a road they no longer
          * roll along. */
         const float right[3] = { f(car + 0xc0), f(car + 0xc4), f(car + 0xc8) };
         const float lateral = SDL_fabsf(velocity[0] * right[0] + velocity[1] * right[1] + velocity[2] * right[2]);
-        float scrub = lateral > 1.2f ? SDL_min(1.0f, (lateral - 1.2f) / 3.0f) : 0.0f;
-        bool driven = false;   // the smoke comes off the wheels that are driven
+        float scrub = speed > 1.0f && lateral > 1.2f ? SDL_min(1.0f, (lateral - 1.2f) / 3.0f) : 0.0f;
+        bool spun = false;
+        float spin = 0.0f;
+        bool braking = false;
+        bool rear = false;   // whether its smoke comes off the rear wheels
         if (car == player)
         {
-            /* The first player's own pedals, 0 to 255: the throttle at 0x79c339
-             * and the brake at 0x79c33a (after the steering at 0x79c338). */
+            /* The first player's own pedals, 0 to 255: the throttle at 0x79c339,
+             * the brake at 0x79c33a and the handbrake in the bits at 0x79c33b. */
             const float throttle = float(app->getMemory<x86::reg8>(0x79c339)) / 255.0f;
             const float brake = float(app->getMemory<x86::reg8>(0x79c33a)) / 255.0f;
+            const bool handbrake = (app->getMemory<x86::reg8>(0x79c33b) & 0x04) != 0;
             const x86::reg32 limit = redline(app, car);
             const float revs = float(app->getMemory<x86::sreg32>(car + 0x590));
             const x86::reg32 gear = app->getMemory<x86::reg8>(car + 0x50b);
-            // Spun up from a standstill: throttle down, in gear, revs up, the car
-            // barely moving -- the wheels are going round faster than the road.
-            if (throttle > 0.6f && gear >= 2 && speed < 12.0f && limit && revs > 0.5f * float(limit))
-            {
-                scrub = SDL_max(scrub, throttle);
-                driven = true;
-            }
-            // Locked: the brakes hard on with the car still going.
-            if (brake > 0.6f && speed > 8.0f)
-                scrub = SDL_max(scrub, brake);
+            // Spun up from a standstill: throttle down, in gear, revs up (or
+            // pulling away in first), the car barely moving.
+            spun = grounded && throttle > 0.55f && gear >= 2 && speed < 12.0f
+                   && (speed < 8.0f || (limit && revs > 0.5f * float(limit)));
+            spin = throttle;
+            braking = grounded && speed > 3.0f && (brake > 0.5f || handbrake);
+            rear = (spun && !braking) || (handbrake && brake <= 0.5f);
         }
-        if (!(scrub > 0.05f))
+        else if (s_wasMoving[slot] && speed > 5.0f)
+        {
+            // The opponents' hard braking is a fall in their speed.
+            braking = (s_wasSpeed[slot] - speed) / dt > 3.0f;
+            rear = braking;
+        }
+        if (braking)
+            s_brakeSeconds[slot] += dt;
+        else
+            s_brakeSeconds[slot] = 0.0f;
+        const float accel = s_wasMoving[slot] ? (speed - s_wasSpeed[slot]) / dt : 0.0f;
+        s_wasSpeed[slot] = speed;
+        s_wasMoving[slot] = true;
+        float density = scrub;
+        if (spun)
+            density = SDL_max(density, 0.45f + 0.55f * spin);
+        if (braking)
+            density = SDL_max(density, brakeDensity(speed, s_brakeSeconds[slot]));
+        s_smokeThick[slot] = density;
+        /* A car that holds its speed -- hardly accelerating either way -- for a
+         * second while its tyres smoke is drifting: its clouds are the big,
+         * growing ones (smoke::kDrift... above). */
+        if (grounded && density > 0.06f && SDL_fabsf(accel) < smoke::kEasyAccel)
+            s_easySeconds[slot] += dt;
+        else
+            s_easySeconds[slot] = 0.0f;
+        s_drifting[slot] = s_easySeconds[slot] > smoke::kDriftSeconds;
+        if (!(density > 0.06f) || !grounded)
+            continue;
+        if (clock - s_smokeAt[slot] < s_smokeGap[slot] || random01() >= 0.25f + 0.75f * density)
             continue;
         const float forward[3] = { f(car + 0xd8), f(car + 0xdc), f(car + 0xe0) };
-        for (int w = 0; w < 4; ++w)
+        const x86::reg32 first = x86::reg32((clock + k) & 3);   // which wheel is tried first
+        for (int n = 0; n < 4; ++n)
         {
+            const int w = int((first + x86::reg32(n)) & 3);
             if (groundUnder(app, car, w) != 0)
                 continue;   // pavement: grass, dirt and snow have dust of their own
             float at[3];
@@ -1119,14 +1422,54 @@ void tyreSmoke(win32::WinApplication* app, float dt)
             // Which end of the car it is: the contact point, along its forward axis.
             const float ahead = (at[0] - f(car + 0x98)) * forward[0] + (at[1] - f(car + 0x9c)) * forward[1]
                                 + (at[2] - f(car + 0xa0)) * forward[2];
-            if (driven && ahead > 0.0f)
-                continue;   // a wheel spinning smokes at the driven end, not both
-            if (random01() >= scrub * 6.0f * dt * smoke)
-                continue;
-            throwSmoke(at, velocity);
-            break;   // one wheel a frame is enough to see
+            if (rear && ahead > 0.0f)
+                continue;   // spun or handbraked: the rear wheels, not both ends
+            throwSmoke(at, velocity, density, s_drifting[slot]);
+            s_smokeAt[slot] = clock;
+            s_smokeGap[slot] = smoke::kGapLeast
+                               + x86::sreg32(random01() * float(smoke::kGapMost - smoke::kGapLeast + 1));
+            break;
         }
     }
+}
+
+/* A piece of a tyre mark just laid (native_skids.cpp's skidLaid calls this):
+ * the wheel is being scrubbed, so smoke comes off where the mark is -- as thick
+ * as this frame's tyreSmoke found that car's scrub, and no more than a cloud
+ * every few ticks (a gap of its own, three to six), since a slide lays pieces at
+ * the wheel's own rate.  This is what puts smoke off an opponent's slide, and
+ * off every wheel the game or the port marks, not only the first player's
+ * pedals. */
+void tyreMarkSmoke(win32::WinApplication* app, x86::reg32 car, const float at[3], float speed)
+{
+    if (setting() <= 0.0f || smokeSetting() <= 0.0f || !win32::glide2x::effectParticlesDrawn()
+        || app->getMemory<x86::reg32>(0x6fd3b0) == 1)
+        return;   // the port draws none, or split screen (the game's own)
+    if (car < 0x5e1120 || car >= 0x5e1120 + 16 * 0x9ac)
+        return;
+    if ((car - x86::reg32(0x5e1120)) % 0x9ac)
+        return;
+    const std::size_t slot = std::size_t((car - x86::reg32(0x5e1120)) / 0x9ac);
+    // The frame's own thickness, or at least the speed the mark was laid at.
+    const float density = SDL_max(s_smokeThick[slot], speed > 6.0f ? smoke::kLeastBrake * speedShare(speed) : 0.0f);
+    if (!(density > 0.06f))
+        return;
+    const x86::sreg32 clock = x86::sreg32(app->getMemory<x86::reg32>(0x7d3684));
+    if (clock - s_smokeAt[slot] < s_smokeGap[slot] || random01() >= 0.35f + 0.65f * density)
+        return;
+    if (groundAt(app, at) != 0)
+    {
+        s_smokeAt[slot] = clock;   // pavement only: grass, dirt and snow throw their own
+        s_smokeGap[slot] = smoke::kGapLeast
+                           + x86::sreg32(random01() * float(smoke::kGapMost - smoke::kGapLeast + 1));
+        return;
+    }
+    const float velocity[3] = { app->getMemory<float>(car + 0xa4), app->getMemory<float>(car + 0xa8),
+                                app->getMemory<float>(car + 0xac) };
+    throwSmoke(at, velocity, density, s_drifting[slot]);
+    s_smokeAt[slot] = clock;
+    s_smokeGap[slot] = smoke::kGapLeast
+                       + x86::sreg32(random01() * float(smoke::kGapMost - smoke::kGapLeast + 1));
 }
 
 bool particleTakeOver(win32::WinApplication* app, x86::CPU& cpu)
@@ -1135,7 +1478,7 @@ bool particleTakeOver(win32::WinApplication* app, x86::CPU& cpu)
     x86::reg32 kind = cpu.eax;
     /* The game's smoke (6) -- off a wheel spinning or locked -- is the port's
      * own: on grass, grass thrown up instead of a dark cloud; anywhere else,
-     * smoke blacker than the game's, flying up and spreading (throwSmoke). */
+     * a heavy dark cloud that drags and falls (throwSmoke). */
     if (kind == 6 && !s_inner && setting() > 0.0f && win32::glide2x::effectParticlesDrawn()
         && app->getMemory<x86::reg32>(0x6fd3b0) != 1)
     {
@@ -1183,9 +1526,19 @@ bool particleTakeOver(win32::WinApplication* app, x86::CPU& cpu)
     else if (kind == 7 || kind == 8)
         s_gameWeather += 1.0f;   // counted for the mean; what falls is fallWeather's
     else if (kind == 6)
-        throwSmoke(at, velocity);
+    {
+        const float speed = SDL_sqrtf(velocity[0] * velocity[0] + velocity[1] * velocity[1]
+                                      + velocity[2] * velocity[2]);
+        throwSmoke(at, velocity, speedShare(speed), false);
+    }
     else if (kind == 2 || kind == 5)
-        throwDirt(at, velocity, kind == 5);
+    {
+        // On snow the game's dust is the port's frost: chips of ice and spray.
+        if (groundAt(app, at) == 3)
+            throwFrost(at, velocity);
+        else
+            throwDirt(at, velocity, kind == 5);
+    }
     else
         throwSpark(at, velocity);
     cpu.eax = 0;
@@ -1334,6 +1687,14 @@ void frameParticles(win32::WinApplication* app)
         {
             s_brakeGlow[k] = 0.0f;   // out
             s_brakeKnown[k] = false;
+            s_smokeThick[k] = 0.0f;
+            s_brakeSeconds[k] = 0.0f;
+            s_wasMoving[k] = false;
+            s_easySeconds[k] = 0.0f;
+            s_drifting[k] = false;
+            s_smokeAt[k] = -1000;
+            s_smokeGap[k] = smoke::kGapLeast
+                            + x86::sreg32(random01() * float(smoke::kGapMost - smoke::kGapLeast + 1));
         }
         s_clock = clock;   // and nothing is moved by it
     }
@@ -1358,6 +1719,7 @@ void frameParticles(win32::WinApplication* app)
         if (setting() > 0.0f && app->getMemory<x86::reg32>(0x6fd3b0) != 1)
         {
             grassFromWheels(app, dt);
+            frostFromWheels(app, dt);
             tyreSmoke(app, dt);
         }
     }
@@ -1479,7 +1841,8 @@ void projectParticles(win32::WinApplication* app, x86::reg32 view)
         // A grain's quad is twice it: on grass the renderer draws a blade in it.
         const bool small = q.type == EffectParticle::Grain || q.type == EffectParticle::Blade;
         e.size = SDL_min(scale * q.size / z * (small ? 2.0f : 1.0f), small ? 120.0f : 300.0f);
-        e.turn = q.seed * 6.2832f + q.age * (q.seed - 0.5f) * 14.0f;
+        e.turn = q.type == EffectParticle::Smoke ? q.aspect
+                                                 : q.seed * 6.2832f + q.age * (q.seed - 0.5f) * 14.0f;
         if (e.size < 0.6f)
             continue;
         e.r = q.colour[0];
