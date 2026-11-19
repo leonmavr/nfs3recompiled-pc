@@ -245,6 +245,103 @@ bool projectionSet(win32::WinApplication* app, x86::CPU& cpu)
     return false;
 }
 
+/* Speed you can feel, 4: the camera's bumps at speed (NFS_SPEED_SHAKE, how
+ * big: 2.5 by default, 0 or off for none, up to 5; NFS_SPEED_SHAKE_RATE, how
+ * quick: 3.5, from 0.25 to 5 -- both picked by eye, 2026-11-19).
+ *
+ * Not a steady wobble: now and then -- a quiet gap of 0.5 to 1.6 s, then one
+ * smooth bump, up and back down through one turn of a sine under a soft
+ * window -- the way a fast car's body takes a seam in the road.  From 150 km/h
+ * to 300 (held there) the bumps grow from 1.2 cm to twice that, and come 1.5
+ * times as quick (shorter, with shorter gaps) -- each times its switch.  A shift up above 150 km/h
+ * throws one at once, twice the size.  The first player's own views only (the
+ * chase and the in-car), by the race's clock, so a pause or a replay's stop
+ * holds it; the camera is moved along its own up. */
+namespace speedshake
+{
+constexpr float kFrom = 150.0f / 3.6f;    // m/s: none below
+constexpr float kFull = 300.0f / 3.6f;    // m/s: all of it from here
+constexpr float kSize = 0.012f;           // m: a bump at 150 km/h, twice at 300
+constexpr float kLength = 0.22f;          // s: a bump at 150 km/h, over 1.5 at 300
+constexpr float kGapLeast = 0.5f;         // s: between two bumps, at 150 km/h
+constexpr float kGapMost = 1.6f;
+constexpr float kShift = 2.0f;            // a shift up's bump, times an ordinary one
+}  // namespace speedshake
+
+static float shakeSetting(const char* name, float otherwise, float least, float most)
+{
+    const char* value = SDL_getenv(name);
+    if (!value || !*value || SDL_strcasecmp(value, "on") == 0)
+        return otherwise;
+    if (SDL_strcmp(value, "0") == 0 || SDL_strcasecmp(value, "off") == 0)
+        return 0.0f;
+    const float parsed = float(SDL_atof(value));
+    return parsed >= least && parsed <= most ? parsed : otherwise;
+}
+
+/* How far the camera is moved up (down when less than 0) this frame; `passed`
+ * the race's ticks (64 a second) since the last frame, < 0 or over 64 for a
+ * new race. */
+static float speedShake(win32::WinApplication* app, x86::reg32 car, x86::sreg32 passed)
+{
+    static const float size = shakeSetting("NFS_SPEED_SHAKE", 2.5f, 0.0f, 5.0f);
+    static const float rate = shakeSetting("NFS_SPEED_SHAKE_RATE", 3.5f, 0.25f, 5.0f);
+    static float s_gap = 1.0f;      // s until the next bump
+    static float s_age = -1.0f;     // s into the bump going, or < 0 for none
+    static float s_height = 0.0f;   // its size, m
+    static float s_length = 0.2f;   // and how long it lasts, s
+    static x86::reg32 s_gear = 0;
+    if (passed < 0 || passed > 64)
+    {
+        s_age = -1.0f;
+        s_gap = 1.0f;
+        s_gear = 0;
+        return 0.0f;
+    }
+    if (size <= 0.0f || rate <= 0.0f)
+        return 0.0f;
+    const float dt = float(passed) / 64.0f;
+    const float speed = SDL_fabsf(app->getMemory<float>(car + 0xb8));
+    const float share = speed == speed ? SDL_clamp((speed - speedshake::kFrom) / (speedshake::kFull - speedshake::kFrom), 0.0f, 1.0f) : 0.0f;
+    const bool fast = speed >= speedshake::kFrom;
+    const float quick = rate * (1.0f + 0.5f * share);
+    const float height = size * speedshake::kSize * (1.0f + share);
+    const x86::reg32 gear = app->getMemory<x86::reg8>(car + 0x50b);
+    const bool shifted = s_gear >= 1 && s_gear <= 0x63 && gear > s_gear && gear >= 2;
+    s_gear = gear;
+    if (fast && shifted)
+    {
+        s_age = 0.0f;   // at once, whatever was going
+        s_height = height * speedshake::kShift;
+        s_length = speedshake::kLength / quick * 1.2f;
+    }
+    else if (s_age < 0.0f && dt > 0.0f)
+    {
+        s_gap -= dt;
+        if (s_gap <= 0.0f)
+        {
+            s_gap = (speedshake::kGapLeast + SDL_randf() * (speedshake::kGapMost - speedshake::kGapLeast)) / quick;
+            if (fast)
+            {
+                s_age = 0.0f;
+                s_height = height * (0.6f + 0.4f * SDL_randf());
+                s_length = speedshake::kLength / quick;
+            }
+        }
+    }
+    if (s_age < 0.0f)
+        return 0.0f;
+    s_age += dt;
+    const float u = s_age / s_length;
+    if (u >= 1.0f)
+    {
+        s_age = -1.0f;
+        return 0.0f;
+    }
+    const float window = SDL_sinf(SDL_PI_F * u);   // soft at both ends
+    return s_height * SDL_sinf(2.0f * SDL_PI_F * u) * window;
+}
+
 bool cameraToView(win32::WinApplication* app, x86::CPU& cpu)
 {
     const float most = pullSetting();
@@ -302,6 +399,10 @@ bool cameraToView(win32::WinApplication* app, x86::CPU& cpu)
             place[k] = place[k] - forward[k] * s_pull + up[k] * s_pull * 0.25f;
     // A crash's shake, in any of the player's own views (native_crash.cpp).
     crashShake(app, place, right, up);
+    // And the bumps at speed (speedShake).
+    const float bump = speedShake(app, car, passed);
+    for (int k = 0; k < 3; ++k)
+        place[k] += up[k] * bump;
     for (int k = 0; k < 3; ++k)
         app->getMemory<float>(camera + 4 * k) = place[k];
     return false;

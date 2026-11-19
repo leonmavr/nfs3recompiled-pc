@@ -383,14 +383,14 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 - [ ] Sparks on car-to-car scrapes, not only on walls (`NFS_SPARKS`).
 - [ ] Headlight beams seen in rain and haze: a soft additive cone ahead of each
   lit lamp, only when it rains or the air is hazy.
-- [ ] Tracks at light are very dark. Needs higher ambient light or some other
+- [ ] Tracks at night are very dark. Needs higher ambient light or some other
   way to consistence keep tracks brighter at night.
   - Implemented (2026-11-19, `NFS_NIGHT_LIGHT`, 0.6; 0/off for none, up to
     2), not yet seen in a race: at night the whole-picture pass lifts the
     darks by a gamma of 1 / (1 + it) -- 0.1 to 0.24, 0.5 to 0.65, white kept
     -- the added part a little cool, before the lamps' halos and glow so they
     are not lifted with it.
-- [ ] Some speed feel immersion imrovements: the more the sideways the motion
+- [x] Some speed feel immersion imrovements: the more the sideways the motion
   blurred area is, the more aggressive streak outwards is applied by blur.At
   higher speeds; camea has some subtle smooth up/down vibrations to enhance the
   level of speed. Not constant sinusoidal ones, but like: no, no, no, no, yes up
@@ -399,13 +399,17 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   would be. The vibration amplitude and frequency depends on speed; ramps up from 150kph to
   300kph, where it saturates. amplitude doubles from 150 to 300 and frequency
   goes up by 1.5x. These can also be configured in NFS_ variables.
-  - The streaks (2026-11-19, not yet seen in a race; the camera's vibration
-    still to do): across each side band
+  - The streaks (2026-11-19, not yet seen in a race): across each side band
     the streak's longest grows with the square of how far out the pixel is
     (4% of the view's height at the band's edge to 12% at the picture's), and
     the bands are stretched outwards -- each pixel's samples start up to 3.5%
     of the height further in, by the same square and the speed. Same eight
     samples, no new pass.
+  - The vibration (2026-11-19, `NFS_SPEED_SHAKE` 2.5, `NFS_SPEED_SHAKE_RATE`
+    3.5, by eye): from 150 km/h, now and then (gaps of 0.5 to 1.6 s over the
+    rate) one smooth up-and-down bump of the camera, 1.2 cm times the size at
+    150 km/h to twice at 300, 1.5 times as quick there; a shift up above 150 km/h throws
+    one at once, twice the size (`speedShake`, `native_effects.cpp`).
 
 ### Races/locations
 - [x] Double the distance that headlights light up when on. Add smoother light,

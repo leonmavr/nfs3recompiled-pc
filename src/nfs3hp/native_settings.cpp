@@ -118,6 +118,8 @@ each one does.
 # NFS_FAST_LOAD = 1
 # NFS_CAMERA_PULL = 1.2
 # NFS_SPEED_FOV = 1
+# NFS_SPEED_SHAKE = 2.5
+# NFS_SPEED_SHAKE_RATE = 3.5
 
 [The driving]
 # NFS_SURFACE_GRIP = 1
