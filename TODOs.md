@@ -93,8 +93,15 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     length with a faint gap now and then. The game marked only the player's
     slides, so the port lays a sliding car's marks itself -- every car, the
     opponents' and cops' too (`skidPedals`, on pavement, 30 cm a piece).
-- [ ] Marks of their own on loose ground -- dirt, sand, gravel, mud, grass,
+- [x] Marks of their own on loose ground -- dirt, sand, gravel, mud, grass,
   snow -- where the asphalt's black rubber is not what a tyre would leave.
+  - Done (2026-11-19): the per-surface table (tint, alpha, width, life), the
+    rut's colour in the piece's +0x310 byte and the patched draw (`markTint`),
+    and the four pictures recognised at upload by their alpha hash -- the
+    game's own pointers are useless there, it uploads everything through one
+    shared staging buffer. Pavement unchanged; `NFS_SURFACE_TEST` now makes
+    every wheel that ground, so each surface is testable anywhere. See
+    TECHNICAL.md, "A mark in the ground's own colour".
   - Researched (2026-11-19): a piece keeps only a shape and two alphas --
     one of four `skd` pictures, black RGB with the shape in the alpha, drawn
     by `sub_4c6f00`. Black blended over the ground darkens it, but darkening

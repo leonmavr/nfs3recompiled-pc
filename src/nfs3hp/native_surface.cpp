@@ -120,6 +120,20 @@ float random11()
  * of ground -- 0 paved, 1 grass, 2 sand/dirt/gravel, 3 snow, 4 mud, 5 other. */
 int groundUnder(win32::WinApplication* app, x86::reg32 car, int wheel)
 {
+    /* Test only (NFS_SURFACE_TEST=grass, dirt, snow or mud): every wheel on that
+     * ground -- the marks, the dust and the frost it throws included. */
+    static const int tested = [] {
+        const char* text = SDL_getenv("NFS_SURFACE_TEST");
+        if (!text)
+            return -1;
+        if (!SDL_strcasecmp(text, "grass")) return 1;
+        if (!SDL_strcasecmp(text, "dirt")) return 2;
+        if (!SDL_strcasecmp(text, "snow")) return 3;
+        if (!SDL_strcasecmp(text, "mud")) return 4;
+        return -1;
+    }();
+    if (tested >= 0)
+        return tested;
     const x86::reg32 surface = wheelSurface(app, car, wheel);
     if (word(app, 0x553090 + (surface & 0xf) * 0x24) == 1)
         return 0;

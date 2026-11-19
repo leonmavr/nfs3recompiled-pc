@@ -876,7 +876,8 @@ surface, none below 15 km/h and all of it from 32 km/h:
   with speed.
 
 `NFS_SURFACE_GRIP` (1; up to 3 stronger, `0`/`off` for none).
-`NFS_SURFACE_TEST=grass|dirt|snow|mud` treats every surface as that one, and
+`NFS_SURFACE_TEST=grass|dirt|snow|mud` treats every surface as that one -- its
+grip, and the marks, dust and frost it throws -- and
 `NFS_SURFACE_TRACE=1` (or a number of ticks between lines) logs the wheels' surfaces (`[SURFACE]`), for testing.
 
 ### Spike strips (in the making)
@@ -1889,20 +1890,51 @@ each piece.
 The game lays marks only for the player's slide. `skidPedals` (from
 `collisionEffects`, once for every car each frame) lays the port's own through
 `sub_4c6cb0` too (`guest::call`; the two pairs in scratch below the stack, 48
-of 255 before `skidLaid`'s shading), on pavement only, 30 cm a piece. For the
+of 255 before `skidLaid`'s shading), on any ground the table below gives a mark
+to, 30 cm a piece. For the
 first player's car: under the rear wheels while they spin -- full throttle
 pulling away in first below 8 m/s, or revved past half the redline below
 12 m/s -- under all four once the brake is past 0.5 above 3 m/s, and under the
 rear two with the handbrake on, both from a sixteenth of a second of it (a
 second of the brake past 0.55 until 2026-11-17: they were hardly ever laid).
 And for **every car**, the opponents' and the cops' too: its velocity across it
-over 1.2 m/s -- sliding -- marks the road under each wheel on pavement, since
-the game left the AI's slides with no mark at all. The handbrake (bit 0x04 of
+over 1.2 m/s -- sliding -- marks the road under each wheel on any ground with a
+mark of its own, since the game left the AI's slides with no mark at all. The handbrake (bit 0x04 of
 `0x79c33b`) makes a piece 1.7 times darker, and a wet road (`0x6fd4cc`) every
 piece 1.6 times: the wet road darkens the road, and its reflection is not
 added over what lies on the road half seen (alpha under 0.98), so the marks
 show in the rain. The game's first block of a race is filled twice over, so a
 race's first sixteen pieces are not kept.
+
+**A mark in the ground's own colour** (2026-11-19). `skidLaid` reads what is
+under the piece (`groundAt`, `native_particles.cpp`), and `kSurfaceMarks`
+gives each kind of ground (0 to 5) whether it marks and the mark's tint, alpha,
+width and life against the asphalt's: pavement black and as it was; grass
+`#223d18` at 0.3 of the alpha, 0.8 of the width and a third of the life; sand,
+dirt and gravel `#6a3d1c` at 0.5, half the life; snow `#b9c6cf` at 0.2 for a
+tenth of the life; mud `#2e2114` at 0.7; other ground `#4a3a2a` at 0.4. The
+colour must be a colour: the four `skd` pictures are black, and black blended
+over the ground only darkens it. `sub_4c6f00` builds each piece's polygon
+colour as `alpha << 24 | 0xffffff`, a per-piece RGB that is always white, so
+the port patches that one build (0x4c7068 and 0x4c708a) to OR in `markTint` --
+the palette's RGB for the piece's ground -- and the renderer leaves the
+picture's black RGB out of the colour combine for those four pictures, so the
+tint is what shows while the alpha still shapes the mark. The surface rides in
+the piece's +0x310 byte, whose low two bits are which picture and whose six
+above are the ground's kind: `skidLaid` writes it and the texture lookup
+(0x4c704a) masks the low two before indexing the four-picture table.
+
+Which four pictures they are is recognised by their alpha, not by pointer or
+name: the game uploads every texture through one shared staging buffer, so
+`sub_4c6f00`'s record pointers and `GrTexInfo.data` all describe the same
+buffer. A 32x32 picture is hashed (FNV-1a over its alpha, `skidPicture` in
+`gliderenderer.h`) and matched against the four `skd` shapes at upload
+(`ThrashRenderer::uploadTexture`, `GlideRenderer::setTextureData`), and those
+addresses alone have the RGB combine left out (the direct renderer's
+`Texture::skid`, the atlas's `m_skidAddresses`). `NFS_SURFACE_TEST` now also
+makes `groundUnder` return the ground it names, so every surface's mark, dust
+and frost can be tried on any track. `NFS_TYRE_MARKS_TRACE=1` logs each
+piece's ground and tint with the rest.
 
 ### Steering in the air
 

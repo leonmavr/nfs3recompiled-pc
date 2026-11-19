@@ -1085,6 +1085,9 @@ void GlideRenderer::setTexture(x86::reg32 tmu, x86::reg32 address)
         info = m_tmus[tmu]->getTextureInfo(0);
     if (!*info)
         return;
+    /* A tyre mark's picture: its RGB is left out of the combine, so the
+     * piece's own colour (the ground's rut) is what the mark shows. */
+    m_skid = m_skidAddresses.count(address) != 0;
     m_textureOffsetW = 256 >> (*info)->lod;
     m_textureOffsetX = (*info)->x;
     m_textureOffsetY = (*info)->y;
@@ -1096,6 +1099,13 @@ void GlideRenderer::setTextureData(x86::reg32 tmu, x86::reg32 address, const voi
                                    x86::reg32 largeMipmap, x86::reg32 smallMipmap, TextureFormat format)
 {
     NFS2_ASSERT(tmu == 0);
+    /* A tyre mark's picture (one of the four skd shapes), for setTexture: its
+     * alpha is the shape and its RGB is black, so the piece's own colour is
+     * what the mark is drawn in. */
+    if (skidPicture(data, 256 >> largeMipmap, format))
+        m_skidAddresses.insert(address);
+    else
+        m_skidAddresses.erase(address);
     x86::reg32 largeMipmapSize = 256 >> largeMipmap;
     x86::reg32 smallMipmapSize = 256 >> smallMipmap;
 
@@ -1570,7 +1580,7 @@ void GlideRenderer::drawTriangle(const GrVertex* a, const GrVertex* b, const GrV
     shared.atlasInfo[1] = std::uint16_t(m_textureOffsetW);
     shared.atlasInfo[2] = std::uint16_t(m_textureOffsetX);
     shared.atlasInfo[3] = std::uint16_t(m_textureOffsetY);
-    shared.combine[0] = x86::reg8(m_colorFactor != 0.f);
+    shared.combine[0] = x86::reg8(m_colorFactor != 0.f && !m_skid);
     shared.combine[1] = x86::reg8(m_alphaFactor != 0.f);
     shared.combine[2] = x86::reg8((m_texWrapS ? 1 : 0) + (m_texWrapT ? 2 : 0) + 4 * int(m_textureMipLevels));
     /* mode 2 is GR_FOG_WITH_TABLE; iterated-alpha fog (mode 1) would take the

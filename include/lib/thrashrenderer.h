@@ -233,6 +233,7 @@ private:
         bool light;             // a lamp's glow, glw0 or glw3 (the light layer, thrashrenderer.cpp)
         bool wetStreak = false; // glw4, a lamp's streak on a wet road
         float meanLuma = 0.0f;  // how bright its picture is, for NFS_SPRITE_TRACE
+        bool skid = false;      // one of the four tyre-mark shapes (skidPicture)
     };
 
     void initGl();
@@ -366,6 +367,9 @@ private:
     x86::reg32              m_texture;
     x86::reg32              m_textureLevels;
     int                     m_textureFormat;
+    /* A tyre mark's picture drawn now: its RGB is left out of the combine, so
+     * the piece's own colour shows. */
+    bool                    m_textureSkid = false;
     x86::reg32              m_renderStamp;
     Uint64                  m_lastShownNs = 0;   // while loading: when a frame last went out (swap)
     std::vector<std::array<float, 64>> m_fogTables;

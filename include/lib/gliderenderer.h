@@ -4,6 +4,8 @@
 #include <lib/winapp.h>
 #include <winapi/types.h>
 #include <array>
+#include <cstdint>
+#include <unordered_set>
 #include <vector>
 
 namespace win32
@@ -89,6 +91,65 @@ struct GlideCounters
 /* Whether the shader writes depth in the Voodoo's 16-bit steps for a depth
  * buffer of this many bits on this GPU (gliderenderer.cpp). */
 bool needsDepthSteps(int depthBits, const char* renderer);
+
+/* The four tyre-mark pictures (skd0 to skd3, sfx.fsh's 32x32 alpha shapes),
+ * told apart from every other texture by the alpha they carry -- their names
+ * and image pointers are the game's, not the renderer's, and it uploads them
+ * through one shared staging buffer.  A 32x32 picture whose alpha hash is one
+ * of these is a mark's: its black RGB is then left out of the combine, so the
+ * piece's own colour -- the ground's rut (markTint, native_skids.cpp) -- is
+ * what shows.  The hashes are FNV-1a over the picture's alpha, top row first,
+ * the nibble of an ARGB4444 texel or the byte of an ARGB8888 one. */
+constexpr std::uint64_t kSkidHash[4] = {
+    0x8fb8f0fe8cf5776eull,   // skd0
+    0x3ed5708e7099fa42ull,   // skd1
+    0x80314fb704e1727aull,   // skd2
+    0x9421bcea667f0a11ull,   // skd3 (4444); 0x590e1b7548e533b0 if uploaded 8888
+};
+
+inline bool skidPictureHash(std::uint64_t hash)
+{
+    for (std::uint64_t known : kSkidHash)
+        if (hash == known)
+            return true;
+    return hash == 0x590e1b7548e533b0ull;   // skd3, an ARGB8888 upload
+}
+
+inline std::uint64_t alphaHash4444(const void* data, int texels)
+{
+    const x86::reg16* words = static_cast<const x86::reg16*>(data);
+    std::uint64_t hash = 1469598103934665603ull;
+    for (int i = 0; i < texels; ++i)
+    {
+        hash ^= (x86::reg32(words[i]) >> 12) & 15;
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+inline std::uint64_t alphaHash8888(const void* data, int texels)
+{
+    const x86::reg8* bytes = static_cast<const x86::reg8*>(data);
+    std::uint64_t hash = 1469598103934665603ull;
+    for (int i = 0; i < texels; ++i)
+    {
+        hash ^= bytes[i * 4 + 3];
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+/* Whether a texture the game is uploading is one of the four mark pictures. */
+inline bool skidPicture(const void* data, int side, TextureFormat format)
+{
+    if (side != 32)
+        return false;
+    if (format == TF_ARGB_4444)
+        return skidPictureHash(alphaHash4444(data, side * side));
+    if (format == TF_ARGB_8888)
+        return skidPictureHash(alphaHash8888(data, side * side));
+    return false;
+}
 
 /* What glide2x.cpp draws through: the Voodoo2 emulated over a texture atlas
  * (GlideRenderer), or the native THRASH driver's own renderer, with a texture
@@ -239,6 +300,11 @@ private:
     x86::reg32              m_textureOffsetW;
     float                   m_colorFactor;
     float                   m_alphaFactor;
+    /* Each Glide texture address whose picture is one of the four tyre-mark
+     * shapes (skidPicture): its RGB is left out of the combine, so the piece's
+     * own colour shows. */
+    std::unordered_set<x86::reg32> m_skidAddresses;
+    bool                    m_skid = false;
     x86::reg32              m_fogMode;
     float                   m_fogColor[3];
     /* The fog tables the queued draw calls use, GR_FOG_TABLE_SIZE entries each,

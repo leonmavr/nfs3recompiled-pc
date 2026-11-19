@@ -46,7 +46,7 @@ constexpr x86::reg32 kRing = 0x560110;          // the blocks
 constexpr x86::reg32 kInUse = 0x7d5758;         // how many are in use
 constexpr x86::reg32 kFilling = 0x7d5754;       // the one being filled
 constexpr x86::reg32 kBlockSize = 0x340;
-constexpr x86::reg32 kPieces = 0xc, kCorners = 0x10, kAlphas = 0x320;
+constexpr x86::reg32 kPieces = 0xc, kCorners = 0x10, kAlphas = 0x320, kTypes = 0x310;
 constexpr x86::reg32 kPiecesABlock = 16;
 constexpr x86::reg32 kRaceClock = 0x7d3684;      // 64 a second
 constexpr x86::reg32 kCarList = 0x5efc48, kCarCount = 0x5efda0, kMaxCars = 16;
@@ -81,6 +81,25 @@ constexpr float kMarkHalfWidth = 0.11f;                  // m
 constexpr x86::reg8 kHandbrakeBit = 0x04;                // in kActionBits (Space, seen in a trace)
 constexpr x86::reg8 kOwnAlpha = 48;                      // before skidLaid's shading, as the game's are 28
 
+/* What each kind of ground leaves (groundAt's 0 to 5): on, the rut's own
+ * colour (RRGGBB -- the piece's per-vertex RGB, which the renderer turns the
+ * mark's black picture into), and how much of the asphalt's alpha, width and
+ * life.  A loose surface takes a lesser, narrower mark that fades sooner. */
+struct SurfaceMark
+{
+    bool on;
+    x86::reg32 tint;
+    float alpha, width, life;
+};
+constexpr SurfaceMark kSurfaceMarks[6] = {
+    { true, 0x000000, 1.0f, 1.0f, 1.0f },    // pavement: the black rubber it is
+    { true, 0x223d18, 0.3f, 0.8f, 0.33f },   // grass: a dark green flattened strip
+    { true, 0x6a3d1c, 0.5f, 0.8f, 0.5f },    // sand, dirt, gravel: burnt orange-brown
+    { true, 0xb9c6cf, 0.2f, 0.8f, 0.15f },   // snow: a pale line, briefly
+    { true, 0x2e2114, 0.7f, 0.9f, 0.4f },    // mud: a wet, nearly black brown
+    { true, 0x4a3a2a, 0.4f, 0.8f, 0.5f },    // other ground: a faint brown-grey
+};
+
 }  // namespace
 
 /* The ring's size (tools/apply_tyre_marks.py's patches read it).  The game's
@@ -99,6 +118,7 @@ struct Piece
 {
     x86::sreg32 laid = -1;
     std::uint8_t alpha[2] = {};   // as the port made it
+    std::uint8_t tint = 0;        // kSurfaceMarks' kind (the piece's +0x310 high bits)
 };
 Piece s_pieces[kBlocks][kPiecesABlock];
 float s_lastEnd = -1.0f;          // the last piece's end darkness, 0 to 1
@@ -136,6 +156,9 @@ float clamp01(float x) { return x < 0.0f ? 0.0f : x > 1.0f ? 1.0f : x; }
 /* From native_particles.cpp: a tyre mark has been laid, so the tyre is being
  * scrubbed and its smoke comes off there (at, and the car laying it). */
 void tyreMarkSmoke(win32::WinApplication* app, x86::reg32 car, const float at[3], float speed);
+/* And what the ground is at a point: 0 pavement, 1 grass, 2 sand/dirt/gravel,
+ * 3 snow, 4 mud, 5 other, -1 for no wheel near -- the surface mark's kind. */
+int groundAt(win32::WinApplication* app, const float at[3]);
 
 bool tyreMarksOn()
 {
@@ -146,6 +169,18 @@ bool tyreMarksOn()
 x86::reg32 tyreMarkBlocks()
 {
     return tyreMarksOn() ? kBlocks : 64;
+}
+
+/* The RGB the mark's picture is drawn in, for the piece sub_4c6f00 is drawing
+ * now: frame is that function's ebp, whose [ebp-0xc] is the block's +0x310
+ * plus the piece -- the byte this port put `kind << 2 | shape` into.  Patched
+ * in at 0x4c7068 and 0x4c708a (tools/apply_tyre_marks.py). */
+x86::reg32 markTint(win32::WinApplication* app, x86::sreg32 frame)
+{
+    const x86::reg32 type = app->getMemory<x86::reg32>(frame - 0xc);
+    const x86::reg8 byte = app->getMemory<x86::reg8>(type);
+    const x86::reg32 kind = x86::reg32(byte >> 2);
+    return kSurfaceMarks[kind < 6 ? kind : 0].tint;
 }
 
 /* At sub_4c6cb0's end, after a piece is laid (its count just raised). */
@@ -197,9 +232,13 @@ void skidLaid(win32::WinApplication* app)
         tyreMarkSmoke(app, nearestCar, c[3], speed);
     if (!tyreMarksOn())
         return;
+    const int atKind = groundAt(app, c[3]);
+    const int kind = atKind < 0 ? 0 : atKind;
+    const SurfaceMark& mark = kSurfaceMarks[kind];
     const float fast = clamp01(speed / kFullSpeed);
-    // A little wider the faster, about each edge pair's middle.
-    const float width = kWidthSlow + (kWidthFast - kWidthSlow) * fast;
+    // A little wider the faster, about each edge pair's middle; a rut a little
+    // narrower than a tyre's black smear.
+    const float width = (kWidthSlow + (kWidthFast - kWidthSlow) * fast) * mark.width;
     for (int pair = 0; pair < 2; ++pair)
     {
         float* a = c[pair * 2];
@@ -215,7 +254,7 @@ void skidLaid(win32::WinApplication* app)
         for (int i = 0; i < 3; ++i)
             app->getMemory<float>(corners + x86::reg32(k * 12 + i * 4)) = c[k][i];
     // Darker the faster; uneven along its length, now and then all but a gap.
-    float shade = (kDarkSlow + (kDarkFast - kDarkSlow) * fast) * (1.0f - kUneven * random01());
+    float shade = (kDarkSlow + (kDarkFast - kDarkSlow) * fast) * (1.0f - kUneven * random01()) * mark.alpha;
     // The first player's handbrake: much darker.
     if (nearestCar == app->getMemory<x86::reg32>(kPlayerCar) && (app->getMemory<x86::reg8>(kActionBits) & kHandbrakeBit))
         shade *= kHandbrakeDark;
@@ -223,6 +262,12 @@ void skidLaid(win32::WinApplication* app)
         shade *= kWetDark;
     if (random01() < kGapChance)
         shade *= kGapShare;
+    /* The rut's colour: the surface's kind in the six high bits of the piece's
+     * +0x310 byte, whose low two are which skd picture to draw (markTint reads
+     * it back at 0x4c7068). */
+    const x86::reg32 types = block + kTypes + piece;
+    const x86::reg8 shape = x86::reg8(app->getMemory<x86::reg8>(types) & 3);
+    app->getMemory<x86::reg8>(types) = x86::reg8(shape | (x86::reg8(kind) << 2));
     // Starting where the last one ended, if it carries on from it.
     float jump = 0.0f;
     for (int i = 0; i < 3; ++i)
@@ -234,6 +279,7 @@ void skidLaid(win32::WinApplication* app)
     Piece& p = s_pieces[index][piece];
     p.alpha[0] = std::uint8_t(std::lround(SDL_min(255.0f, was0 * start)));
     p.alpha[1] = std::uint8_t(std::lround(SDL_min(255.0f, was1 * shade)));
+    p.tint = std::uint8_t(kind);
     p.laid = x86::sreg32(app->getMemory<x86::reg32>(kRaceClock));
     app->getMemory<x86::reg8>(alphas) = p.alpha[0];
     app->getMemory<x86::reg8>(alphas + 1) = p.alpha[1];
@@ -242,8 +288,9 @@ void skidLaid(win32::WinApplication* app)
         s_lastCorner[i] = c[3][i];
     static const bool traced = SDL_getenv("NFS_TYRE_MARKS_TRACE") != nullptr;
     if (traced)
-        SDL_Log("[SKID] t %d block %u piece %u speed %.1f width %.2f alpha %u-%u (was %.0f-%.0f)%s", int(p.laid), unsigned(index),
-                unsigned(piece), speed, width, unsigned(p.alpha[0]), unsigned(p.alpha[1]), was0, was1, carriesOn ? " on" : "");
+        SDL_Log("[SKID] t %d block %u piece %u speed %.1f width %.2f alpha %u-%u (was %.0f-%.0f) ground %d tint %06x%s",
+                int(p.laid), unsigned(index), unsigned(piece), speed, width, unsigned(p.alpha[0]), unsigned(p.alpha[1]),
+                was0, was1, kind, unsigned(mark.tint), carriesOn ? " on" : "");
 }
 
 /* Each frame: the pieces past their life fade and go. */
@@ -276,9 +323,10 @@ void skidFrame(win32::WinApplication* app)
             if (p.laid < 0)
                 continue;
             const float age = float(clock - p.laid);
-            if (age < life - fade)
+            const float pieceLife = life * kSurfaceMarks[p.tint < 6 ? p.tint : 0].life;
+            if (age < pieceLife - fade)
                 continue;
-            const float keep = clamp01((life - age) / fade);
+            const float keep = clamp01((pieceLife - age) / fade);
             const x86::reg32 alphas = block + kAlphas + k * 2;
             app->getMemory<x86::reg8>(alphas) = x86::reg8(std::lround(float(p.alpha[0]) * keep));
             app->getMemory<x86::reg8>(alphas + 1) = x86::reg8(std::lround(float(p.alpha[1]) * keep));
@@ -382,9 +430,10 @@ bool layOwnPiece(win32::WinApplication* app, x86::CPU& cpu, Wheel& w, const floa
  * while the car moves marks it under all four, and the handbrake under the rear
  * two.  And every car, the opponents' and the cops' too, **sliding** -- its
  * velocity across it over a metre a second -- marks the road under each wheel
- * on pavement: the game lays the AI's slides nowhere, so without this their
- * tyres left no trace at all.  Each piece is the game's own (sub_4c6cb0),
- * shaded by skidLaid as every piece is.  False when the game stopped in it. */
+ * on any ground the table below allows: the game lays the AI's slides nowhere,
+ * so without this their tyres left no trace at all.  Each piece is the game's
+ * own (sub_4c6cb0), shaded by skidLaid as every piece is.  False when the game
+ * stopped in it. */
 bool skidPedals(win32::WinApplication* app, x86::CPU& cpu, x86::reg32 car)
 {
     if (!tyreMarksOn() || app->getMemory<x86::reg32>(0x6fd3b0) == 1)
@@ -419,7 +468,7 @@ bool skidPedals(win32::WinApplication* app, x86::CPU& cpu, x86::reg32 car)
     {
         /* An opponent's or a cop's slide: the velocity across the car over a
          * metre a second means the tyres are dragged over the road, and every
-         * wheel on pavement lays its mark. */
+         * wheel on a ground with a mark lays it. */
         const float lateral = SDL_fabsf(velocity[0] * right[0] + velocity[1] * right[1] + velocity[2] * right[2]);
         if (!grounded || speed < kSlideSpeed || lateral < kSlideLateral)
         {
@@ -429,8 +478,9 @@ bool skidPedals(win32::WinApplication* app, x86::CPU& cpu, x86::reg32 car)
         }
         for (int n = 0; n < 4; ++n)
         {
-            if (groundUnder(app, car, n) != 0)
-                continue;   // pavement only
+            const int kind = groundUnder(app, car, n);
+            if (!kSurfaceMarks[kind].on)
+                continue;   // a pavement slide, or a ground with no mark of its own
             float at[3];
             wheelContact(app, car, n, at);
             if (!layOwnPiece(app, cpu, s_wheels[slot][n], right, forward, at, false, clock))
@@ -476,8 +526,9 @@ bool skidPedals(win32::WinApplication* app, x86::CPU& cpu, x86::reg32 car)
     }
     for (int n = 0; n < 4; ++n)
     {
-        if (groundUnder(app, car, n) != 0)
-            continue;   // pavement only
+        const int kind = groundUnder(app, car, n);
+        if (!kSurfaceMarks[kind].on)
+            continue;   // a ground with no mark of its own
         float at[3];
         wheelContact(app, car, n, at);
         const float ahead = (at[0] - centre[0]) * forward[0] + (at[1] - centre[1]) * forward[1] + (at[2] - centre[2]) * forward[2];

@@ -3990,6 +3990,7 @@ void ThrashRenderer::setTexture(x86::reg32, x86::reg32 address)
         found = m_textures.find(0);
     if (found == m_textures.end())
         return;
+    m_textureSkid = found->second.skid;
     if (found->second.index != m_texture)
     {
         flush();
@@ -4311,6 +4312,7 @@ void ThrashRenderer::uploadTexture(x86::reg32, x86::reg32 address, const void* d
         found = m_textures.emplace(address, texture).first;
     }
     Texture& texture = found->second;
+    texture.skid = skidPicture(data, size, format);
     /* Triangles queued with this texture are drawn before it changes: they
      * were the old picture's on the Voodoo, rasterised as they came. */
     if (texture.useStamp == m_renderStamp && m_vertexCount)
@@ -4630,8 +4632,8 @@ void ThrashRenderer::drawCorners(const Corner& a, const Corner& b, const Corner&
 void ThrashRenderer::finishTriangle(ThrashVertex* out)
 {
     const bool fogged = (m_fogMode & 0x3) == 0x2;
-    const x86::reg8 combine[4] = { x86::reg8(m_colorFactor != 0.f), x86::reg8(m_alphaFactor != 0.f), 0,
-                                   x86::reg8(fogged) };
+    const x86::reg8 combine[4] = { x86::reg8(m_colorFactor != 0.f && !m_textureSkid),
+                                   x86::reg8(m_alphaFactor != 0.f), 0, x86::reg8(fogged) };
     if ((m_wrapS || m_wrapT) && rebaseOn())
     {
         const float oow[3] = { out[0].oow, out[1].oow, out[2].oow };

@@ -6,6 +6,7 @@ namespace nfs3hp
 // Port (tools/apply_tyre_marks.py): defined in native_skids.cpp.
 x86::reg32 tyreMarkBlocks();
 void skidLaid(win32::WinApplication* app);
+x86::reg32 markTint(win32::WinApplication* app, x86::sreg32 frame);
 // Port (tools/apply_widescreen.py): defined in nfs3hp_main.cpp.
 bool widescreenMode(x86::reg32 width, x86::reg32 height);
 x86::reg32 dynamicSavedMode(x86::reg32 found, x86::reg32 width);
@@ -35135,7 +35136,7 @@ L_0x004c6ffd:
     // 004c7048  31c0                   -xor eax, eax
     cpu.eax ^= x86::reg32(x86::sreg32(cpu.eax));
     // 004c704a  8a02                   -mov al, byte ptr [edx]
-    cpu.al = app->getMemory<x86::reg8>(cpu.edx);
+    cpu.al = app->getMemory<x86::reg8>(cpu.edx) & 3; /* port: the picture, not the tint (tools/apply_tyre_marks.py) */
     // 004c704c  8b1485c8418b00         -mov edx, dword ptr [eax*4 + 0x8b41c8]
     cpu.edx = app->getMemory<x86::reg32>(x86::reg32(9126344) /* 0x8b41c8 */ + cpu.eax * 4);
     // 004c7053  8b45e4                 -mov eax, dword ptr [ebp - 0x1c]
@@ -35155,7 +35156,7 @@ L_0x004c6ffd:
     // 004c7065  8b45dc                 -mov eax, dword ptr [ebp - 0x24]
     cpu.eax = app->getMemory<x86::reg32>(cpu.ebp + x86::reg32(-36) /* -0x24 */);
     // 004c7068  81caffffff00           -or edx, 0xffffff
-    cpu.edx |= x86::reg32(x86::sreg32(16777215 /*0xffffff*/));
+    cpu.edx |= markTint(app, cpu.ebp); /* port: the rut's own colour (tools/apply_tyre_marks.py) */
     // 004c706e  895030                 -mov dword ptr [eax + 0x30], edx
     app->getMemory<x86::reg32>(cpu.eax + x86::reg32(48) /* 0x30 */) = cpu.edx;
     // 004c7071  8b45dc                 -mov eax, dword ptr [ebp - 0x24]
@@ -35177,7 +35178,7 @@ L_0x004c6ffd:
     // 004c7087  8b45dc                 -mov eax, dword ptr [ebp - 0x24]
     cpu.eax = app->getMemory<x86::reg32>(cpu.ebp + x86::reg32(-36) /* -0x24 */);
     // 004c708a  81caffffff00           -or edx, 0xffffff
-    cpu.edx |= x86::reg32(x86::sreg32(16777215 /*0xffffff*/));
+    cpu.edx |= markTint(app, cpu.ebp); /* port: the rut's own colour (tools/apply_tyre_marks.py) */
     // 004c7090  895070                 -mov dword ptr [eax + 0x70], edx
     app->getMemory<x86::reg32>(cpu.eax + x86::reg32(112) /* 0x70 */) = cpu.edx;
     // 004c7093  8b45dc                 -mov eax, dword ptr [ebp - 0x24]

@@ -9,7 +9,8 @@ from pathlib import Path
 HEADER = "// Port (tools/apply_tyre_marks.py): defined in native_skids.cpp.\n"
 
 DECLARATION = ("x86::reg32 tyreMarkBlocks();\n"
-               "void skidLaid(win32::WinApplication* app);\n")
+               "void skidLaid(win32::WinApplication* app);\n"
+               "x86::reg32 markTint(win32::WinApplication* app, x86::sreg32 frame);\n")
 
 # (generated file, address and bytes of the instruction, original code, patched code)
 SITES = [
@@ -26,6 +27,19 @@ SITES = [
      "    (app->getMemory<x86::reg32>(cpu.eax + x86::reg32(12) /* 0xc */))++;",
      "    (app->getMemory<x86::reg32>(cpu.eax + x86::reg32(12) /* 0xc */))++;\n"
      "    skidLaid(app); /* port: a piece of a tyre mark reshaded (tools/apply_tyre_marks.py) */"),
+    # The piece's picture byte: the low two bits are which skd picture, the
+    # rest the ground's tint (skidLaid wrote it).
+    ("nfs3hp.27.cpp", "004c704a  8a02",
+     "    cpu.al = app->getMemory<x86::reg8>(cpu.edx);",
+     "    cpu.al = app->getMemory<x86::reg8>(cpu.edx) & 3; /* port: the picture, not the tint (tools/apply_tyre_marks.py) */"),
+    # The piece's colour: the ground's rut instead of white (the renderer
+    # leaves the black picture's RGB out for these four).
+    ("nfs3hp.27.cpp", "004c7068  81caffffff00",
+     "    cpu.edx |= x86::reg32(x86::sreg32(16777215 /*0xffffff*/));",
+     "    cpu.edx |= markTint(app, cpu.ebp); /* port: the rut's own colour (tools/apply_tyre_marks.py) */"),
+    ("nfs3hp.27.cpp", "004c708a  81caffffff00",
+     "    cpu.edx |= x86::reg32(x86::sreg32(16777215 /*0xffffff*/));",
+     "    cpu.edx |= markTint(app, cpu.ebp); /* port: the rut's own colour (tools/apply_tyre_marks.py) */"),
 ]
 
 NAMESPACE = "namespace nfs3hp\n{\n"
