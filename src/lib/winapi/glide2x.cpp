@@ -190,10 +190,10 @@ void overlay(std::shared_ptr<const Overlay> overlay)
         s_directRenderer->setOverlay(std::move(overlay));
 }
 
-void motion(float speed)
+void motion(float speed, bool blur)
 {
     if (s_directRenderer)
-        s_directRenderer->setMotion(speed);
+        s_directRenderer->setMotion(speed, blur);
 }
 
 void colourGrade(float red, float green, float blue, float saturation, float contrast)

@@ -172,6 +172,79 @@ float pullSetting()
 
 void crashShake(win32::WinApplication* app, float place[3], const float right[3], const float up[3]);   // native_crash.cpp
 
+bool raceIsRunning();   // nfs3hp_main.cpp
+
+/* Speed you can feel, 3: the view widens at speed (NFS_SPEED_FOV, how much:
+ * 1 by default, 0 or off for none, up to 3).
+ *
+ * From 150 km/h to 300 the first player's chase view opens up to a tenth wider
+ * in the tangent of its angle -- about three degrees either side of a
+ * 45-degree half angle -- times the switch, eased in over about 0.6 s and out
+ * over 0.8 s by the race's clock, so a pause or a replay's stop holds it.
+ * cameraToView works out how much (s_speedFov, a factor on the tangents);
+ * projectionSet puts it into the float projection (sub_4bf260) as it is made
+ * for that view, by both of its angles, so the picture keeps its proportions.
+ * The in-car and bumper views ease back to none; the replay's television
+ * cameras take the zoomed projection (no angle) and are never touched. */
+float speedFovSetting()
+{
+    static const float setting = [] {
+        const char* value = SDL_getenv("NFS_SPEED_FOV");
+        if (!value || !*value || SDL_strcasecmp(value, "on") == 0)
+            return 1.0f;
+        if (SDL_strcmp(value, "0") == 0 || SDL_strcasecmp(value, "off") == 0)
+            return 0.0f;
+        const float parsed = float(SDL_atof(value));
+        return parsed >= 0.0f && parsed <= 3.0f ? parsed : 1.0f;
+    }();
+    return setting;
+}
+
+namespace
+{
+constexpr float kSpeedFovFrom = 150.0f / 3.6f;   // m/s: none below
+constexpr float kSpeedFovFull = 300.0f / 3.6f;   // m/s: the whole of it from here
+constexpr float kSpeedFovMost = 0.10f;           // the tangents' share added at full speed, NFS_SPEED_FOV 1
+float s_speedFov = 1.0f;                         // the factor on the tangents now
+}
+
+/* The share of the speed-widened view, 0 to 1: 150 km/h to 300, smoothstepped. */
+static float speedFovShare(float speed)
+{
+    const float t = SDL_clamp((speed - kSpeedFovFrom) / (kSpeedFovFull - kSpeedFovFrom), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+/* sub_4bf260, the float projection made from a view's rectangle and its two
+ * half angles in degrees (on the stack, after the return address: +4 and +8
+ * the origin, +0xc and +0x10 the view's width and height, +0x14 and +0x18 the
+ * horizontal and vertical half angles, +0x1c a flip).  For the race's main
+ * view -- one player on the screen, a view nearly as wide as it, angles not
+ * zero -- each angle becomes the one whose tangent is s_speedFov times its own. */
+bool projectionSet(win32::WinApplication* app, x86::CPU& cpu)
+{
+    if (s_speedFov <= 1.0001f || !raceIsRunning() || app->getMemory<x86::reg32>(0x6fd3b0) == 1)
+        return false;
+    const x86::reg32 args = cpu.esp;
+    const float width = app->getMemory<float>(args + 0xc);
+    const float screen = float(app->getMemory<x86::reg32>(0x7cdae0));
+    if (!(width >= 0.75f * screen))
+        return false;   // the mirror, or a view of its own
+    for (const x86::reg32 at : { args + 0x14, args + 0x18 })
+    {
+        const float angle = app->getMemory<float>(at);
+        if (!(angle > 1.0f && angle < 80.0f))
+            return false;
+    }
+    for (const x86::reg32 at : { args + 0x14, args + 0x18 })
+    {
+        const float angle = app->getMemory<float>(at);
+        const double wide = SDL_atan(SDL_tan(double(angle) * SDL_PI_D / 180.0) * double(s_speedFov)) * 180.0 / SDL_PI_D;
+        app->getMemory<float>(at) = float(SDL_min(wide, 85.0));
+    }
+    return false;
+}
+
 bool cameraToView(win32::WinApplication* app, x86::CPU& cpu)
 {
     const float most = pullSetting();
@@ -190,7 +263,10 @@ bool cameraToView(win32::WinApplication* app, x86::CPU& cpu)
     const x86::sreg32 passed = tick - s_tick;
     s_tick = tick;
     if (passed < 0 || passed > 64)
+    {
         s_pull = 0.0f;  // a new race, or a long stop
+        s_speedFov = 1.0f;
+    }
     else if (passed > 0)
     {
         const float throttle = float(app->getMemory<x86::reg8>(0x79c339)) / 255.0f;
@@ -213,6 +289,14 @@ bool cameraToView(win32::WinApplication* app, x86::CPU& cpu)
     if (distance > 15.0f || (distance >= 3.0f && ahead < 0.7f * distance))
         return false;  // a television camera of the replay
     const bool chase = distance >= 3.0f;   // not in the car or on its bumper
+    if (passed > 0 && passed <= 64)
+    {
+        const float speed = SDL_fabsf(value(car + 0xb8));
+        const float share = chase && speed == speed ? speedFovShare(speed) : 0.0f;
+        const float wanted = 1.0f + kSpeedFovMost * speedFovSetting() * share;
+        const float seconds = wanted > s_speedFov ? 0.2f : 0.27f;   // in ~0.6 s, out ~0.8 s
+        s_speedFov += (wanted - s_speedFov) * (1.0f - SDL_expf(-float(passed) / (64.0f * seconds)));
+    }
     if (chase && s_pull >= 0.001f)
         for (int k = 0; k < 3; ++k)
             place[k] = place[k] - forward[k] * s_pull + up[k] * s_pull * 0.25f;

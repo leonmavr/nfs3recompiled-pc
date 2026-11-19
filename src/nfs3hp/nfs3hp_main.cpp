@@ -2630,17 +2630,32 @@ void colourGradeTick(win32::WinApplication* app)
     win32::glide2x::raceView(nfs3hp::raceIsRunning());
     /* And how fast the first player goes, for the motion blur
      * (thrashrenderer.cpp, NFS_MOTION_BLUR): its car's speed ([0x5efa48],
-     * +0xb8), 0 while the race's clock ([0x7d3684]) stands -- a pause, the
-     * countdown -- and in split screen, where each view has its own car. */
+     * +0xb8), 0 once the race's clock ([0x7d3684]) has stood a quarter of a
+     * second -- a pause, the countdown -- and in split screen, where each view
+     * has its own car.  The clock ticks 64 times a second and a frame can come
+     * quicker than that: a frame with the clock where the last one left it
+     * keeps the last speed, where it used to send 0 -- so at a high frame rate
+     * most frames had no blur at all. */
     {
         static x86::reg32 s_clock = 0;
+        static float s_speed = 0.0f;
+        static Uint64 s_tickedNs = 0;
+        const Uint64 now = SDL_GetTicksNS();
         const x86::reg32 clock = app->getMemory<x86::reg32>(0x7d3684);
-        float speed = 0.0f;
         const x86::reg32 car = app->getMemory<x86::reg32>(0x5efa48);
-        if (nfs3hp::raceIsRunning() && car && clock != s_clock && app->getMemory<x86::reg32>(0x6fd3b0) != 1)
-            speed = SDL_fabsf(app->getMemory<float>(car + 0xb8));
+        if (!nfs3hp::raceIsRunning() || !car || app->getMemory<x86::reg32>(0x6fd3b0) == 1)
+            s_speed = 0.0f;
+        else if (clock != s_clock)
+        {
+            const float speed = SDL_fabsf(app->getMemory<float>(car + 0xb8));
+            s_speed = speed == speed ? speed : 0.0f;
+            s_tickedNs = now;
+        }
+        else if (now - s_tickedNs > 250000000)
+            s_speed = 0.0f;
         s_clock = clock;
-        win32::glide2x::motion(speed == speed ? speed : 0.0f);
+        // No motion blur at night ([0x6fd4c8]); the speed still goes to the snow on the lens.
+        win32::glide2x::motion(s_speed, app->getMemory<x86::reg32>(0x6fd4c8) == 0);
     }
     win32::glide2x::colourGrade(grade.red, grade.green, grade.blue, grade.saturation, grade.contrast);
 }

@@ -232,6 +232,15 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   - [x] Next: shadows for trackside objects.
     - Done: cast from the depth buffer towards the sun onto level ground
       (`NFS_OBJECT_SHADOWS`, 0.45); not by cars, which have their own.
+  - Reworked (2026-11-19): a sharp band down the middle, the whole width at
+    80 km/h, narrowing to the middle half by 250 (held above; none at night); the outer quarters streak
+    away from the middle like a star field -- longer the further out, the
+    faster and the nearer (up to 6% of the view's height). Cars, lamps and the
+    sky (so the sun and its glare) stay sharp. Fixed on the way: the speed was
+    sent as 0 on every frame the race's 64 Hz clock had not ticked; and the
+    picture's alpha took the whole world for car (any 8888/4444 batch wrote 0
+    there), so nothing was blurred -- and the object shadows were never cast.
+    `NFS_BLUR_TRACE=1`/`2` to check.
 - [x] More details environment (buildings, grass, fences, rocks, etc.) textures,
   better sampled maybe?
   - Done: textures seen larger than they are drawn Catmull-Rom instead of
@@ -340,6 +349,31 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   it.
 - [x] Snow particles effect on screen; similar to rain, but pre-baked hexagons/snowflakes
   /other shapes. Please don't make them look cheap. They should have various sizes. 
+- [ ] Speed FOV kick: the chase view widens a few degrees from 150 km/h to
+  300, eased like the camera pull. (A vignette was tried with it and dropped:
+  the motion blur alone shows the speed.)
+  - Implemented (2026-11-19, `NFS_SPEED_FOV`, 1; 0/off for none, 0.5 weaker,
+    up to 3 stronger), not yet seen in a race: `cameraToView` eases a factor
+    on the tangents (up to 1.1 at 300 km/h, by the switch), `projectionSet`
+    (the top of `sub_4bf260`) widens both half angles of the main view's float
+    projection by it. The edge blur is the motion blur already there. To check:
+    no popping at the screen's edges (whether culling uses the same angles),
+    the mirror untouched, in-car and replay cameras unchanged.
+- [ ] Cop lights on the world at night: pulsing red and blue pools of light on
+  the road and the walls beside each cop car (the light pools of
+  `NFS_FLAME_LIGHT`/`NFS_BRAKE_GLOW`, the headlights' light on objects).
+- [ ] Dirty lens behind other cars: close behind a car on a wet road the lens
+  rain gets more drops (`NFS_LENS_RAIN`, `NFS_WHEEL_SPRAY`); on dirt or snow, a
+  few specks.
+- [ ] A puff of dust or snow where a car lands from a jump, sparks on a hard
+  landing (the landing of `NFS_BODY_MOTION`, `NFS_PARTICLES`, `NFS_SPARKS`).
+- [ ] Lightning in night rain: now and then a flash over the whole picture,
+  thunder a second or two later (the exposure pass, the mixer).
+- [ ] Reversing lights: a white glow and a small pool of light behind a car in
+  reverse (`NFS_LIGHT_GLOW`, the light pools).
+- [ ] Sparks on car-to-car scrapes, not only on walls (`NFS_SPARKS`).
+- [ ] Headlight beams seen in rain and haze: a soft additive cone ahead of each
+  lit lamp, only when it rains or the air is hazy.
   and there's no need for refraction on them - only semi-transparency.
   There are mostly transparent - towards the edges they're more transparent but
   their main lines are less transparent. Note that snow particles will be
@@ -548,6 +582,8 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   longer, disappear from maps if it has lost target, wait (cool down) for some
   period (e.g. 10-15 sec) and respawn in a position pretty close to target to
   chaseagain.
+- [ ] Lap delta on the HUD: +/-0.00 against the best lap at each split, green
+  or red, in a panel like the Now Playing one (`drawOverlay`, the HUD's font).
 
 ### UI
 - [ ] Figure out how to add/create menu elements without breaking the visual
@@ -731,6 +767,8 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   sideways, is still drives but very slow, doesn't reset but keep driving. i
   know it's against physics but when a car is in two sideways wheels, it should
   have some artificial gravity to bring it back to 4 wheels. To be more precise:
+- [ ] BUG: before race begins, right before counting down 3,2,1 before 3, one
+  entire frame gets filled with a single color.
   if two or more wheels lose contact with ground and the sideways tilt is close to 90 degrees
   (around 70 to 90) roll it back to the ground smoothy so all 4 wheels make
   contact. If it is moving too slow (<60kph) on two or more wheels of contact and it's toppling ( >
@@ -759,6 +797,10 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     clouds is 3-6 ticks a car. It comes off every piece of tyre mark
     (`tyreMarkSmoke`, from `skidLaid`), a wheel spun up at low speed, the
     player's brake and handbrake, and the game's own kind 6. Holding its speed
+- [ ] A smaller first Doppler: the cops' sirens only, pitched by how fast they
+  close or open on the player.
+- [ ] Blow-off valve / shift crack on an upshift, timed with the exhaust flame
+  and pitched like the crash sounds.
     for a second while smoking switches a car to the drifting clouds: they
     start smaller, billow instead of falling, and grow unevenly to saturation,
     about 1.5x as wide and 2x as tall as the ordinary ones. Its look is the
@@ -774,6 +816,10 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     peaks); now the peaks are rounded off and a look-ahead limiter catches the
     rest (`NFS_VOLUME`, 1.8 by ear).
 - [x] In a brief popup on the bottom left whose visual style is consistent with game, show
+- [ ] Screenshot sweep: an `NFS_TOUCH_SCRIPT` run that drives every track in
+  each weather, by day and night, and saves frames (`NFS_FRAME_DUMP`), so a
+  visual regression shows at a glance (the boxes, rectangles and broken
+  shadows of 2026-11-17 would have).
   cyrretnly plating song when it starts and then slide the popup away.
   Background same as HUD background, on the let there's the nfs icon attached
   that's found also in main menu when selecting single play, two player, hot

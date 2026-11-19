@@ -925,15 +925,30 @@ and in over half of one, by the race's clock. A chase camera is one 3 to 15 m
 from the car and looking at it: not the cockpit or bumper views, not the
 replay's television cameras.
 
-**Motion blur.** In the whole-picture pass (`motionBlur`): moving forward at v,
-a still point at depth z drifts across the screen away from its centre by its
-distance from it times v dt / z, so the near verges and walls streak and the
-horizon stands. Each pixel is averaged with eight more along that line, the
-length from the depth buffer and the first player's speed (`[car+0xb8]`, sent
-each frame by `colourGradeTick`, 0 while the race's clock stands); a shutter
-of a ninetieth of a second times `NFS_MOTION_BLUR` (2, picked by eye), from 10 m/s, whole
-from 35, at most 48 pixels. The cars (0 in the picture's alpha) are neither
-blurred nor taken into the blur around them.
+**Motion blur.** In the whole-picture pass (`motionBlur`), the world streaks out
+from the middle at speed, as a star field does. A band down the middle of the
+picture is left sharp: the whole width at 80 km/h and under (nothing blurred),
+narrowing with the first player's speed (`[car+0xb8]`, sent each frame by
+`colourGradeTick`), smoothstepped, to the middle half at 250 km/h and over (none at night, `[0x6fd4c8]`) -- the outer
+quarters streaked. A pixel in a side band is averaged with eight samples along
+the line back towards the middle, their start jittered per pixel; the streak is
+longer the further past the band's edge, the faster (the speed's share times
+`NFS_MOTION_BLUR` times 2) and the nearer the pixel (20 m over its distance, 0.3 to
+1.6), at most 6% of the view's height. Never blurred nor taken into a blur: the
+cars (0 in the picture's alpha), the lamps (the pixel itself, where the light
+layer is lit, while it is drawn) and the sky, so the sun and its glare (added
+after the blur) stay sharp. An ellipse round the middle came first; the bands
+blur half the picture at full speed instead of more than four fifths, which is
+most of the pass's cost. `NFS_BLUR_TRACE=1` logs the speed, strength and band
+once a second (`[BLUR]`); `NFS_BLUR_TRACE=2` draws what the blur did in
+colours (dark: sharp; green: blurred, brighter the longer; red: a car; blue:
+the sky; yellow: a lamp; a magenta tint: no blur sent).
+
+The speed sent used to be 0 on any frame where the race's clock (64 ticks a
+second) had not moved since the last one -- at a frame rate over 64 most
+frames, so the blur was mostly not there. It now keeps the last speed, and goes
+to 0 only once the clock has stood a quarter of a second (a pause, the
+countdown).
 
 ### The lamps' glow, and their trails
 
@@ -978,7 +993,7 @@ from it. So each pixel takes the brightest of 16 samples of the lamps' layer
 (level 1.5) along that line towards the centre, at its distance from it over
 1 + k t, t from 0 to 1, fading as 1 - t, times 1.6, and adds what of that is
 not a lamp itself. k is 0.45 times `NFS_LIGHT_TRAILS` (1), coming in from
-10 m/s and whole from 35 (the speed the motion blur uses); the centre is the
+10 m/s and whole from 35; the centre is the
 projection's (`[0x5600a4]`, `[0x5600a8]`). It costs a pass over the screen and
 a second draw of the few lamp sprites.
 
@@ -3000,7 +3015,7 @@ the next time the game starts.
 | `NFS_NOW_PLAYING` | on | `0`/`off`: no panel naming the song as a race starts. `1`/`on`: it stays five seconds; another number up to 30: that many (The song now playing). |
 | `NFS_NEXT_SONG_KEY` | `0x5d001b04` (`]`) | The key that starts the next song in a race, as the game writes a binding: its character << 24, its scan code << 8, 4 for the keyboard. Set from Controls (Next song); `0` for none (The song now playing). |
 | `NFS_HEADLIGHT_OBJECTS` | on (`1.6`) | `0`/`off`: the player's headlights light only the road, as the game has them. A number: how bright they are on the walls, fences, trees and buildings (Headlights on what stands by the road). |
-| `NFS_MOTION_BLUR` | on (`2`) | `0`/`off`: no motion blur. A number: how long the shutter, times a ninetieth of a second (Speed you can feel). |
+| `NFS_MOTION_BLUR` | on (`2`) | `0`/`off`: no motion blur. A number up to 2: how strong the streaks outside the sharp ellipse are (Speed you can feel). |
 | `NFS_LIGHT_GLOW` | on (`1`) | `0`/`off`: the lamps' glow as the game has it, a star of spikes. A number up to 3: how strong the halo round the soft glow (The lamps' glow, and their trails). |
 | `NFS_LIGHT_TRAILS` | on (`1`) | `0`/`off`: no streak. A number up to 3: how long the short streak under each lamp at speed, on the screen. |
 | `NFS_BRAKE_GLOW` | on (`1`) | `0`/`off`: no glow from the brakes at night. A number up to 3: how bright (Brake discs glowing at night). |

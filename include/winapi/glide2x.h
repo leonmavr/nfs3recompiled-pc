@@ -53,7 +53,7 @@ void wetLightsLit(bool lit);
 /* Whether a race is being drawn (the haze and whole-picture pass are for it). */
 void raceView(bool race);
 /* How fast the first player goes, m/s (the motion blur; 0 for none). */
-void motion(float speed);
+void motion(float speed, bool blur = true);
 /* Port: this frame's particles of the port's own (native_particles.cpp), back
  * to front, the sparks last; false when the renderer cannot draw them (the
  * game's own are kept then). */

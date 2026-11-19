@@ -402,6 +402,7 @@ struct ThrashDraw
     float                               sun[12];
     bool                                race;
     float                               speed;
+    bool                                blurOn;      // no motion blur at night
     std::shared_ptr<const std::vector<EffectParticle>> particles;  // the port's own (drawParticles)
     float                               alphaTestRef;
     x86::reg32                          chromaKeyColor;
@@ -992,6 +993,7 @@ void ThrashRenderer::flush()
      * smoke, dust, spray, sparks: 8888 and 4444 pictures where the track's are
      * 1555 and 565 -- are not things that stand in the sun's way. */
     batch.car = m_carSurface || (!m_textureShadow && (m_textureFormat == TF_ARGB_8888 || m_textureFormat == TF_ARGB_4444));
+    batch.carBody = m_carSurface;
     batch.decal = m_textureShadow;
     batch.light = m_textureLight;
     batch.wetLight = m_textureWetStreak;
@@ -1163,6 +1165,7 @@ void ThrashRenderer::renderPending()
     std::copy(m_sun, m_sun + 12, draw->sun);
     draw->race = m_raceView;
     draw->speed = m_speed;
+    draw->blurOn = m_blurOn;
     draw->particles = m_particles;
     draw->chromaKeyColor = m_chromaKeyColor;
     draw->width = m_renderer->m_width;
@@ -1384,6 +1387,8 @@ static const char g_compositeShader[] =
 "uniform vec3 u_up;"
 "uniform vec2 u_size;"
 "uniform float u_blur;"
+"uniform float u_blurDebug;"   // NFS_BLUR_TRACE=2: what the blur did, in colours
+"uniform float u_blurRadius;"   // the sharp middle band's half width over the picture's, 1 for all of it
 "uniform sampler2D u_light;"
 "uniform float u_halo;"
 "uniform float u_trailOn;"
@@ -1581,55 +1586,88 @@ static const char g_compositeShader[] =
  * noise), so the places a ray happens to sample do not line up across the
  * screen into bands; and a ray that passes from in front of the picture to
  * behind it has gone through what is there, however thick -- a solid wall --
- * where only the thin was caught before, in stripes. */
+ * where only the thin was caught before, in stripes.  One ray a pixel left
+ * that noise in the picture as a checkerboard on every shadow's edge -- unseen
+ * while the picture's alpha took the whole world for car and the shadows were
+ * never cast (2026-11-19) -- so each pixel now marches two rays of nine steps,
+ * their shifts half apart, and takes their mean: the noise halves at the cost
+ * of the one ray of eighteen (four rays of ten cost too many frames). */
 "    float jitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));"
-"    float before = 1.0;"
-"    for (int i = 1; i <= 18; ++i) {"
-"        float s = float(i) - jitter;"
-"        float t = 0.05 * s * s;"
-"        vec3 q = p + u_sun * t;"
-"        if (q.z < 0.5) break;"
-"        vec2 at = (q.xy * u_scale / q.z + u_centre) / u_size;"
-"        if (at.x < 0.0 || at.y < 0.0 || at.x > 1.0 || at.y > 1.0) break;"
-"        if (texture(u_source, at).a < 0.5) { before = 1.0; continue; }"   // a car: casts its own
-"        float there = viewZ(at);"
-"        float gap = q.z - there;"
-"        bool through = before < -0.02 && gap > 0.0 && gap < 4.0 + 0.5 * t;"
-"        if ((gap > 0.05 + 0.02 * t && gap < 0.6 + 0.1 * t) || through) {"
-"            shade = 1.0 - s / 22.0;"
-"            break;"
+"    for (int k = 0; k < 2; ++k) {"
+"        float shift = fract(jitter + float(k) * 0.5);"
+"        float before = 1.0;"
+"        for (int i = 1; i <= 9; ++i) {"
+"            float s = float(i) - shift;"
+"            float t = 0.2 * s * s;"
+"            vec3 q = p + u_sun * t;"
+"            if (q.z < 0.5) break;"
+"            vec2 at = (q.xy * u_scale / q.z + u_centre) / u_size;"
+"            if (at.x < 0.0 || at.y < 0.0 || at.x > 1.0 || at.y > 1.0) break;"
+"            if (texture(u_source, at).a < 0.5) { before = 1.0; continue; }"   // a car: casts its own
+"            float there = viewZ(at);"
+"            float gap = q.z - there;"
+"            bool through = before < -0.02 && gap > 0.0 && gap < 4.0 + 0.5 * t;"
+"            if ((gap > 0.05 + 0.02 * t && gap < 0.6 + 0.1 * t) || through) {"
+"                shade += 1.0 - s / 11.0;"
+"                break;"
+"            }"
+"            before = gap;"
 "        }"
-"        before = gap;"
 "    }"
+"    shade *= 0.5;"
 "    vec2 edge = min(uv, 1.0 - uv);"
 "    return shade * level * smoothstep(0.0, 0.06, min(edge.x, edge.y));"
 "}"
-/* Speed you can feel, 2 (initPost, NFS_MOTION_BLUR): the world smeared along
- * the way it streams past.  Going forward at v, a point still in the world at
- * z in the view moves on the screen away from the screen's centre by its
- * distance from it times v dt / z -- the near verges and walls streak, the
- * horizon stands -- so each pixel is averaged with eight more along that line
- * behind it, u_blur being v times the shutter.  The cars are left sharp: their
- * own pixels (0 in the picture's alpha) are not blurred, and are not taken
- * into the blur of what lies around them.  NFS_MOTION_BLUR 2 by default. */
+/* Speed you can feel, 2 (initPost, NFS_MOTION_BLUR): the world streaking out
+ * from the middle at speed, as a star field does.  A band down the middle of
+ * the picture is left sharp: at 80 km/h and under it is the whole width and
+ * nothing is smeared; faster, its sides close in with the speed
+ * (u_blurRadius, the band's half width over the picture's: 1 to 0.5 at
+ * 250 km/h and over), leaving the middle half sharp and the outer quarters streaked.
+ * (An ellipse round the middle did this first; the bands blur less of the
+ * picture -- half of it at full speed against more than four fifths -- which
+ * is most of what the pass costs.)  A pixel in a side band is smeared along
+ * the line from the middle through it, back towards the middle -- the further
+ * past the band's edge, the faster (u_blur, the speed's share times
+ * NFS_MOTION_BLUR times 2) and the nearer it is (as a star near the eye crosses
+ * the screen fastest: 20 m / its distance, between 0.3 and 1.6) the longer, to
+ * at most 6% of the view's height (65 pixels at 1080p).  Eight samples, their
+ * start jittered pixel by pixel so a long streak does not show as copies.
+ * Left sharp, and never taken into a smear: the cars (0 in the picture's
+ * alpha); the lamps (where the light layer is lit, while it is drawn: u_halo
+ * or u_trailOn; only the pixel itself is tested, a lamp next to a streak may
+ * bleed a little into it) and the sky -- so the sun, and its glare, added
+ * after, stay sharp. */
 "vec3 motionBlur(vec2 uv, vec3 c)"
 "{"
-"    if (texture(u_source, uv).a < 0.5) return c;"
+"    bool debug = u_blurDebug > 0.0;"
+"    if (debug && u_blur <= 0.0) return mix(c, vec3(1.0, 0.0, 1.0), 0.35);"   /* magenta: no blur sent */
+"    vec2 fromMiddle = (uv - 0.5) * 2.0;"
+"    float over = abs(fromMiddle.x) - u_blurRadius;"
+"    if (over <= 0.0) return debug ? c * 0.5 : c;"                            /* dark: the sharp band */
+"    if (texture(u_source, uv).a < 0.5) return debug ? vec3(1.0, 0.0, 0.0) : c;"   /* red: taken for a car */
 "    float d = texture(u_depth, uv).r;"
-"    if (d >= 0.9999) return c;"
+"    if (d >= 0.9999) return debug ? vec3(0.0, 0.3, 1.0) : c;"                  /* blue: the sky */
+"    bool lamps = u_halo > 0.0 || u_trailOn > 0.0;"
+"    if (lamps) {"
+"        vec3 l = textureLod(u_light, uv, 0.0).rgb;"
+"        if (max(l.r, max(l.g, l.b)) > 0.04) return debug ? vec3(1.0, 1.0, 0.0) : c;"   /* yellow: a lamp */
+"    }"
 "    float z = 1.0 / max(1.0 - d, 1e-5);"
-"    vec2 away = uv * u_size - u_centre;"
-"    vec2 trail = away * min(u_blur / max(z, 1.0), 0.25);"
-"    float len = length(trail);"
+"    float near = clamp(20.0 / max(z, 1.0), 0.3, 1.6);"
+"    float len = min(over * u_blur * near * 0.18 * u_size.y, 0.06 * u_size.y);"
+"    if (debug) return mix(c, vec3(0.0, 1.0, 0.0), 0.25 + 0.75 * len / (0.06 * u_size.y));"   /* green: blurred, by how long */
 "    if (len < 1.0) return c;"
-"    trail *= min(len, 48.0) / len;"
+"    vec2 trail = normalize(fromMiddle * u_size) * len;"
+"    float jitter = fract(sin(dot(uv * u_size, vec2(12.9898, 78.233))) * 43758.5453);"
 "    vec3 sum = c;"
 "    float n = 1.0;"
-"    for (int i = 1; i <= 8; ++i) {"
-"        vec2 at = uv - trail * (float(i) / 8.0) / u_size;"
+"    for (int i = 0; i < 8; ++i) {"
+"        float t = (float(i) + jitter) / 8.0;"
+"        vec2 at = uv - trail * t / u_size;"
 "        vec4 s = texture(u_source, at);"
 "        if (s.a < 0.5) continue;"
-"        float w = 1.0 - float(i) / 10.0;"
+"        float w = 1.0 - 0.6 * t;"
 "        sum += s.rgb * w;"
 "        n += w;"
 "    }"
@@ -1708,7 +1746,7 @@ static const char g_compositeShader[] =
 "    vec3 c = u_aa ? fxaa(v_uv) : texture(u_source, v_uv).rgb;"
 "    if (drop > 0.0)"
 "        c = mix(c, texture(u_source, seen).rgb * 1.06, drop);"
-"    if (u_blur > 0.0)"
+"    if (u_blur > 0.0 || u_blurDebug > 0.0)"
 "        c = motionBlur(v_uv, c);"
 "    if (u_shadow > 0.0)"
 "        c *= 1.0 - u_shadow * sunShadow(v_uv);"
@@ -2315,6 +2353,8 @@ void ThrashRenderer::initPost()
     m_haze = SDL_min(onOff("NFS_HAZE", 0.8f), 1.0f);
     m_headStrength = onOff("NFS_HEADLIGHT_OBJECTS", 1.6f);
     m_motionBlur = onOff("NFS_MOTION_BLUR", 2.0f);
+    m_blurTrace = SDL_getenv("NFS_BLUR_TRACE") != nullptr;
+    m_blurDebug = m_blurTrace && SDL_atoi(SDL_getenv("NFS_BLUR_TRACE")) >= 2;
     m_lightGlow = lightGlowSetting();
     m_lightTrails = lightTrailSetting();
     m_bloom = onOff("NFS_BLOOM", 0.6f);
@@ -2374,6 +2414,8 @@ void ThrashRenderer::initPost()
         m_compositeUp = glGetUniformLocation(m_compositeProgram, "u_up");
         m_compositeSize = glGetUniformLocation(m_compositeProgram, "u_size");
         m_compositeBlur = glGetUniformLocation(m_compositeProgram, "u_blur");
+        m_compositeBlurRadius = glGetUniformLocation(m_compositeProgram, "u_blurRadius");
+        m_compositeBlurDebug = glGetUniformLocation(m_compositeProgram, "u_blurDebug");
         m_compositeLight = glGetUniformLocation(m_compositeProgram, "u_light");
         m_compositeHalo = glGetUniformLocation(m_compositeProgram, "u_halo");
         m_compositeTrailOn = glGetUniformLocation(m_compositeProgram, "u_trailOn");
@@ -2853,10 +2895,13 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
     glBindTexture(GL_TEXTURE_2D, m_postCopy);
     glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, width, height);
     const bool shadows = draw.sun[0] > 0.0f;
-    /* The motion blur's length: v times a shutter of a ninetieth of a second
-     * by NFS_MOTION_BLUR, coming in from 10 m/s and whole from 35. */
-    const float ramp = SDL_max(0.0f, SDL_min(1.0f, (draw.speed - 10.0f) / 25.0f));
-    const float blur = m_motionBlur * draw.speed * ramp * ramp * (3.0f - 2.0f * ramp) / 90.0f;
+    /* The motion blur (motionBlur): the speed's share from 80 km/h to 250,
+     * smoothstepped and held from there -- how much (twice NFS_MOTION_BLUR at
+     * the whole: four times what it first was, 2026-11-19) and how far the
+     * sharp middle band has narrowed.  None at night (draw.blurOn). */
+    const float ramp = draw.blurOn ? SDL_max(0.0f, SDL_min(1.0f, (draw.speed - 80.0f / 3.6f) / (170.0f / 3.6f))) : 0.0f;
+    const float blurShare = ramp * ramp * (3.0f - 2.0f * ramp);
+    const float blur = 2.0f * m_motionBlur * blurShare;
     const bool particles = m_particlesOn && draw.particles && !draw.particles->empty();
     float snowAmount = 0.0f;
     if (particles && m_snowAtlas)
@@ -2955,6 +3000,20 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
     glUniform1i(m_compositeAa, m_antialias && !without(kPerfAa) ? 1 : 0);
     glUniform1f(m_compositeShadow, shadows && !without(kPerfShadows) ? draw.sun[0] : 0.0f);
     glUniform1f(m_compositeBlur, without(kPerfBlur) ? 0.0f : blur);
+    glUniform1f(m_compositeBlurRadius, 1.0f - 0.5f * blurShare);
+    glUniform2f(m_compositeSize, float(width), float(height));   // the blur's
+    glUniform1f(m_compositeBlurDebug, m_blurDebug ? 1.0f : 0.0f);
+    if (m_blurTrace)
+    {
+        static Uint64 s_lastNs = 0;
+        const Uint64 now = SDL_GetTicksNS();
+        if (now - s_lastNs > 1000000000)
+        {
+            s_lastNs = now;
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[BLUR] %.0f km/h: strength %.2f, sharp band %.2f of the width",
+                        double(draw.speed * 3.6f), double(blur), double(1.0f - 0.5f * blurShare));
+        }
+    }
     if (needDepth)
     {
         glUniform1i(m_compositeDepth, 2);
@@ -3363,11 +3422,17 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
          * strips, written as a car's, marked the road under them as car --
          * left out of the haze and the shadows, darker solid patches round
          * the red, at night with the weather on (2026-11-18). */
-        if (!previous || batch.alphaBlend != previous->alphaBlend || batch.car != previous->car
+        /* Only a car's own surface (setCarSurface) is a car here, not every
+         * 8888 or 4444 picture: something drawn over the whole view in one of
+         * those after the world (seen on an overcast track, 2026-11-19) left 0
+         * in the alpha everywhere, and the motion blur, taking all of it for
+         * car, blurred nothing.  The smoke, dust and sparks the game draws in
+         * them add their alpha as the world does. */
+        if (!previous || batch.alphaBlend != previous->alphaBlend || batch.carBody != previous->carBody
             || batch.decal != previous->decal || lit != litBefore)
         {
-            const GLenum alphaSource = batch.car || batch.decal || lit ? GL_ZERO : GL_ONE;
-            const GLenum alphaKept = batch.car && !lit ? GL_ZERO : GL_ONE;
+            const GLenum alphaSource = batch.carBody || batch.decal || lit ? GL_ZERO : GL_ONE;
+            const GLenum alphaKept = batch.carBody && !lit ? GL_ZERO : GL_ONE;
             if (batch.alphaBlend)
                 glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, alphaSource, alphaKept);
             else
