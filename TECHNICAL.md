@@ -483,10 +483,13 @@ every drop was under the ground as it was made, put up there and bounced, and
 the rain was gone. `weather::` in `native_particles.cpp`.
 
 **A full pool.** The rain's spray -- every wheel of every car on a wet road --
-fills the particle pool (3600). A particle added to a full one takes the place
+fills the particle pool (9600). A particle added to a full one takes the place
 of one already there, in turn (`add`); until 2026-11-17 the oldest was erased
 from the front and every particle after it moved down a place, some 320 KB moved
-for each one added, hundreds a frame: the rain's lag.
+for each one added, hundreds a frame: the rain's lag. Snow's frost, four times
+the grains it first threw, is kept under 6000 at once of its own
+(`s_frostCount`), so it cannot fill the pool and leave the smoke, the weather
+and the sparks none of it.
 
 **The soft ones at half the size.** The spray's mist and the tyre smoke
 (`Puff`, `Smoke`) are drawn into a layer half the picture's size each way, a
@@ -634,7 +637,11 @@ small faceted solids, a few sizes, thrown up and out, tumbling as they fall and
 gone where they land -- and a lot of fine snow spray after them: light grains
 that drift and spread wider than dirt, and now and then a soft cloud of it.
 All in a colour of their own -- white, cyan and light grey -- never the
-ground's. `NFS_SNOW_SPRAY` (on; `0`/`off` for none).
+ground's. A burst throws four times as many grains and twice as many chips and
+clouds as it first did (2026-11-19), and the frost in the air is held under
+6000 of the pool's 9600, so a road full of cars on snow still looks thick
+without the smoke and the weather being crowded out. `NFS_SNOW_SPRAY` (on;
+`0`/`off` for none).
 
 ### Tyre smoke
 

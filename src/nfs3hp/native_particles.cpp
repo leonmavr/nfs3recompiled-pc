@@ -96,15 +96,22 @@ struct Particle
     bool settled;
     bool noGround;         // its own colour, not the ground's (spray)
     bool light;            // snow: it drifts down, lighter and spreading more than dirt
+    bool frost;            // off a tyre on snow (s_frostCount)
     int type;              // EffectParticle::Type
 };
 
-constexpr std::size_t kMost = 3600;
+/* Snow throws a great many more grains than the first frost did; the pool grew
+ * with it, so a full road does not turn into the churn of a full pool. */
+constexpr std::size_t kMost = 9600;
 std::vector<Particle> s_particles;
 /* How many flakes and drops are in the air: a storm makes a great many, and
  * they are not to crowd the dust, the smoke and the sparks out of the pool. */
 std::size_t s_weatherCount = 0;
 constexpr std::size_t kMostWeather = 2200;   // enough for the heaviest shower (NFS_WEATHER_MAX)
+/* The frost is kept under as many (between them, the chips, the spray and the
+ * clouds), so that it too leaves the smoke and the weather their room. */
+std::size_t s_frostCount = 0;
+constexpr std::size_t kMostFrost = 6000;
 
 /* An exhaust flame: which of the car's exhausts it burns at, in the car's own
  * space, and how far through its second of life it is.  It does not move --
@@ -333,7 +340,7 @@ void throwDirt(const float at[3], const float velocity[3], bool grass, int most 
 void throwFrost(const float at[3], const float velocity[3])
 {
     const float snow = snowSetting() ? setting() : 0.0f;
-    if (snow <= 0.0f)
+    if (snow <= 0.0f || s_frostCount >= kMostFrost)
         return;
     const float speed = std::sqrt(velocity[0] * velocity[0] + velocity[1] * velocity[1] + velocity[2] * velocity[2]);
     const float pace = SDL_min(speed / 30.0f, 1.5f);
@@ -345,8 +352,8 @@ void throwFrost(const float at[3], const float velocity[3])
         return std::array<float, 3>{ 0.80f, 0.84f, 0.88f };      // light grey
     };
     // Chips of ice: sharp, of a few sizes, thrown up and out.
-    const int chips = int((1.0f + pace * 1.8f) * SDL_min(snow, 2.0f) + random01() * 1.4f);
-    for (int k = 0; k < SDL_min(chips, 6); ++k)
+    const int chips = int((2.0f + pace * 3.6f) * SDL_min(snow, 2.0f) + random01() * 2.8f);
+    for (int k = 0; k < SDL_min(chips, 12) && s_frostCount < kMostFrost; ++k)
     {
         Particle s{};
         for (int i = 0; i < 3; ++i)
@@ -364,12 +371,14 @@ void throwFrost(const float at[3], const float velocity[3])
         for (int i = 0; i < 3; ++i)
             s.colour[i] = colour[std::size_t(i)];
         s.noGround = true;
+        s.frost = true;
         s.type = EffectParticle::Frost;
         add(s);
+        ++s_frostCount;
     }
     // Snow spray: many small light grains, spreading wider and drifting down.
-    const int spray = int((5.0f + pace * 8.0f) * SDL_min(snow, 2.0f) + random01() * 2.0f);
-    for (int k = 0; k < SDL_min(spray, 16); ++k)
+    const int spray = int((20.0f + pace * 32.0f) * SDL_min(snow, 2.0f) + random01() * 8.0f);
+    for (int k = 0; k < SDL_min(spray, 64) && s_frostCount < kMostFrost; ++k)
     {
         Particle d{};
         for (int i = 0; i < 3; ++i)
@@ -389,11 +398,13 @@ void throwFrost(const float at[3], const float velocity[3])
             d.colour[i] = colour[std::size_t(i)];
         d.noGround = true;
         d.light = true;
+        d.frost = true;
         d.type = EffectParticle::Grain;
         add(d);
+        ++s_frostCount;
     }
     // Now and then the spray's own soft cloud, hanging over the wheel.
-    if (random01() < 0.45f * SDL_min(snow, 2.0f))
+    if (random01() < 0.9f * SDL_min(snow, 2.0f) && s_frostCount < kMostFrost)
     {
         Particle c{};
         for (int i = 0; i < 3; ++i)
@@ -412,8 +423,10 @@ void throwFrost(const float at[3], const float velocity[3])
         for (int i = 0; i < 3; ++i)
             c.colour[i] = colour[std::size_t(i)];
         c.noGround = true;
+        c.frost = true;
         c.type = EffectParticle::Puff;
         add(c);
+        ++s_frostCount;
     }
 }
 
@@ -1144,8 +1157,12 @@ void throwSpark(const float at[3], const float velocity[3])
 void move(float dt)
 {
     s_weatherCount = 0;
+    s_frostCount = 0;
     for (const Particle& q : s_particles)
+    {
         s_weatherCount += q.type == EffectParticle::Droplet || q.type == EffectParticle::Flake ? 1 : 0;
+        s_frostCount += q.frost ? 1 : 0;
+    }
     for (Flame& flame : s_flames)
         flame.age += dt;
     s_flames.erase(std::remove_if(s_flames.begin(), s_flames.end(),
