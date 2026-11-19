@@ -220,6 +220,13 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 - [x] Haze: fog worked out per pixel with a sky-coloured gradient instead of a flat fog colour gives more depth for almost nothing.
   - Done: `NFS_HAZE`, `NFS_BLOOM`, `NFS_GRADE`, `NFS_AA` (FXAA), each on by
     default, `0` for off. Next: in the game's Graphics menu.
+- [x] BUG: a fine diagonal lattice of dark dots over roads, verges and grass
+  (even Atlantica's plain white road), crawling with the distance.
+  - Done (2026-11-19): the object shadows (`NFS_OBJECT_SHADOWS`) -- the ground
+    shadowed itself where the depth buffer's coarse steps far off put the road
+    beyond a pixel a step nearer than the ray, in the pattern of the steps'
+    per-pixel jitter. A blocker must now stand more than 25 cm above the
+    pixel's own level and the gap be more than two depth steps.
 - [ ] Texture rework. Inspect the texture assets and rework them so that they
   are of high quality, then bake them in game again. This can include grass,
   buildings, desert, snow, dirt, fences, trees, etc.

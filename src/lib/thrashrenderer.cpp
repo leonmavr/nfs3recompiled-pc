@@ -1615,8 +1615,20 @@ static const char g_compositeShader[] =
 "            if (texture(u_source, at).a < 0.5) { before = 1.0; continue; }"   // a car: casts its own
 "            float there = viewZ(at);"
 "            float gap = q.z - there;"
-"            bool through = before < -0.02 && gap > 0.0 && gap < 4.0 + 0.5 * t;"
-"            if ((gap > 0.05 + 0.02 * t && gap < 0.6 + 0.1 * t) || through) {"
+/* Not the ground itself: what blocks must stand above the level this pixel is
+ * on.  The depth buffer's steps grow as the square of the distance (16 bits:
+ * some 4 cm at 50 m, 15 at 100), and the ground a ray passed over came out a
+ * step nearer than the ray here and there -- the pixel shadowed by the road
+ * beyond it, in the pattern of the steps' jitter: a fine diagonal lattice of
+ * dark dots over every road and verge (2026-11-19).  So the blocking point,
+ * put back in the view from its depth, has to be more than a quarter of a
+ * metre (and a little more the further the ray) above this pixel's level
+ * (u_up), and the gap more than two of the depth's steps there. */
+"            vec3 o = vec3((at * u_size - u_centre) * there / u_scale, there);"
+"            bool above = dot(o - p, u_up) > 0.25 + 0.02 * t;"
+"            float step2 = 3.0e-5 * there * there;"
+"            bool through = above && before < -0.02 && gap > step2 && gap < 4.0 + 0.5 * t;"
+"            if ((above && gap > 0.05 + 0.02 * t + step2 && gap < 0.6 + 0.1 * t) || through) {"
 "                shade += 1.0 - s / 11.0;"
 "                break;"
 "            }"
