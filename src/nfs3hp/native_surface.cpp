@@ -540,33 +540,37 @@ static void slipstream(win32::WinApplication* app, int ticks)
     }
 }
 
-/* A car on its side rights itself, and the player's on its roof is put back
- * (NFS_SELF_RIGHT, 1; a number up to 3 for quicker, 0 or off for neither).
- * Since the air steering and the damped roll, a car toppled onto its side
- * could drive on slowly on two wheels and never be put back.
+/* A soft gyroscope keeps every car upright (NFS_SELF_RIGHT, 1: its strength;
+ * up to 3, 0 or off for none).  Since the air steering and the damped roll, a
+ * car toppled onto its side could drive on slowly on two wheels and never come
+ * back down.
  *
- * - On its side -- its up (+0xcc) 65 to 120 degrees off the world's (y up) --
- *   every car of the race is turned back about its own forward axis (+0xd8)
- *   towards upright, its roll speed eased to kRightRate (by the setting) in
- *   kRightEase, the spin set as airRoll sets it (world +0xe4, the car's own
- *   +0x500, the part about forward).  With w x v the way a spin moves a
- *   vector (up x forward is right), turning up towards the sky wants a roll
- *   of minus the sign of the right axis's height.
- * - On its roof (up below the horizon) and under 60 km/h for half a second,
- *   the player's car is put back on the road as its reset key does: bit 2 of
- *   the player's actions at [0x79c4ab], set as sub_431430 reads them
- *   (playerControls, native_effects.cpp), which calls sub_429100. */
-namespace selfright
+ * No thresholds: each tick, every car of the race, on the ground or in the
+ * air, is turned back towards upright by a spring and a damper on its spin.
+ * - The axis: the one that turns the car's up (+0xcc) towards the world's
+ *   (y up) -- up x world-up, with w x v the way a spin moves a vector -- its
+ *   parts about the car's forward (+0xd8, the roll) and right (+0xc0, the
+ *   pitch).  Right on its roof, where that axis vanishes, it rolls the way the
+ *   car already leans (the height of its right axis).
+ * - The spring: kGyroSpring x its share, the share min(1, 4 h^2) of the
+ *   tilt's h = (1 - cos tilt) / 2 -- about 2% on a 30-degree hill or bank,
+ *   so the road's own slopes and a car's lean on its springs feel next to
+ *   nothing, a quarter at 60 degrees, all of it from 90 (on its side) to its
+ *   roof.
+ * - The damper: the spin along that axis taken down by kGyroDamp x the
+ *   spring's share, so it settles rather than slams over.  The spin it is
+ *   given is held under kGyroMostRate.
+ * The spin is put where the game keeps it, as airRoll does: the world's
+ * (+0xe4) and the car's own -- +0x500 about forward, +0x4f8 about right. */
+namespace gyro
 {
-constexpr float kFrom = 65.0f;          // degrees off upright: from here
-constexpr float kTo = 120.0f;           // to here, rolled back
-constexpr float kRightRate = 2.2f;      // rad/s
-constexpr float kRightEase = 0.25f;     // s
-constexpr float kResetSpeed = 60.0f / 3.6f;
-constexpr x86::sreg32 kResetTicks = 32; // half a second
-}  // namespace selfright
+constexpr float kGyroSpring = 14.0f;    // rad/s2 on its roof, times the setting
+constexpr float kGyroDamp = 4.0f;       // 1/s, the damper at full share
+constexpr float kGyroMostRate = 3.0f;   // rad/s, the most spin it gives towards upright
+constexpr float kTickSeconds = 1.0f / 64.0f;
+}  // namespace gyro
 
-static float selfRightSetting()
+static float gyroSetting()
 {
     static const float value = [] {
         const char* text = SDL_getenv("NFS_SELF_RIGHT");
@@ -580,64 +584,56 @@ static float selfRightSetting()
     return value;
 }
 
-static bool s_resetWanted = false;   // the player's car to be put back, at its next controls
-static x86::reg32 s_resetCar = 0;
-
-static void selfRight(win32::WinApplication* app, int ticks, x86::reg32 player)
+static void gyroscope(win32::WinApplication* app, int ticks)
 {
-    static x86::sreg32 s_roofTicks = 0;
-    const float setting = selfRightSetting();
+    const float setting = gyroSetting();
     if (setting <= 0.0f || ticks <= 0)
         return;
-    const float cosFrom = SDL_cosf(selfright::kFrom * SDL_PI_F / 180.0f);
-    const float cosTo = SDL_cosf(selfright::kTo * SDL_PI_F / 180.0f);
+    const float dt = float(ticks) * gyro::kTickSeconds;
     const x86::reg32 count = SDL_min(word(app, 0x5efda0), x86::reg32(16));
-    bool playerOnRoof = false;
     for (x86::reg32 k = 0; k < count; ++k)
     {
         const x86::reg32 car = word(app, 0x5efc48 + 4 * k);
         if (car < 0x5e1120 || car >= 0x5e1120 + 16 * 0x9ac || (car - 0x5e1120) % 0x9ac != 0)
             continue;
-        const float upY = value(app, car + 0xd0);    // the car's up, its height
-        const float rightY = value(app, car + 0xc4); // the car's right, its height
-        if (car == player)
-        {
-            const float speed = SDL_fabsf(value(app, car + 0xb8));
-            playerOnRoof = upY < 0.0f && speed < selfright::kResetSpeed;
-        }
-        if (!(upY < cosFrom && upY > cosTo))
-            continue;   // upright enough, or on its roof
-        float w[3], f[3];
+        float right[3], up[3], fwd[3], w[3];
         for (int i = 0; i < 3; ++i)
         {
+            right[i] = value(app, car + 0xc0 + 4 * x86::reg32(i));
+            up[i] = value(app, car + 0xcc + 4 * x86::reg32(i));
+            fwd[i] = value(app, car + 0xd8 + 4 * x86::reg32(i));
             w[i] = value(app, car + 0xe4 + 4 * x86::reg32(i));
-            f[i] = value(app, car + 0xd8 + 4 * x86::reg32(i));
         }
-        const float roll = w[0] * f[0] + w[1] * f[1] + w[2] * f[2];
-        const float target = (rightY > 0.0f ? -1.0f : 1.0f) * selfright::kRightRate * setting;
-        const float step = (target - roll) * SDL_min(1.0f, float(ticks) / 64.0f / selfright::kRightEase);
+        const float h = 0.5f * (1.0f - SDL_clamp(up[1], -1.0f, 1.0f));   // 0 upright, 0.5 on its side, 1 on its roof
+        const float share = SDL_min(1.0f, 4.0f * h * h);
+        if (share < 1e-4f)
+            continue;
+        // up x (0, 1, 0): its parts about forward and right
+        const float axis[3] = { -up[2], 0.0f, up[0] };
+        float roll = axis[0] * fwd[0] + axis[2] * fwd[2];
+        float pitch = axis[0] * right[0] + axis[2] * right[2];
+        float length = std::sqrt(roll * roll + pitch * pitch);
+        if (length < 1e-3f)
+        {
+            roll = right[1] > 0.0f ? -1.0f : 1.0f;   // right on its roof: the way it leans
+            pitch = 0.0f;
+            length = 1.0f;
+        }
+        roll /= length;
+        pitch /= length;
+        // the spin along that axis now, the spring's push and the damper's pull on it
+        const float spinRoll = w[0] * fwd[0] + w[1] * fwd[1] + w[2] * fwd[2];
+        const float spinPitch = w[0] * right[0] + w[1] * right[1] + w[2] * right[2];
+        const float along = spinRoll * roll + spinPitch * pitch;
+        float step = (gyro::kGyroSpring * setting * share - gyro::kGyroDamp * share * along) * dt;
+        step = SDL_min(step, SDL_max(gyro::kGyroMostRate - along, 0.0f));   // never past the most it gives
+        if (step == 0.0f)
+            continue;
         for (int i = 0; i < 3; ++i)
-            put(app, car + 0xe4 + 4 * x86::reg32(i), w[i] + f[i] * step);
-        put(app, car + 0x500, value(app, car + 0x500) + step);
+            put(app, car + 0xe4 + 4 * x86::reg32(i), w[i] + (fwd[i] * roll + right[i] * pitch) * step);
+        put(app, car + 0x500, value(app, car + 0x500) + roll * step);
+        put(app, car + 0x4f8, value(app, car + 0x4f8) + pitch * step);
     }
-    s_roofTicks = playerOnRoof ? s_roofTicks + ticks : 0;
-    if (s_roofTicks >= selfright::kResetTicks && player)
-    {
-        s_resetWanted = true;
-        s_resetCar = player;
-        s_roofTicks = 0;
-        SDL_Log("[SELFRIGHT] the player's car on its roof: put back on the road");
-    }
-}
-
-/* sub_431430's top (playerControls): whether the player's car is to be put
- * back now -- once. */
-bool takeReset(x86::reg32 car)
-{
-    if (!s_resetWanted || car != s_resetCar)
-        return false;
-    s_resetWanted = false;
-    return true;
 }
 
 void objectsFrame(win32::WinApplication* app);   // native_objects.cpp
@@ -685,7 +681,7 @@ void surfaceFrame(win32::WinApplication* app)
         airSteer(app, ticks);
         airPitch(app, ticks);
         slipstream(app, ticks);
-        selfRight(app, ticks, player);
+        gyroscope(app, ticks);
     }
     if (!player || ticks <= 0 || setting() <= 0.0f || app->getMemory<x86::reg32>(0x6fd3b0) == 1)
         return;

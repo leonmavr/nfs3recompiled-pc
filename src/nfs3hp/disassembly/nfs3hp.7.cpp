@@ -3,8 +3,6 @@
 
 namespace nfs3hp
 {
-// Port (tools/apply_native_effects.py): defined in native_effects.cpp.
-bool playerControls(win32::WinApplication* app, x86::CPU& cpu);
 // Port (tools/apply_object_knock.py): defined in native_objects.cpp.
 void objectHitBefore(win32::WinApplication* app, x86::reg32 car, x86::reg32 index);
 void objectHitAfter(win32::WinApplication* app, x86::reg32 answer);
@@ -18418,11 +18416,6 @@ void Application::sub_431430(WinApplication* __restrict app, x86::CPU& cpu_)
   x86::Local cpu(cpu_);
   NFS2_USE(cpu);
   NFS2_USE(app);
-    if (playerControls(app, cpu.sync())) /* port: native (tools/apply_native_effects.py) */
-    {
-        cpu.reload();
-        return;
-    }
     // 00431430  53                     -push ebx
     app->getMemory<x86::reg32>(cpu.esp-4) = cpu.ebx;
     cpu.esp -= 4;

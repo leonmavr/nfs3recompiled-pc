@@ -830,12 +830,11 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   contact. If it is moving too slow (<60kph) on two or more wheels of contact and it's toppling ( >
   90 degrees between base of car and horizon) for more than 0.5 sec, auto-reset
   it (like pressing r key).
-  - Implemented (2026-11-19, `NFS_SELF_RIGHT`, 1; 0/off, up to 3 quicker),
-    not yet seen in a race: a car 65-120 degrees over is rolled back towards
-    upright at up to 2.2 rad/s (every car); the player's on its roof under
-    60 km/h for half a second is put back as the R key does (bit 2 of
-    [0x79c4ab] set at sub_431430's top, which calls sub_429100). The wheels'
-    contact is not tested -- the tilt alone decides.
+  - Reworked (2026-11-20, `NFS_SELF_RIGHT`, 1; 0/off, up to 3 stronger), to
+    be tested: the rules (65-120 degrees rolled back at a set rate, the roof
+    reset) are gone; every car has a soft gyroscope instead -- a spring and a
+    damper on its spin towards upright, near nothing on the road's slopes,
+    full on its side or roof (TECHNICAL.md, "Cars right themselves").
 - [ ] Gimmicky but fun: windshield wiper + graphic that wipes off snow/raindrops
   from screen.
 - [x] More realistic tire smoke: tire smoke particles and color area great, but

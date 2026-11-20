@@ -173,18 +173,6 @@ float pullSetting()
 void crashShake(win32::WinApplication* app, float place[3], const float right[3], const float up[3]);   // native_crash.cpp
 
 bool raceIsRunning();   // nfs3hp_main.cpp
-bool takeReset(x86::reg32 car);   // native_surface.cpp
-
-/* sub_431430, a car's controls taken (the car in eax; the player's actions at
- * [0x79c4ab], bit 2 its reset): a car on its roof to be put back
- * (NFS_SELF_RIGHT, native_surface.cpp's selfRight) has the reset pressed for
- * it, and the game puts it back on the road as for the key. */
-bool playerControls(win32::WinApplication* app, x86::CPU& cpu)
-{
-    if (takeReset(cpu.eax) && !(app->getMemory<x86::reg8>(cpu.eax + 0x200) & 0x20))
-        app->getMemory<x86::reg8>(0x79c4ab) = x86::reg8(app->getMemory<x86::reg8>(0x79c4ab) | 2);
-    return false;
-}
 
 /* Speed you can feel, 3: the view widens at speed (NFS_SPEED_FOV, how much:
  * 1 by default, 0 or off for none, up to 3).

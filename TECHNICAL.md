@@ -2105,6 +2105,33 @@ car goes up 3 m, rolling): the game's own rolled it past its roof and round;
 damped it tips about 40 degrees and lands on its wheels.
 `NFS_AIR_ROLL_DAMP` (1; up to 3 for more, `0`/`off` for the game's).
 
+### Cars right themselves
+
+With the air steering and the damped roll, a car toppled onto its side could
+drive on slowly on two wheels and never come back down. Every car of the race
+now has a soft gyroscope (`gyroscope`, `native_surface.cpp`): each tick, on
+the ground or in the air, its spin is pushed towards upright by a spring and
+held by a damper -- no thresholds, no resets.
+
+- The axis is the one that turns the car's up (`+0xcc`) towards the world's,
+  its parts about the car's forward (`+0xd8`, the roll) and right (`+0xc0`,
+  the pitch); right on its roof, where that axis vanishes, it rolls the way the
+  car already leans.
+- How hard: with h = (1 - cos tilt) / 2, its share is min(1, 4 h^2) of
+  `kGyroSpring` (14 rad/s^2) -- about 2% on a 30-degree hill or bank, so the
+  road's slopes and a car's lean on its springs feel next to nothing, a quarter
+  at 60 degrees, all of it from on its side to on its roof.
+- The damper takes the spin along that axis down by `kGyroDamp` (4/s) times
+  the same share, so the car settles rather than slams over, and the spin it
+  is given stays under `kGyroMostRate` (3 rad/s).
+- The spin goes where the game keeps it, as `airRoll` puts it: the world's
+  (`+0xe4`) and the car's own (`+0x500` about forward, `+0x4f8` about right).
+
+It replaced the first try at this (2026-11-19): a car 65 to 120 degrees over
+turned back at a set rate, and the player's on its roof reset as the R key
+does -- both gone, and the hook on the controls (`sub_431430`) with them.
+`NFS_SELF_RIGHT` (1; its strength, up to 3, `0`/`off` for none).
+
 ### Bodies on their springs
 
 Each car's body moves a little as it is drawn (`NFS_BODY_MOTION`,
@@ -3139,6 +3166,7 @@ the next time the game starts.
 | `NFS_AIR_STEER` | `0.2` | How much the steering turns the player's car in the air; up to `3`, `0`/`off` none (Steering in the air). |
 | `NFS_AIR_PITCH` | `0.2` | How much the pedals tip the player's car in the air: the brake the nose up, the throttle down; up to `3`, `0`/`off` none (Steering in the air). |
 | `NFS_CRASH_SOUND` | on | `0`/`off`: the game's crash and scrape sounds as they were, none of the port's crash, no pitch by the hit. |
+| `NFS_SELF_RIGHT` | on (`1`) | `0`/`off`: no soft gyroscope; a car toppled on its side may stay there. A number up to 3: how strongly cars are turned back upright (Cars right themselves). |
 | `NFS_AIR_ROLL_DAMP` | on (`1`) | `0`/`off`: cars keep their roll in the air, as the game has it. A number up to 3: how fast it dies away (Cars roll less in the air). |
 | `NFS_AIR_SPEED` | on | `0`/`off`: a car off its wheels is dragged down by the game, as it has it, so a jump costs speed the ramp never took. On, the speed it took off with is put back each tick, its fall left to gravity; a hit in the air still loses what a hit loses (Cars keep their speed in the air). |
 | `NFS_FAST_LOAD` | on (`1`) | `0`/`off`: the loading picture's frames paced and all shown, as before (A race loads in a moment). |
