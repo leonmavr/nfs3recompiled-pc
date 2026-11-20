@@ -1246,10 +1246,15 @@ twice as close, 0.1 to 5). `NFS_MINIMAP=off` keeps the game's own map.
   found through an index of 64 m cells made once per track, each placed on the
   map once a frame, the buffers kept from frame to frame -- as a
   strip a twelfth of the map's side wide with a mitre at each node, between two
-  thin darker outlines. Its grey goes by height: the track's lowest and highest
-  nodes are found once, when the track's nodes are first seen (the countdown),
-  and each node's grey runs linearly from #696969 at the lowest to #c4c4c4 at
-  the highest, set at the strip's corners and blended between them by the GPU. A track whose ends meet is a circuit
+  thin darker outlines. Its colour goes by the road's slope: once, when the
+  track's nodes are first seen (the countdown), each node's slope is worked out
+  from the height gained between the node before it and the node after over the
+  ground between them, the way the track runs, and its colour runs linearly from
+  #646464 at 30 degrees downhill or steeper to #cccaca at 30 degrees uphill or
+  steeper (`kSlopeMostDeg`). The colours are set at the strip's corners and
+  blended between them by the GPU, so a frame does no more than before.
+  `kRoadBySlope = false` shades by height instead, the same two colours at
+  the track's lowest node and its highest. A track whose ends meet is a circuit
   and its strip closes. (The game's own map does not read the nodes' places:
   it adds up two step bytes a node, `+0x14` and `+0x16`, each << 9.)
 - **The cars** are the ones the game's map shows, from its own lists

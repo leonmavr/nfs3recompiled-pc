@@ -127,8 +127,10 @@ constexpr float kScaleLeast = 0.1f, kScaleMost = 5.0f;   // NFS_MINIMAP_SCALE's 
 constexpr float kHeadingEase = 0.12f;     // rotating: seconds the heading takes to follow the car's
 constexpr float kRoadWidth = 1.0f / 12.0f;
 constexpr float kRoadOutline = 0.020f;    // each side
-constexpr float kRoadLow = float(0x69) / 255.0f;    // its grey at the track's lowest point, #696969
-constexpr float kRoadHigh = float(0xc4) / 255.0f;   // and at its highest, #c4c4c4: between them by height
+constexpr float kRoadLow[3] = { 0x64 / 255.0f, 0x64 / 255.0f, 0x64 / 255.0f };    // its darkest, #646464
+constexpr float kRoadHigh[3] = { 0xcc / 255.0f, 0xca / 255.0f, 0xca / 255.0f };   // its lightest, #cccaca
+constexpr bool kRoadBySlope = true;       // its colour by the road's slope (else by the node's height)
+constexpr float kSlopeMostDeg = 30.0f;    // downhill this steep or more darkest, uphill lightest
 constexpr float kOutlineGrey = 0.30f;
 constexpr float kRoadAlpha = 0.95f;
 constexpr float kPanel[3] = { 0.16f, 0.13f, 0.30f };   // the HUD's navy (native_now_playing's kFill)
@@ -272,6 +274,7 @@ struct Track
     x86::reg32 nodes = 0;
     x86::sreg32 count = 0;
     std::vector<float> x, y, z;
+    std::vector<float> shade;               // each node's colour, three floats, worked out once (kRoadBySlope)
     float low = 0.0f, high = 1.0f;
     bool loop = false;
     // the index: the nodes by kBucket-metre cell of the ground, cells x-major
@@ -342,6 +345,31 @@ const Track& track(win32::WinApplication* app)
     t.loop = step > 0.0f && gap < step * kLoopGap;
     if (!(t.high > t.low))
         t.high = t.low + 1.0f;
+    /* Each node's grey, once: by the slope through it -- the height gained
+     * from the node before to the node after over the ground between them,
+     * the way the track runs (uphill lighter), -kSlopeMostDeg to
+     * kSlopeMostDeg darkest to lightest -- or by its height between the
+     * track's lowest and highest. */
+    t.shade.resize(std::size_t(count) * 3);
+    const float most = std::tan(kSlopeMostDeg * 3.14159265f / 180.0f);
+    for (std::size_t k = 0; k < std::size_t(count); ++k)
+    {
+        float h;
+        if (kRoadBySlope)
+        {
+            const std::size_t last = std::size_t(count) - 1;
+            const std::size_t a = k > 0 ? k - 1 : (t.loop ? last : k);
+            const std::size_t c = k < last ? k + 1 : (t.loop ? 0 : k);
+            const float ground = std::hypot(t.x[c] - t.x[a], t.z[c] - t.z[a]);
+            const float rise = ground > 0.01f ? (t.y[c] - t.y[a]) / ground : 0.0f;   // tan of the slope
+            h = 0.5f + 0.5f * SDL_clamp(rise / most, -1.0f, 1.0f);
+        }
+        else
+            h = (t.y[k] - t.low) / (t.high - t.low);
+        h = SDL_clamp(h, 0.0f, 1.0f);
+        for (std::size_t c = 0; c < 3; ++c)
+            t.shade[k * 3 + c] = kRoadLow[c] + (kRoadHigh[c] - kRoadLow[c]) * h;
+    }
     SDL_Log("[MINIMAP] track: %d nodes, heights %.1f to %.1f m, %s", int(count), double(t.low), double(t.high),
             t.loop ? "a circuit" : "point to point");
     return t;
@@ -397,7 +425,7 @@ struct Builder
 /* The road on the map: only the nodes within `reach` of the player, found
  * through the track's index, each placed on the map once; the segments to
  * and from them laid as a strip, mitred at each node, twice -- the darker
- * outline, wider, then the road over it shaded by height.  Buffers kept from
+ * outline, wider, then the road over it shaded by slope (Track::shade).  Buffers kept from
  * frame to frame. */
 template <typename ToMap>
 void road(win32::WinApplication* app, Builder& b, float metres, float meX, float meZ, float side, const ToMap& toMap)
@@ -515,9 +543,9 @@ void road(win32::WinApplication* app, Builder& b, float metres, float meX, float
         c[4] = sx[k]; c[5] = sy[k];
     }
     auto grey = [&](std::size_t i, float (&rgb)[3]) {
-        const float h = (t.y[i] - t.low) / (t.high - t.low);
-        const float g = kRoadLow + (kRoadHigh - kRoadLow) * SDL_clamp(h, 0.0f, 1.0f);
-        rgb[0] = rgb[1] = rgb[2] = g;
+        rgb[0] = t.shade[i * 3];
+        rgb[1] = t.shade[i * 3 + 1];
+        rgb[2] = t.shade[i * 3 + 2];
     };
     b.out.vertices.reserve(b.out.vertices.size() + segments.size() * 12);
     static const float uv[4][2] = { { -1, 0 }, { -1, 0 }, { 1, 0 }, { 1, 0 } };
