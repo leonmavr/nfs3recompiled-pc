@@ -1,5 +1,6 @@
 #include <nfs3hp.h>
 #include "native_guest.h"
+#include "native_radio.h"
 #include "native_settings.h"
 #include <lib/file.h>
 #include <lib/overlay.h>
@@ -48,7 +49,16 @@
  * (nowPlayingOverride, read by musicIndexOpened): its index file and its
  * stream both.  The panel shows it at once.  Calling the game needs the
  * guest's own stack: done right after a frame's swap, from the swap's call
- * (glide2x::setSwapGuestObserver), every register put back after. */
+ * (glide2x::setSwapGuestObserver), every register put back after.
+ *
+ * The radio (native_radio.h): with the player's own MP3s in USER/MUSIC the
+ * music played is one of theirs, and it is that track the panel names -- its
+ * artist and song as its tags or its file name give them -- and the key moves
+ * on to the next of the folder's, not to the next of the game's ten.  Every
+ * track it starts is shown, mid-race too: one playing out brings the next,
+ * and the panel says which.  With none of the folder's playing -- no MP3s, a
+ * README among them, or NFS_RADIO=0 -- the game's ten songs are as they were,
+ * names and all. */
 namespace nfs3hp
 {
 
@@ -162,6 +172,8 @@ struct Art
 };
 
 const Song* s_song = nullptr;     // the race's, from its stream's name
+std::string s_artist, s_title;    // what the panel says: the radio's track's, or that song's
+unsigned s_generation = 0;        // the radio's, as last shown
 const char* s_override = nullptr; // the next song's file, for the one start of the music that asks for it
 bool s_keyHeld = false;           // the next song's key, as last seen
 int s_skips = 0;                  // songs on from this one, the music fading out meanwhile
@@ -347,7 +359,7 @@ void hide()
 
 /* The panel, its emblem and its text; shown 0 to 1: from past the picture's
  * left edge to where it rests. */
-void show(const Art& a, const Song& song, float shown)
+void show(const Art& a, const char* artist, const char* title, float shown)
 {
     using namespace nowplaying;
     auto overlay = std::make_shared<Overlay>();
@@ -355,7 +367,13 @@ void show(const Art& a, const Song& song, float shown)
     const float scale = kCapHeight / a.capTexels;   // HUD units a texel
     const OverlayArt& pics = *a.pictures;
     struct Run { const char* text; const float* colour; };
-    const Run runs[] = { { song.artist, kYellow }, { " - ", kWhite }, { song.title, kWhite } };
+    std::vector<Run> runs;
+    if (artist && *artist)
+    {
+        runs.push_back({ artist, kYellow });
+        runs.push_back({ " - ", kWhite });
+    }
+    runs.push_back({ title ? title : "", kWhite });
     float textW = 0.0f;
     for (const Run& run : runs)
         for (const char* c = run.text; *c; ++c)
@@ -450,7 +468,9 @@ const char* nowPlayingOverride()
  * (sub_4109d0: SNDstreamautovol to nothing, then the timers run until it is
  * done), which held the game a second -- and once it is out stops it, the
  * wait done with, and starts the next song.  Pressed again meanwhile, the
- * song after that. */
+ * song after that.  With the radio playing it is the next of the player's own
+ * tracks, and nothing of the game's: the one playing gives way at once, its
+ * frames the port's, and no fade is the game's to wait for. */
 void nowPlayingSwap(win32::WinApplication* app, x86::CPU& cpu)
 {
     using namespace nowplaying;
@@ -459,12 +479,20 @@ void nowPlayingSwap(win32::WinApplication* app, x86::CPU& cpu)
     const bool held = keyboard && app->getMemory<x86::reg8>(kKeys + ((key >> 8) & 0xff)) != 0;
     const bool pressed = held && !s_keyHeld;
     s_keyHeld = held;
+    const bool paused = SDL_GetTicksNS() - s_clockMovedNs > kPausedNs;
+    /* The radio's next track, which needs nothing of the game's: not the
+     * stream it never reads, nor the flag that says it is streaming. */
+    if (raceIsRunning() && radio::wanted())
+    {
+        if (pressed && !paused)
+            radio::skip();   // the folder's next: the panel shows it, its own track
+        return;
+    }
     if (!raceIsRunning() || !s_song || app->getMemory<x86::reg32>(kMusicStreaming) == 0)
     {
         s_skips = 0;
         return;
     }
-    const bool paused = SDL_GetTicksNS() - s_clockMovedNs > kPausedNs;
     const x86::CPU kept = cpu;
     if (pressed && !paused)
     {
@@ -532,10 +560,31 @@ void nowPlayingStream(const char* path)
         SDL_Log("[MUSIC] now playing: %s - %s", s_song->artist, s_song->title);
 }
 
+/* The song the music is playing now: the radio's track where it has one, else
+ * the game's own, named as its stream's file named it.  False when there is
+ * neither to name. */
+bool names()
+{
+    if (radio::wanted())
+    {
+        s_artist = radio::artist();
+        s_title = radio::title();
+    }
+    else if (s_song)
+    {
+        s_artist = s_song->artist;
+        s_title = s_song->title;
+    }
+    else
+        return false;
+    return !s_artist.empty() || !s_title.empty();
+}
+
 /* Once a frame (onSwap): when to show the panel, and where it is. */
 void nowPlayingTick(win32::WinApplication* app)
 {
     using namespace nowplaying;
+    radio::tick();   // the player's own tracks, if a race is to have them
     const float hold = holdSeconds();
     const bool running = raceIsRunning();
     if (running)
@@ -558,17 +607,29 @@ void nowPlayingTick(win32::WinApplication* app)
     if (!s_wasRunning)
     {
         // A race begins: its song shown, whether it named it now or before.
-        s_armed = s_song != nullptr;
+        s_armed = s_song != nullptr || radio::wanted();
         s_clockReset = false;
         s_showing = false;
     }
     s_wasRunning = true;
     const x86::sreg32 clock = x86::sreg32(app->getMemory<x86::reg32>(kRaceClock));
     const Uint64 now = SDL_GetTicksNS();
-    if (clock < s_lastClock && s_song)
+    if (clock < s_lastClock && (s_song || radio::wanted()))
     {
         s_armed = true;   // restarted
         s_showing = false;
+    }
+    /* Another of the radio's tracks -- the next one asked for, or the one
+     * before it played out: named as it starts, mid-race as at a race's. */
+    if (const unsigned generation = radio::generation(); generation != s_generation)
+    {
+        s_generation = generation;
+        if (radio::wanted())
+        {
+            s_armed = true;
+            s_clockReset = true;
+            s_showing = false;
+        }
     }
     s_lastClock = clock;
     /* The last race's clock stands until the new race sets it going again:
@@ -578,11 +639,16 @@ void nowPlayingTick(win32::WinApplication* app)
     if (s_armed && s_clockReset && float(clock) >= kDelay * kTicksPerSecond)
     {
         s_armed = false;
-        s_showing = true;
-        s_start = clock;
-        SDL_Log("[MUSIC] now playing shown: %s - %s", s_song ? s_song->artist : "?", s_song ? s_song->title : "?");
+        if (names())
+        {
+            s_showing = true;
+            s_start = clock;
+            SDL_Log("[MUSIC] now playing shown: %s - %s", s_artist.c_str(), s_title.c_str());
+        }
     }
-    const Art* a = s_showing && s_song ? art() : nullptr;
+    else if (s_showing && !names())
+        s_showing = false;   // the music stopped: nothing to name
+    const Art* a = s_showing ? art() : nullptr;
     if (!a)
     {
         hide();
@@ -604,7 +670,7 @@ void nowPlayingTick(win32::WinApplication* app)
     const float in = easeOut(t / kSlideIn);
     const float out = 1.0f - easeOut(1.0f - (t - kSlideIn - hold) / kSlideOut);
     const float shown = t < kSlideIn + hold ? in : 1.0f - out;
-    show(*a, *s_song, shown);
+    show(*a, s_artist.c_str(), s_title.c_str(), shown);
 }
 
 }  // namespace nfs3hp

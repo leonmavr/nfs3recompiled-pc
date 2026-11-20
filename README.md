@@ -42,7 +42,9 @@ You need:
    `.bin`.
 3. Play.
 
-How it works, building it, and every setting: [TECHNICAL.md](TECHNICAL.md).
+Your own music can play in a race: put MP3s in a `USER/MUSIC` folder beside
+`FEDATA` and `GAMEDATA` and the radio takes the game's songs' place. How it
+works, building it, and every setting: [TECHNICAL.md](TECHNICAL.md).
 
 Need for Speed III: Hot Pursuit is the property of Electronic Arts. This
 repository contains no game content.

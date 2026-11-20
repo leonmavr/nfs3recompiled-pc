@@ -171,6 +171,10 @@ function(add_game_exe name)
     # The movies: the MAD decoder and player decompiled to C (decomp/mad),
     # called from src/nfs3hp/native_movie.cpp.  Without fused multiply-adds:
     # the inverse DCT rounds through x87 arithmetic it has to match.
+    #
+    # The radio: minimp3 (third_party/minimp3, CC0), which decodes the player's
+    # own MP3s in USER/MUSIC (src/nfs3hp/native_radio.cpp).  The game's decoder
+    # only knows EA's XA ADPCM, which its music and movies are made of.
     if(name STREQUAL "nfs3hp")
         set(MAD_SOURCES
             "${NFS_ROOT_DIR}/decomp/mad/src/mad_decoder.c"
@@ -178,7 +182,8 @@ function(add_game_exe name)
         if(NOT MSVC)
             set_source_files_properties(${MAD_SOURCES} PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
         endif()
-        list(APPEND GAME_SOURCES ${MAD_SOURCES})
+        set(MINIMP3_SOURCES "${NFS_ROOT_DIR}/third_party/minimp3/minimp3.c")
+        list(APPEND GAME_SOURCES ${MAD_SOURCES} ${MINIMP3_SOURCES})
     endif()
 
     # pick the hardcoded disasm set for this game
@@ -230,6 +235,7 @@ function(add_game_exe name)
         ${game_src_dir}
         ${NFS_ROOT_DIR}/src/${name}/disassembly
         ${NFS_ROOT_DIR}/decomp/mad/src
+        ${NFS_ROOT_DIR}/third_party/minimp3
         ${NFS_ROOT_DIR}/include)
     target_link_libraries(${name} PRIVATE ${SDL3_MAIN_TARGET} nfs_core ${SDL3_LIB_TARGET} ${NFS_GL_LIBS})
     if(WITH_PEDANTIC_FPU)
@@ -264,6 +270,15 @@ if(NFS_BUILD_FF_TESTS AND NOT ANDROID)
     add_executable(force_feedback_checks tools/force_feedback_checks.cpp)
     target_include_directories(force_feedback_checks PRIVATE ${NFS_ROOT_DIR}/include)
     target_link_libraries(force_feedback_checks PRIVATE nfs_core ${SDL3_LIB_TARGET} ${NFS_GL_LIBS})
+endif()
+
+option(NFS_BUILD_RADIO_TESTS "Build the radio's track-name checks" OFF)
+if(NFS_BUILD_RADIO_TESTS AND NOT ANDROID)
+    add_executable(radio_checks
+        tools/radio_checks.cpp
+        "${NFS_ROOT_DIR}/src/nfs3hp/native_radio_tags.cpp")
+    target_include_directories(radio_checks PRIVATE "${NFS_ROOT_DIR}/src/nfs3hp")
+    target_compile_options(radio_checks PRIVATE ${NFS_STRICT_FLAGS})
 endif()
 
 option(NFS_BUILD_MEMORY_TESTS "Build guest memory allocator checks" OFF)

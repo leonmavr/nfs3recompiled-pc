@@ -130,6 +130,7 @@ each one does.
 # NFS_WIND = 2
 # NFS_NOW_PLAYING = on
 # NFS_NEXT_SONG_KEY = 0x5d001b04
+# NFS_RADIO = on
 # NFS_MINIMAP = on
 # NFS_MINIMAP_SCALE = 1
 

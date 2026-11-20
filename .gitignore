@@ -45,6 +45,10 @@ plan.md
 /fedata/
 /gamedata/
 
+# The player's own music, which the radio plays (USER/MUSIC): theirs, and never
+# ours to commit.
+/USER/
+
 # Debug build (RelWithDebInfo, -g) for gdb work on the generated code.
 build-dbg/
 

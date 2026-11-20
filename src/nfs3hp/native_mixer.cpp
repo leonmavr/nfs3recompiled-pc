@@ -1,4 +1,5 @@
 #include <nfs3hp.h>
+#include "native_radio.h"
 #include "native_thrash.h"
 #include <SDL3/SDL.h>
 #include <cstdint>
@@ -41,7 +42,13 @@
  *
  * NFS_SND_MIX=0 (launch extra snd_mix false) leaves it all to the generated
  * code, as does NFS_NATIVES=0.  NFS_SND_CHECK=1 (snd_check true) mixes every
- * call both ways and compares the channels, the buffers and the output. */
+ * call both ways and compares the channels, the buffers and the output.
+ *
+ * Two things here are the port's own: the wind, made of noise and added to
+ * every block (addWind), and the radio -- the player's own MP3s in the race's
+ * music channel, its frames decoded by the port where the track's were
+ * (native_radio.h, decodeChannel; NFS_RADIO).  Neither is mixed while
+ * checking, both being state of their own that only one run can have. */
 
 namespace nfs3hp
 {
@@ -74,6 +81,9 @@ constexpr u32 kBeforeOutput = 0x9f6a68;
 constexpr u32 kEndHook = 0x9f6b24;
 constexpr u32 kChannelEnded = 0x9f6b1c;   // the game's: register call (channel)
 constexpr u32 kNextChunk = 0x5678b4;      // the game's stream refill: (state, length)
+// A channel's decoder, of the race's music: XA stereo streamed from a file, or
+// the same with its chunks handed to it (the stream layer's own two).
+constexpr u32 kMusicDecoders[] = { 0x52a3a0, 0x52a1a0 };
 constexpr u32 kCoefficients1 = 0x56ad70;  // XA predictors, two words each
 constexpr u32 kCoefficients2 = 0x56ad80;
 constexpr u32 kNibbles = 0xa0bea0;        // XA: (shift * 16 + nibble) -> the nibble scaled, << 8
@@ -1254,6 +1264,71 @@ struct Mixer
         }
     }
 
+    /* The music channel -- the one whose decoder is the stereo XA streamed
+     * from a file -- carries the player's own music, the radio, where it has a
+     * track (native_radio.h).  Its frames are filled in the game's decoded
+     * buffer instead of the track's, and the channel's own volume, pan,
+     * resampler and reverb carry them as they carried the track's; the game's
+     * stream is never asked for a chunk, so it stands where it stood and the
+     * song never ends, which is the radio's to do. */
+    bool radioChannel(u32 ch) const
+    {
+        const u32 decoder = r32(ch + 0xda8);
+        for (const u32 music : kMusicDecoders)
+            if (decoder == music)
+                return true;
+        return false;
+    }
+
+    /* How many source frames a second a channel's decoder is heard at: its
+     * resampler's step is that many source frames an output frame, in 16.16
+     * (sub_5205bc's, or its going-on twin's).  A track made at the rate the
+     * step names is one the resampler passes as it is. */
+    int sourceRate(u32 ch) const
+    {
+        const u32 resampler = r32(ch + 0xdb8);
+        const u32 step = r32(ch + 0xd64 + 8);
+        if ((resampler == 0x5205bc || resampler == 0x52046c) && step > 0)
+            return int((std::uint64_t(gameSoundRate()) * step) >> 16);
+        return gameSoundRate();
+    }
+
+    /* NFS_RADIO_TRACE=1: the channel the race music's frames go to, once, with
+     * its decoder, the rate and the resampler's step it expects, and how loud
+     * it is -- the radio's or the game's own track's alike. */
+    void radioTrace(u32 ch, u32 frames)
+    {
+        static bool on = false, read = false;
+        static bool told[16] = {};
+        if (!read)
+        {
+            const char* value = SDL_getenv("NFS_RADIO_TRACE");
+            on = value && SDL_strcmp(value, "1") == 0;
+            read = true;
+        }
+        const u32 index = (ch - kChannels) / kChannelSize;
+        if (!on || index >= 16 || told[index])
+            return;
+        told[index] = true;
+        SDL_Log("[RADIO] channel %u is the music's: decoder %x, %d Hz (step %x), volume %d/%d of 127 towards %d/%d, send %d, %u frames at a time",
+                index, r32(ch + 0xda8), sourceRate(ch), r32(ch + 0xd64 + 8), int(s8(ch + 1)), int(s8(ch + 2)),
+                int(s8(ch + 4)), int(s8(ch + 5)), int(r8(ch + 8)), frames);
+    }
+
+    i32 decodeChannel(u32 ch, u32 frames, u32 target, bool radio)
+    {
+        if (!radio || !radioChannel(ch))
+        {
+            if (!radio && radioChannel(ch))
+                radioTrace(ch, frames);
+            return decode(r32(ch + 0xda8), ch + 0xc, frames, target);
+        }
+        radioTrace(ch, frames);
+        // 1 where the radio filled the frames; 0 where it had none, the channel
+        // silent for the block rather than the game's track heard again.
+        return nfs3hp::radio::decode(reinterpret_cast<i16*>(m + target), i32(frames), sourceRate(ch)) ? 1 : 0;
+    }
+
 
     // ---------------------------------------------------------------- reverb
 
@@ -1418,6 +1493,7 @@ struct Mixer
      * frame mixed by itself; how many frames that took. */
     u32 ramp(u32 ch, u32 frames)
     {
+        const bool radio = !checking && nfs3hp::radio::wanted();
         u32 n = frames;
         u32 done = 0;
         for (;;)
@@ -1433,7 +1509,7 @@ struct Mixer
                 w8(ch + 2, u8(r8(ch + 2) + r8(ch + 7)));
             setVolume(r32(ch + 0xdbc), ch + 0xd90, s8(ch + 1), s8(ch + 2));
             const u32 need = needed(r32(ch + 0xdb4), ch + 0xd64, 1);
-            if (decode(r32(ch + 0xda8), ch + 0xc, need, r32(kDecoded) + 0x10) <= 0)
+            if (decodeChannel(ch, need, r32(kDecoded) + 0x10, radio) <= 0)
                 return done;
             const u32 block = resample(r32(ch + 0xdb8), ch + 0xd64, 1, r32(kDecoded) + 0x10, r32(kResampled));
             const u32 target = r32(kAccumulator) + ((done << (r8(kShift) & 31)) << 2);
@@ -1567,6 +1643,7 @@ struct Mixer
     /* sub_5006f8: one block of at most 256 frames. */
     void block(u32 target, u32 frames)
     {
+        const bool radio = !checking && nfs3hp::radio::wanted();
         for (u32 i = 0; i < kChannelCount; ++i)
         {
             const u32 ch = channel(i);
@@ -1577,7 +1654,7 @@ struct Mixer
             if (rest == 0)
                 continue;
             const u32 need = needed(r32(ch + 0xdb4), ch + 0xd64, rest);
-            const i32 got = decode(r32(ch + 0xda8), ch + 0xc, need, r32(kDecoded) + 0x10);
+            const i32 got = decodeChannel(ch, need, r32(kDecoded) + 0x10, radio);
             if (got < 0)
                 ended(i);
             if (got <= 0)

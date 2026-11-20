@@ -1214,6 +1214,60 @@ over the frames that follow, and the stop and the start come once it is out
 (at most 3 s) -- the old song fading, the game never held. Pressed again
 meanwhile, it goes a song further. Not while paused, nor with the music off.
 
+### The radio
+
+A race's music can be the player's own: MP3s dropped in `USER/MUSIC`, beside
+the game's `FEDATA` and `GAMEDATA` (on a phone, the app's data folder, where
+the import put them; a desktop run's is looked for there first, then in the
+folder the game was started from, which is where `FEDATA` and `GAMEDATA`
+usually are). The folder is read at every race -- `*.mp3` in any case,
+shuffled -- and what plays is the race's music: a song after another, the
+order shuffled again whenever it comes round, and a fresh one every race, the
+song that played last never opening the next round. The game's ten songs are
+not heard while one of these is. Removing every MP3 brings them back, and
+`NFS_RADIO=0` does the same without moving anything.
+
+**Where it plays.** The port's frames go into the game's music channel, the
+one whose decoder is the stereo XA streamed from a file (`sub_52a3a0`, and its
+chunk-fed twin `sub_52a1a0`): the mixer fills that channel's decoded buffer
+with them instead of calling the game's decoder (`native_mixer.cpp`,
+`decodeChannel`), so the channel's own volume and pan -- the race music's
+volume, from the Audio screen -- its resampler, its place in the race's reverb
+and its stopping, which is what a pause and the music being off both do, are
+still the game's. The game's stream is never asked for a chunk: it stands
+where it stands, so its song never ends, and the radio's do. `NFS_SND_TRACE=1`
+prints the decoder each channel mixes through, the music's among them.
+
+**Decoding.** Nothing in the game reads an MP3: its music and movies are EA's
+XA ADPCM, and the MAD the movies are played with (`decomp/mad`) is a video
+codec, not MPEG audio. So the port brings a decoder of its own, minimp3
+(`third_party/minimp3/`, CC0), and decodes on the sound thread -- a
+256-frame block at a time, into the buffer the channel would have had -- while
+the folder is searched, the file read whole and its names read on the main
+thread, once a frame (`radio::tick`, from the swap's call, next to the
+panel's). A track is decoded at the rate the channel's resampler expects: its
+step is how many source frames an output frame takes, in 16.16 (`sourceRate`),
+and the port resamples its own decoder's output to it -- the game's resampler
+then passes it as it is.
+
+A track that plays out says so, and the next one is loaded in its place; one
+that gives nothing at all -- an interrupted download, a file that is not an
+MP3 -- is passed over, and a folder of those leaves the game's own music to
+play, as if the radio were never there.
+
+**What it is called.** The ID3v2 tag at the file's start where it has one --
+`TPE1` and `TIT2`, or v2.2's `TP1` and `TT2`, in whatever encoding its frames
+say, turned into UTF-8 -- else ID3v1's 128 bytes at its end, else the file's
+name, a leading track number dropped and the rest split about its first " - "
+(`src/nfs3hp/native_radio_tags.cpp`; `tools/radio_checks.cpp` holds the
+reading against the tags and the names). The panel that names the song
+(`NFS_NOW_PLAYING`) shows the radio's: the artist in yellow and the song in
+white, as it shows the game's ten, and again whenever another of the folder's
+starts -- a second into the race the first time, then whenever one is asked
+for or plays out. A name with no artist of its own is the song alone. The key that skips a song
+(`NFS_NEXT_SONG_KEY`, `]`) moves on to the next of the folder's: nothing of
+the game's is stopped or faded, so it starts at once.
+
 ### The minimap
 
 The game's map in the HUD is replaced by the port's own (`native_minimap.cpp`):
@@ -3154,6 +3208,8 @@ the next time the game starts.
 | `NFS_AI_BEGINNER` | `1.23` | How much quicker Beginner opponents are: their pull and the speed they aim for (in the wet 60% of it through the corners); `1`/`0`/`off` for the game's Beginner, up to 1.5 (The opponents' driving, tuned). |
 | `NFS_NOW_PLAYING` | on | `0`/`off`: no panel naming the song as a race starts. `1`/`on`: it stays five seconds; another number up to 30: that many (The song now playing). |
 | `NFS_NEXT_SONG_KEY` | `0x5d001b04` (`]`) | The key that starts the next song in a race, as the game writes a binding: its character << 24, its scan code << 8, 4 for the keyboard. Set from Controls (Next song); `0` for none (The song now playing). |
+| `NFS_RADIO` | on | `0`/`off`: the game's own music, no radio. On, a race plays the MP3s in `USER/MUSIC` instead (The radio). |
+| `NFS_RADIO_TRACE` | off | `1`: which channel the race music's frames go to -- its decoder, the rate and the resampler's step, and the channel's volume and reverb send, the first time one does, whether the radio's or the game's own music's; and how much of each radio track there was as it plays out (`[RADIO]`). |
 | `NFS_HEADLIGHT_OBJECTS` | on (`1.6`) | `0`/`off`: the player's headlights light only the road, as the game has them. A number: how bright they are on the walls, fences, trees and buildings (Headlights on what stands by the road). |
 | `NFS_MOTION_BLUR` | on (`2`) | `0`/`off`: no motion blur. A number up to 2: how strong the streaks outside the sharp ellipse are (Speed you can feel). |
 | `NFS_LIGHT_GLOW` | on (`1`) | `0`/`off`: the lamps' glow as the game has it, a star of spikes. A number up to 3: how strong the halo round the soft glow (The lamps' glow, and their trails). |

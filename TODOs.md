@@ -904,11 +904,21 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     (`hud98.fsh`), the artist in yellow and the song in white in the HUD's font
     (`cp16bi.ffn`) -- stays 5 s and slides out (`NFS_NOW_PLAYING`,
     `native_now_playing.cpp`, `ThrashRenderer::drawOverlay`).
-- [ ] Music control: what tracks play in game, skip current track button.
+- [x] Music control: what tracks play in game, skip current track button.
   - Done: skip to the next song, `]` by default, bound under Controls (Next
     song; the list scrolls now, a triangle at either end), the panel showing
     it (`NFS_NEXT_SONG_KEY`).
-- [ ] Radio: be able to add your own tracks.
+- [x] Radio: be able to add your own music tracks in races. Add them in a game folder, e.g.
+  USER/MUSIC folder at the root. The user can just drop mp3s and the game can
+  parse them (artist, song if tagged , else <artist> <separator like -> <song>)
+  and play them during races.
+  - Done: `USER/MUSIC` beside the game's data, `*.mp3` in it, read at every
+    race and played in the race's music channel -- the game's volume, pause
+    and reverb with them -- in a shuffled order, shuffled again every round
+    and every race (`NFS_RADIO`, `native_radio.cpp`). minimp3 decodes them on
+    the sound thread; the names are ID3v2's, else ID3v1's, else the file's own
+    "Artist - Song" (`native_radio_tags.cpp`, `tools/radio_checks.cpp`). The
+    panel names the track, `]` skips to the next of them.
 - [x] Crash sounds by how hard the hit was; metal scraping rising with speed.
 - [x] Wind roar at speed: the air ripping past the car, louder with the speed,
   echoing in tunnels as the game's own sounds do.
