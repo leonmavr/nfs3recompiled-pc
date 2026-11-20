@@ -3379,6 +3379,22 @@ int main(int argc, char* argv[])
                     autoRotate ? "LandscapeLeft LandscapeRight"
                     : reversed ? "LandscapeRight" : "LandscapeLeft");
     }
+    /* Name the application before SDL initialises, so it is what the desktop's
+     * mixer lists and remembers (see the role hint below for why the name has
+     * to be unique). */
+    SDL_SetAppMetadata("NFS III: Hot Pursuit", "port", "org.nfs3recompiled.nfs3hp");
+#if defined(__linux__) && !defined(__ANDROID__)
+    /* A PipeWire session manager remembers each stream's volume under a key
+     * built from the first of media.role, application.id and application.name
+     * it finds (wireplumber's node/state-stream.lua formKey), and SDL always
+     * sets media.role -- "Game" unless told otherwise.  Every SDL game on the
+     * machine therefore shared the single "Game" bucket, and a stale 13% in it
+     * made this port play 17 dB quieter than every other application while its
+     * own mix was already peaking at full scale.  A role that names the port
+     * gives it a bucket of its own: the mixer starts it at 100% and remembers
+     * what the user sets for this port alone. */
+    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_STREAM_ROLE, "Game.nfs3hp");
+#endif
     /* SDL_INIT_GAMEPAD is what turns raw joysticks into the mapped
      * SDL_EVENT_GAMEPAD_* stream window.cpp translates into keystrokes. */
 #ifdef NFS_RELEASE

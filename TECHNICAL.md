@@ -1268,6 +1268,27 @@ for or plays out. A name with no artist of its own is the song alone. The key th
 (`NFS_NEXT_SONG_KEY`, `]`) moves on to the next of the folder's: nothing of
 the game's is stopped or faded, so it starts at once.
 
+### The desktop mixer's remembered volume
+
+A desktop's sound server remembers each stream's volume from run to run, and
+WirePlumber -- PipeWire's session manager -- keys what it remembers on the
+first of `media.role`, `application.id` and `application.name` the stream
+carries (`node/state-stream.lua`, `formKey`). SDL sets `media.role` on every
+stream it opens, `Game` unless told otherwise, so before the port named itself
+every SDL game on a machine shared one `media.role:Game` entry: a volume set
+for one of them came back for all, and a stale 13% found in that entry is what
+made the port play some 17 dB quieter than everything else on the machine
+while its own mix was already peaking at full scale. The port names itself
+now, `SDL_SetAppMetadata` (the mixer lists it as *NFS III: Hot Pursuit*), and
+gives its stream a role of its own, `Game.nfs3hp`
+(`SDL_HINT_AUDIO_DEVICE_STREAM_ROLE`), so its volume is remembered for it
+alone: a first run is at 100%, and GNOME's Sound panel, or
+`wpctl set-volume <stream> 0.8`, sets this port's and no other application's
+(`src/nfs3hp/nfs3hp_main.cpp`, before `SDL_Init`). Nothing in the port turns
+the game's sound down: `NFS_VOLUME` (`1.8`) lifts the finished mix, which peaks
+just under 0 dBFS before it is lifted, and a mixer entry below 100% is the
+sound server's doing, not the port's.
+
 ### The minimap
 
 The game's map in the HUD is replaced by the port's own (`native_minimap.cpp`):
@@ -3201,7 +3222,7 @@ the next time the game starts.
 | `NFS_FE_NATIVE_OFF` | unset | A list of generated functions, `sub_437e00,sub_438260`, left to the generated code while the other decompiled ones run. |
 | `NFS_NATIVE_CHECK` | off | `1` runs each native stand-in against the generated code and logs any difference (`[NATIVE]`). The polygon and car loops are compared over all of guest memory once a second. Slow, and draws some triangles twice. `clip` checks only the stand-ins of the clipping (both ways to the screen, the car's quad mesh included), the track, the effects, the car lights and detail, the objects and the vector math, every call; the small helpers called from hundreds of places are checked on every 64th call. |
 | `NFS_AUDIO_RATE` | unset | The output's own sample rate. The game mixes at 22050 Hz and SDL converts to this; a device opened at any other rate is resampled by Android, off its low-latency path. Unset, the device opens at SDL's default. |
-| `NFS_VOLUME` | `1.8` | How far the game's sound is lifted on its way to the device (`include/lib/loudness.h`, applied in `src/nfs3hp/native_sound.cpp`), 0.1 to 8. Above -2.5 dBFS the lifted sound's peaks are rounded off (a soft saturator), and a limiter that looks 3 ms ahead holds what is left under -1 dBFS; `1` leaves the mix as the game made it. Higher is louder but rounds off more of the sound. The Audio screen's own sliders start at 50%, and raising them is the other way up. |
+| `NFS_VOLUME` | `1.8` | How far the game's sound is lifted on its way to the device (`include/lib/loudness.h`, applied in `src/nfs3hp/native_sound.cpp`), 0.1 to 8. Above -2.5 dBFS the lifted sound's peaks are rounded off (a soft saturator), and a limiter that looks 3 ms ahead holds what is left under -1 dBFS; `1` leaves the mix as the game made it. Higher is louder but rounds off more of the sound. The Audio screen's own sliders start where the game sets them -- 100 of 127 for the music, 127 for speech (`sub_472520`) -- and raising them to 127 is the other way up. Nothing here turns the sound down; a desktop mixer showing this port below 100% is the sound server's doing (see *The desktop mixer's remembered volume*). |
 | `NFS_MINIMAP` | on | The port's minimap, Stationary or Rotating and scaled as the HUD options' Map display and Map Scale say; `off`/`0`: the game's own map (The minimap). |
 | `NFS_MINIMAP_SCALE` | `1` | A zoom on top of the menu's Map Scale: 2 twice as close, 0.5 twice as far (0.1 to 5). |
 | `NFS_MINIMAP_TRACE` | off | `1`: once a second, where the minimap is and how the track's nodes lie against the player's car. |
