@@ -1214,6 +1214,85 @@ over the frames that follow, and the stop and the start come once it is out
 (at most 3 s) -- the old song fading, the game never held. Pressed again
 meanwhile, it goes a song further. Not while paused, nor with the music off.
 
+### The minimap
+
+The game's map in the HUD is replaced by the port's own (`native_minimap.cpp`):
+a translucent panel of the HUD's navy with faint, lighter grid lines every 50 m
+of the world, the road over it, the cars on the road, and a metal corner piece
+at each of the four corners. The player is always in the middle.
+The game's own HUD options drive it, as they did the game's map: **Map
+display** Off, Stationary or Rotating, and **Map Scale** 1x to 4x (Options ->
+Heads Up Display), and the keys that toggle and size the map. They live in the
+player's HUD layout, `0x6fbc60 + view x 0x348 + cop x 0x1a4`: the display at
+`+0x10` (0 off -- the HUD has no map step then -- 1 rotating, else stationary;
+`sub_48d4c0` turns its map only for 1) and the scale, a float, at `+0`.
+Stationary keeps the map still -- the world's +z up, +x right -- scrolling
+under the player's prism, which turns with the car; rotating turns the map
+under the player so the way the car faces is always up (the heading eased over
+about a tenth of a second, the prism pointing straight up; the game's own
+turned to the road ahead instead). At 1x it shows 400 m from the middle to the
+top edge, at 2x 200 m, and so on; `NFS_MINIMAP_SCALE` zooms on top of that (2
+twice as close, 0.1 to 5). `NFS_MINIMAP=off` keeps the game's own map.
+
+- **Where.** Drawn into the rectangle the game lays its own map out in each
+  frame: HUD element 17, or 22 when the player drives a cop, of the layout's
+  table of pixel rectangles (`0x749758`, 23 of four ints a player, filled by
+  `sub_480910`; `sub_48d110` reads the same one for the game's map). So the
+  HUD's layout and size options move and scale it as they did the game's.
+  The rectangle is in the screen mode's pixels (`[0x7cdae4]` high), turned
+  into the overlay's HUD units.
+- **The road** is the track's nodes (`[0x5dd948]`, `[0x5dd940]` of them, 0x24
+  bytes each, x y z as 16.16 from +0), the ones within reach of the view --
+  found through an index of 64 m cells made once per track, each placed on the
+  map once a frame, the buffers kept from frame to frame -- as a
+  strip a twelfth of the map's side wide with a mitre at each node, between two
+  thin darker outlines. Its grey goes by height: the track's lowest and highest
+  nodes are found once, when the track's nodes are first seen (the countdown),
+  and each node's grey runs linearly from #696969 at the lowest to #c4c4c4 at
+  the highest, set at the strip's corners and blended between them by the GPU. A track whose ends meet is a circuit
+  and its strip closes. (The game's own map does not read the nodes' places:
+  it adds up two step bytes a node, `+0x14` and `+0x16`, each << 9.)
+- **The cars** are the ones the game's map shows, from its own lists
+  (`sub_48d4c0`): the cops of `0x5efa88` (`[0x5efd88]` of them) while they
+  chase (`[+0x624]`), the racers of `0x5efc48` (`[0x5efda0]`) less the player
+  and those the game leaves off (a car of the id at `[0x6fdc30]`; bit 0 of
+  `+0x200` with `[+0x2c4]` 4), and the player's (`0x5efac8` by `[0x6fd4f4]`).
+  Each is a prism pointing the way it faces (`+0xd8`), in its driver's colour --
+  the colour the game gives its dot, `[0x793098 + 4 x car[+0x1f0]]`,
+  0x..RRGGBB -- the cops red and blue by turns, every half second of the race's
+  clock and by their number, as the game's dots flash. The player's is 1.25
+  times the others' and drawn over them.
+- **The sprites** are baked by `tools/generate_minimap_art.py` into
+  `assets/minimap/minimap-atlas.png` (256 x 128: two 128-pixel tiles, copied
+  beside the executable as the snow sprites are). The prism is a low
+  three-sided pyramid seen from above, in greys: its apex the joint of an
+  inverted Y whose tail runs to the tip, the Y its ridges, each facet lit by its
+  own slope from the upper left with a glint, the outer edges bevelled, the
+  ridges and outline dark, a soft shadow below and right. The overlay tints it
+  (its Map kind): mid grey is the colour itself, darker greys go to black,
+  lighter ones to white. The corner is a thin chamfered L of silver, darker at
+  its outlines with a shine over its inner part, 82% opaque, turned for each
+  corner by its uv and drawn untinted. `--preview sheet.png` writes them tinted
+  and enlarged.
+- **Drawn** as a layer of the overlay set for one frame at a time
+  (`glide2x::overlayFrame`, `OverlayMinimap`), from the top of the game's map
+  itself, `sub_48d4c0` (`minimap` in `native_render.cpp`, entered as the other
+  native stand-ins are, `tools/apply_native_render.py`): whichever way the HUD
+  is drawn -- `hudNative` or the generated `sub_482b00` -- it comes there.
+  When the port's map is drawn the game's returns at once, only its count of
+  the frame's dots at `[0x55e2b4]` cleared, as it would. A frame whose HUD has
+  no map step shows none. The overlay's layers each keep
+  their own pictures; its free-form triangles (`Overlay::vertices`) come in
+  batches, each cut to a rectangle (the road and cars to the map's), and its
+  Flat kind smooths a strip's two edges over a pixel. All the layers are drawn
+  in one pass (`drawOverlays`): the GL state saved and put back once, the
+  uniforms' places and the vertex layout set up once, the corners' buffer
+  kept.
+- Split screen, and a build without the sprites (Android, for now), keep the
+  game's own map. `NFS_MINIMAP=off` keeps it too. `NFS_MINIMAP_TRACE=1` says
+  once a second where the map is and how the nodes lie against the player's
+  car, and once per track the nodes' extents.
+
 ### Reading the game's UI art
 
 What the port draws in the game's own style it takes from the game's files,
@@ -3014,6 +3093,9 @@ the next time the game starts.
 | `NFS_NATIVE_CHECK` | off | `1` runs each native stand-in against the generated code and logs any difference (`[NATIVE]`). The polygon and car loops are compared over all of guest memory once a second. Slow, and draws some triangles twice. `clip` checks only the stand-ins of the clipping (both ways to the screen, the car's quad mesh included), the track, the effects, the car lights and detail, the objects and the vector math, every call; the small helpers called from hundreds of places are checked on every 64th call. |
 | `NFS_AUDIO_RATE` | unset | The output's own sample rate. The game mixes at 22050 Hz and SDL converts to this; a device opened at any other rate is resampled by Android, off its low-latency path. Unset, the device opens at SDL's default. |
 | `NFS_VOLUME` | `1.8` | How far the game's sound is lifted on its way to the device (`include/lib/loudness.h`, applied in `src/nfs3hp/native_sound.cpp`), 0.1 to 8. Above -2.5 dBFS the lifted sound's peaks are rounded off (a soft saturator), and a limiter that looks 3 ms ahead holds what is left under -1 dBFS; `1` leaves the mix as the game made it. Higher is louder but rounds off more of the sound. The Audio screen's own sliders start at 50%, and raising them is the other way up. |
+| `NFS_MINIMAP` | on | The port's minimap, Stationary or Rotating and scaled as the HUD options' Map display and Map Scale say; `off`/`0`: the game's own map (The minimap). |
+| `NFS_MINIMAP_SCALE` | `1` | A zoom on top of the menu's Map Scale: 2 twice as close, 0.5 twice as far (0.1 to 5). |
+| `NFS_MINIMAP_TRACE` | off | `1`: once a second, where the minimap is and how the track's nodes lie against the player's car. |
 | `NFS_NOW_PLAYING` | on | `0`/`off`: no panel naming the song as a race starts. `1`/`on`: it stays five seconds; another number up to 30: that many (The song now playing). |
 | `NFS_NEXT_SONG_KEY` | `0x5d001b04` (`]`) | The key that starts the next song in a race, as the game writes a binding: its character << 24, its scan code << 8, 4 for the keyboard. Set from Controls (Next song); `0` for none (The song now playing). |
 | `NFS_HEADLIGHT_OBJECTS` | on (`1.6`) | `0`/`off`: the player's headlights light only the road, as the game has them. A number: how bright they are on the walls, fences, trees and buildings (Headlights on what stands by the road). |

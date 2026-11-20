@@ -46,6 +46,10 @@ x86::reg32 hudReferenceWidth(win32::WinApplication* app);
 void widescreenHudRect(win32::WinApplication* app, x86::reg32 slot);
 x86::reg32 hudReferenceHeight(win32::WinApplication* app);
 void hudTablePanel(win32::WinApplication* app, x86::reg32 player, bool otherLayout);
+// native_minimap.cpp: the port's own map in place of the game's (false: the game's
+// wanted), and NFS_MINIMAP_TRACE.
+bool minimapDraw(win32::WinApplication* app, x86::reg32 player);
+void minimapTrace(win32::WinApplication* app, x86::reg32 player);
 // nfs3hp_main.cpp: the cabin's rectangle fitted to 4:3 (x, y, width, height).
 x86::reg32 cabinRect(win32::WinApplication* app, x86::reg32 field);
 // nfs3hp_main.cpp: NFS_CAR_DETAIL_FULL, and the loading screen at 4:3 (ports).
@@ -11946,7 +11950,7 @@ void hudNative(win32::WinApplication* app, x86::CPU& cpu)
     auto map = [&]() {
         r.edx = r.edi;
         r.eax = player();
-        if (!callTo(0x48d4c0))
+        if (!callTo(0x48d4c0))   // the port's own map, by the hook at its top (minimap)
             return false;
         r.eax = player();
         if (!callTo(0x481f90))
@@ -16733,6 +16737,26 @@ bool hudBand(win32::WinApplication* app, x86::CPU& cpu)
         return true;
     }
     render::hudBandNative(app, cpu);
+    return true;
+}
+
+
+/* sub_48d4c0, the HUD's map for player eax (edx the car): the port's own
+ * instead (native_minimap.cpp) unless it says no.  Whichever way the HUD is
+ * drawn -- hudNative's map step or the generated sub_482b00 -- it comes here.
+ * As the game's would, the count of the frame's dots it noted
+ * ([0x55e2b4 + 4 player]) is cleared; every register but eax kept. */
+bool minimap(win32::WinApplication* app, x86::CPU& cpu)
+{
+    if (nativeOriginalRunning())
+        return false;
+    const x86::reg32 player = cpu.eax;
+    const bool drawn = minimapDraw(app, player);
+    minimapTrace(app, player);
+    if (!drawn)
+        return false;
+    app->getMemory<x86::reg32>(0x55e2b4 + player * 4) = 0;
+    cpu.esp += 4;   // ret
     return true;
 }
 

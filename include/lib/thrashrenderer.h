@@ -141,8 +141,16 @@ public:
     // Whether the whole-picture pass is on to draw them (initPost).
     bool particlesDrawn() const { return m_particlesOn; }
     /* The port's overlay (glide2x::overlay): what the race's frames show from
-     * the next on, over the HUD (drawOverlay). */
-    void setOverlay(std::shared_ptr<const Overlay> overlay) { m_overlay = std::move(overlay); }
+     * the next on, over the HUD (drawOverlay), a layer at a time; a layer set
+     * `oneFrame` is shown by the next frame only, and must be set again for
+     * the one after (the minimap, made as the HUD is drawn). */
+    void setOverlay(std::shared_ptr<const Overlay> overlay, int layer = OverlayNowPlaying, bool oneFrame = false)
+    {
+        if (layer < 0 || layer >= OverlayLayerCount)
+            return;
+        m_overlays[std::size_t(layer)] = std::move(overlay);
+        m_overlayOneFrame[std::size_t(layer)] = oneFrame;
+    }
     void setColourGrade(float red, float green, float blue, float saturation, float contrast)
     {
         m_grade[0] = red; m_grade[1] = green; m_grade[2] = blue; m_grade[3] = saturation; m_grade[4] = contrast;
@@ -297,7 +305,8 @@ private:
     void takeSky(int width, int height);
     void allocateLightLayer(int width, int height);
     void drawParticles(const ThrashDraw& draw, int width, int height);
-    void drawOverlay(const Overlay& overlay, int width, int height);
+    void drawOverlays(const std::array<std::shared_ptr<const Overlay>, OverlayLayerCount>& overlays, int width,
+                      int height);
     void postProcess(const ThrashDraw& draw);
     bool meterExposure();
     void meterSkyOpen(bool raining);
@@ -352,10 +361,17 @@ private:
     unsigned int            m_particleProgram = 0, m_particleArray = 0, m_particleBuffer = 0;
     unsigned int            m_particleNoise = 0;    // the particles' noise (makeNoise)
     // The overlay: the game thread's, and the GL thread's way of drawing it (drawOverlay).
-    std::shared_ptr<const Overlay> m_overlay;
-    const OverlayArt*       m_overlayUploaded = nullptr;
+    std::array<std::shared_ptr<const Overlay>, OverlayLayerCount> m_overlays;
+    std::array<bool, OverlayLayerCount> m_overlayOneFrame{};
+    struct OverlayTextures
+    {
+        const OverlayArt* uploaded = nullptr;
+        unsigned int font = 0, icon = 0, map = 0;
+    };
+    std::array<OverlayTextures, OverlayLayerCount> m_overlayTextures;   // each layer's pictures, uploaded
     unsigned int            m_overlayProgram = 0, m_overlayArray = 0, m_overlayBuffer = 0;
-    unsigned int            m_overlayFont = 0, m_overlayIcon = 0;
+    int                     m_overlaySize = -1, m_overlayPanel = -1, m_overlayGlow = -1, m_overlayUnit = -1;
+    std::vector<float>      m_overlayCorners;   // a layer's corners, its storage kept from frame to frame
     bool                    m_overlayFailed = false;
     // The soft particles' half-size layer (drawParticles; NFS_PARTICLES_HALF).
     unsigned int            m_softLayer = 0, m_softFramebuffer = 0, m_softLayerProgram = 0;

@@ -3619,6 +3619,7 @@ static const char g_overlayShader[] =
 "flat in int v_kind;"
 "uniform sampler2D u_font;"
 "uniform sampler2D u_icon;"
+"uniform sampler2D u_map;"
 "uniform vec4 u_panel;"
 "uniform vec3 u_glow;"
 "uniform float u_unit;"
@@ -3636,6 +3637,23 @@ static const char g_overlayShader[] =
 "        o_color = texture(u_icon, v_uv) * v_color.a;"
 "        return;"
 "    }"
+"    if (v_kind == 3)"
+"    {"
+"        vec4 t = texture(u_map, v_uv);"
+"        vec3 shade = t.a > 0.0 ? t.rgb / t.a : vec3(0.0);"
+"        vec3 lit = mix(v_color.rgb * 2.0 * shade, mix(v_color.rgb, vec3(1.0), 2.0 * shade - 1.0),"
+"                       step(0.5, shade));"
+"        o_color = vec4(clamp(lit, 0.0, 1.0) * t.a, t.a) * v_color.a;"
+"        return;"
+"    }"
+"    if (v_kind == 4)"
+"    {"
+"        float w = fwidth(v_uv.x);"
+"        float edge = w > 0.0 ? clamp((1.0 - abs(v_uv.x)) / w, 0.0, 1.0) : 1.0;"
+"        float a = v_color.a * edge;"
+"        o_color = vec4(v_color.rgb * a, a);"
+"        return;"
+"    }"
 "    vec2 q = abs(v_uv) - (u_panel.xy - u_panel.z);"
 "    float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - u_panel.z;"
 "    float down = clamp(v_uv.y / (2.0 * u_panel.y) + 0.5, 0.0, 1.0);"
@@ -3649,6 +3667,8 @@ static const char g_overlayShader[] =
 
 static unsigned int overlayTexture(int width, int height, const std::vector<std::uint8_t>& texels)
 {
+    if (width <= 0 || height <= 0 || texels.size() < std::size_t(width) * std::size_t(height) * 4)
+        return 0;   // a layer without this picture
     GLuint texture = 0;
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);
@@ -3665,13 +3685,20 @@ static unsigned int overlayTexture(int width, int height, const std::vector<std:
     return texture;
 }
 
-/* Into the framebuffer as the frame left it (its picture bound); every state
- * touched put back as it was, the next frame's drawing assuming its own. */
-void ThrashRenderer::drawOverlay(const Overlay& overlay, int width, int height)
+/* Into the framebuffer as the frame left it (its picture bound), each layer in
+ * turn; every state touched put back as it was, once for them all, the next
+ * frame's drawing assuming its own. */
+void ThrashRenderer::drawOverlays(const std::array<std::shared_ptr<const Overlay>, OverlayLayerCount>& overlays,
+                                  int width, int height)
 {
-    const std::shared_ptr<const OverlayArt>& art = overlay.art;
-    constexpr GLint kFontUnit = 9, kIconUnit = 10;   // clear of every unit the frame uses
-    if (m_overlayFailed || !art || overlay.quads.empty() || width <= 0 || height <= 0)
+    constexpr GLint kFontUnit = 9, kIconUnit = 10, kMapUnit = 11;   // clear of every unit the frame uses
+    auto drawable = [](const std::shared_ptr<const Overlay>& o) {
+        return o && o->art && !(o->quads.empty() && o->vertices.empty());
+    };
+    bool any = false;
+    for (const auto& o : overlays)
+        any = any || drawable(o);
+    if (m_overlayFailed || !any || width <= 0 || height <= 0)
         return;
     if (!m_overlayProgram)
     {
@@ -3693,8 +3720,34 @@ void ThrashRenderer::drawOverlay(const Overlay& overlay, int width, int height)
         }
         glGenVertexArrays(1, &m_overlayArray);
         glGenBuffers(1, &m_overlayBuffer);
+        // its uniforms, looked up once; the samplers' units are fixed
+        m_overlaySize = glGetUniformLocation(m_overlayProgram, "u_size");
+        m_overlayPanel = glGetUniformLocation(m_overlayProgram, "u_panel");
+        m_overlayGlow = glGetUniformLocation(m_overlayProgram, "u_glow");
+        m_overlayUnit = glGetUniformLocation(m_overlayProgram, "u_unit");
+        GLint was = 0;
+        glGetIntegerv(GL_CURRENT_PROGRAM, &was);
+        glUseProgram(m_overlayProgram);
+        glUniform1i(glGetUniformLocation(m_overlayProgram, "u_font"), kFontUnit);
+        glUniform1i(glGetUniformLocation(m_overlayProgram, "u_icon"), kIconUnit);
+        glUniform1i(glGetUniformLocation(m_overlayProgram, "u_map"), kMapUnit);
+        glUseProgram(GLuint(was));
+        const GLsizei stride = 9 * sizeof(float);
+        GLint arrayWas = 0, bufferWas = 0;
+        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &arrayWas);
+        glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &bufferWas);
+        glBindVertexArray(m_overlayArray);
+        glBindBuffer(GL_ARRAY_BUFFER, m_overlayBuffer);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, (const void*)0);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, (const void*)(2 * sizeof(float)));
+        glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, stride, (const void*)(4 * sizeof(float)));
+        glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, stride, (const void*)(8 * sizeof(float)));
+        for (GLuint k = 0; k < 4; ++k)
+            glEnableVertexAttribArray(k);
+        glBindBuffer(GL_ARRAY_BUFFER, GLuint(bufferWas));
+        glBindVertexArray(GLuint(arrayWas));
     }
-    GLint activeTexture = 0, program = 0, array = 0, buffer = 0, fontWas = 0, iconWas = 0;
+    GLint activeTexture = 0, program = 0, array = 0, buffer = 0, fontWas = 0, iconWas = 0, mapWas = 0;
     glGetIntegerv(GL_ACTIVE_TEXTURE, &activeTexture);
     glGetIntegerv(GL_CURRENT_PROGRAM, &program);
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &array);
@@ -3703,20 +3756,8 @@ void ThrashRenderer::drawOverlay(const Overlay& overlay, int width, int height)
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &fontWas);
     glActiveTexture(GL_TEXTURE0 + kIconUnit);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &iconWas);
-    if (m_overlayUploaded != art.get())
-    {
-        if (m_overlayFont)
-            glDeleteTextures(1, &m_overlayFont);
-        if (m_overlayIcon)
-            glDeleteTextures(1, &m_overlayIcon);
-        m_overlayFont = overlayTexture(art->fontW, art->fontH, art->font);
-        m_overlayIcon = overlayTexture(art->iconW, art->iconH, art->icon);
-        m_overlayUploaded = art.get();
-    }
-    glActiveTexture(GL_TEXTURE0 + kFontUnit);
-    glBindTexture(GL_TEXTURE_2D, m_overlayFont);
-    glActiveTexture(GL_TEXTURE0 + kIconUnit);
-    glBindTexture(GL_TEXTURE_2D, m_overlayIcon);
+    glActiveTexture(GL_TEXTURE0 + kMapUnit);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &mapWas);
     GLboolean mask[4] = { GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE };
     glGetBooleanv(GL_COLOR_WRITEMASK, mask);
     GLint blendSrc = 0, blendDst = 0, blendSrcA = 0, blendDstA = 0;
@@ -3727,49 +3768,98 @@ void ThrashRenderer::drawOverlay(const Overlay& overlay, int width, int height)
     const GLboolean depth = glIsEnabled(GL_DEPTH_TEST), cull = glIsEnabled(GL_CULL_FACE),
                     blend = glIsEnabled(GL_BLEND), scissor = glIsEnabled(GL_SCISSOR_TEST);
 
-    // Six corners a quad: position (pixels), uv, colour, kind.
-    const float unit = float(height) / kOverlayUnits;
-    std::vector<float> corners;
-    corners.reserve(overlay.quads.size() * 6 * 9);
-    for (const OverlayQuad& q : overlay.quads)
-    {
-        const float xs[2] = { q.x0 * unit, q.x1 * unit }, ys[2] = { q.y0 * unit, q.y1 * unit };
-        const float us[2] = { q.u0, q.u1 }, vs[2] = { q.v0, q.v1 };
-        static const int order[6][2] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 0 }, { 1, 1 }, { 0, 1 } };
-        for (const auto& c : order)
-        {
-            const float corner[9] = { xs[c[0]], ys[c[1]], us[c[0]], vs[c[1]], q.r, q.g, q.b, q.a, float(q.kind) };
-            corners.insert(corners.end(), corner, corner + 9);
-        }
-    }
     glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_renderer->m_texture, 0);
     glViewport(0, 0, width, height);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);
-    glDisable(GL_SCISSOR_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);   // the picture's alpha is the frame's own
     glUseProgram(m_overlayProgram);
-    glUniform2f(glGetUniformLocation(m_overlayProgram, "u_size"), float(width), float(height));
-    glUniform1i(glGetUniformLocation(m_overlayProgram, "u_font"), kFontUnit);
-    glUniform1i(glGetUniformLocation(m_overlayProgram, "u_icon"), kIconUnit);
-    glUniform4f(glGetUniformLocation(m_overlayProgram, "u_panel"), overlay.panelHalfW, overlay.panelHalfH,
-                overlay.panelRadius, SDL_max(overlay.panelGlow, 0.01f));
-    glUniform3f(glGetUniformLocation(m_overlayProgram, "u_glow"), overlay.glowR, overlay.glowG, overlay.glowB);
-    glUniform1f(glGetUniformLocation(m_overlayProgram, "u_unit"), unit);
+    const float unit = float(height) / kOverlayUnits;
+    glUniform2f(m_overlaySize, float(width), float(height));
+    glUniform1f(m_overlayUnit, unit);
     glBindVertexArray(m_overlayArray);
     glBindBuffer(GL_ARRAY_BUFFER, m_overlayBuffer);
-    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(corners.size() * sizeof(float)), corners.data(), GL_STREAM_DRAW);
-    const GLsizei stride = 9 * sizeof(float);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, (const void*)0);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, (const void*)(2 * sizeof(float)));
-    glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, stride, (const void*)(4 * sizeof(float)));
-    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, stride, (const void*)(8 * sizeof(float)));
-    for (GLuint k = 0; k < 4; ++k)
-        glEnableVertexAttribArray(k);
-    glDrawArrays(GL_TRIANGLES, 0, GLsizei(corners.size() / 9));
+
+    for (std::size_t layer = 0; layer < overlays.size(); ++layer)
+    {
+        if (!drawable(overlays[layer]))
+            continue;
+        const Overlay& overlay = *overlays[layer];
+        const OverlayArt* art = overlay.art.get();
+        OverlayTextures& textures = m_overlayTextures[layer];
+        if (textures.uploaded != art)
+        {
+            for (unsigned int* texture : { &textures.font, &textures.icon, &textures.map })
+                if (*texture)
+                {
+                    glDeleteTextures(1, texture);
+                    *texture = 0;
+                }
+            textures.font = overlayTexture(art->fontW, art->fontH, art->font);
+            textures.icon = overlayTexture(art->iconW, art->iconH, art->icon);
+            textures.map = overlayTexture(art->mapW, art->mapH, art->map);
+            textures.uploaded = art;
+        }
+        glActiveTexture(GL_TEXTURE0 + kFontUnit);
+        glBindTexture(GL_TEXTURE_2D, textures.font);
+        glActiveTexture(GL_TEXTURE0 + kIconUnit);
+        glBindTexture(GL_TEXTURE_2D, textures.icon);
+        glActiveTexture(GL_TEXTURE0 + kMapUnit);
+        glBindTexture(GL_TEXTURE_2D, textures.map);
+        glUniform4f(m_overlayPanel, overlay.panelHalfW, overlay.panelHalfH, overlay.panelRadius,
+                    SDL_max(overlay.panelGlow, 0.01f));
+        glUniform3f(m_overlayGlow, overlay.glowR, overlay.glowG, overlay.glowB);
+
+        // Six corners a quad, then the triangles: position (pixels), uv, colour, kind.
+        std::vector<float>& corners = m_overlayCorners;
+        corners.clear();
+        corners.reserve((overlay.quads.size() * 6 + overlay.vertices.size()) * 9);
+        for (const OverlayQuad& q : overlay.quads)
+        {
+            const float xs[2] = { q.x0 * unit, q.x1 * unit }, ys[2] = { q.y0 * unit, q.y1 * unit };
+            const float us[2] = { q.u0, q.u1 }, vs[2] = { q.v0, q.v1 };
+            static const int order[6][2] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 0 }, { 1, 1 }, { 0, 1 } };
+            for (const auto& c : order)
+            {
+                const float corner[9] = { xs[c[0]], ys[c[1]], us[c[0]], vs[c[1]], q.r, q.g, q.b, q.a, float(q.kind) };
+                corners.insert(corners.end(), corner, corner + 9);
+            }
+        }
+        const std::size_t quadCorners = corners.size() / 9;
+        for (const OverlayVertex& v : overlay.vertices)
+        {
+            const float corner[9] = { v.x * unit, v.y * unit, v.u, v.v, v.r, v.g, v.b, v.a, float(v.kind) };
+            corners.insert(corners.end(), corner, corner + 9);
+        }
+        glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(corners.size() * sizeof(float)), corners.data(), GL_STREAM_DRAW);
+        glDisable(GL_SCISSOR_TEST);
+        if (quadCorners)
+            glDrawArrays(GL_TRIANGLES, 0, GLsizei(quadCorners));
+        // The free-form triangles, batch by batch, each cut to its rectangle.
+        std::size_t first = 0;
+        auto drawVertices = [&](std::size_t end, const float* clip) {
+            end = SDL_min(end, overlay.vertices.size());
+            if (end <= first)
+                return;
+            if (clip && clip[2] > clip[0] && clip[3] > clip[1])
+            {
+                const GLint x0 = GLint(SDL_floorf(clip[0] * unit)), y0 = GLint(SDL_floorf(clip[1] * unit));
+                const GLint x1 = GLint(SDL_ceilf(clip[2] * unit)), y1 = GLint(SDL_ceilf(clip[3] * unit));
+                glEnable(GL_SCISSOR_TEST);
+                glScissor(x0, y0, SDL_max(x1 - x0, 0), SDL_max(y1 - y0, 0));
+            }
+            else
+                glDisable(GL_SCISSOR_TEST);
+            glDrawArrays(GL_TRIANGLES, GLint(quadCorners + first), GLsizei(end - first));
+            first = end;
+        };
+        for (const OverlayBatch& batch : overlay.batches)
+            drawVertices(batch.end, batch.clip);
+        drawVertices(overlay.vertices.size(), nullptr);
+    }
 
     glColorMask(mask[0], mask[1], mask[2], mask[3]);
     glBlendFuncSeparate(GLenum(blendSrc), GLenum(blendDst), GLenum(blendSrcA), GLenum(blendDstA));
@@ -3780,6 +3870,8 @@ void ThrashRenderer::drawOverlay(const Overlay& overlay, int width, int height)
     glBindBuffer(GL_ARRAY_BUFFER, GLuint(buffer));
     glBindVertexArray(GLuint(array));
     glUseProgram(GLuint(program));
+    glActiveTexture(GL_TEXTURE0 + kMapUnit);
+    glBindTexture(GL_TEXTURE_2D, GLuint(mapWas));
     glActiveTexture(GL_TEXTURE0 + kIconUnit);
     glBindTexture(GL_TEXTURE_2D, GLuint(iconWas));
     glActiveTexture(GL_TEXTURE0 + kFontUnit);
@@ -3837,9 +3929,16 @@ void ThrashRenderer::swap()
     m_renderer->paceFrame();
     const bool keepFrame = m_wetness > 0.0f && m_detailTexture;
     const int frameW = int(m_renderer->m_width), frameH = int(m_renderer->m_height);
-    // The port's overlay, over a race's frame alone (setOverlay).
-    std::shared_ptr<const Overlay> overlay = m_raceView ? m_overlay : nullptr;
-    glthread::post(m_renderer, [this, keepFrame, frameW, frameH, overlay]() {
+    // The port's overlay, over a race's frame alone (setOverlay); a one-frame layer is spent.
+    std::array<std::shared_ptr<const Overlay>, OverlayLayerCount> overlays;
+    for (std::size_t k = 0; k < overlays.size(); ++k)
+    {
+        if (m_raceView)
+            overlays[k] = m_overlays[k];
+        if (m_overlayOneFrame[k])
+            m_overlays[k].reset();
+    }
+    glthread::post(m_renderer, [this, keepFrame, frameW, frameH, overlays]() {
         /* The texture the next frame's wet road reflects (only while the road
          * is wet); drawPending fills it as the HUD begins. */
         if (keepFrame)
@@ -3873,8 +3972,8 @@ void ThrashRenderer::swap()
             m_reflectionValid = false;
         }
         // Over the HUD, after the reflection was taken of the frame without it.
-        if (overlay && m_sceneDrawn)
-            drawOverlay(*overlay, frameW, frameH);
+        if (m_sceneDrawn)
+            drawOverlays(overlays, frameW, frameH);
         /* NFS_FRAME_DUMP: NFS_FRAME_DUMP_COUNT race frames in a row (90, three
          * seconds) from the NFS_FRAME_DUMP_AT'th (600: past the countdown, the
          * car on its way), each with a line of how it was drawn.  A race's

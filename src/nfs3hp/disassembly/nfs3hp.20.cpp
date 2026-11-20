@@ -4,6 +4,8 @@
 namespace nfs3hp
 {
 // Port (tools/apply_native_render.py): defined in native_render.cpp.
+bool minimap(win32::WinApplication* app, x86::CPU& cpu);
+// Port (tools/apply_native_render.py): defined in native_render.cpp.
 bool hud(win32::WinApplication* app, x86::CPU& cpu);
 // Port (tools/apply_native_render.py): defined in native_render.cpp.
 bool hudBand(win32::WinApplication* app, x86::CPU& cpu);
@@ -52241,6 +52243,11 @@ void Application::sub_48d4c0(WinApplication* __restrict app, x86::CPU& cpu_)
   x86::Local cpu(cpu_);
   NFS2_USE(cpu);
   NFS2_USE(app);
+    if (minimap(app, cpu.sync())) /* port: native (tools/apply_native_render.py) */
+    {
+        cpu.reload();
+        return;
+    }
     // 0048d4c0  53                     -push ebx
     app->getMemory<x86::reg32>(cpu.esp-4) = cpu.ebx;
     cpu.esp -= 4;

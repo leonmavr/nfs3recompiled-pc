@@ -193,7 +193,15 @@ bool effectParticlesDrawn()
 void overlay(std::shared_ptr<const Overlay> overlay)
 {
     if (s_directRenderer)
-        s_directRenderer->setOverlay(std::move(overlay));
+        s_directRenderer->setOverlay(std::move(overlay), OverlayNowPlaying, false);
+}
+
+bool overlayFrame(int layer, std::shared_ptr<const Overlay> overlay)
+{
+    if (!s_directRenderer)
+        return false;
+    s_directRenderer->setOverlay(std::move(overlay), layer, true);
+    return true;
 }
 
 void motion(float speed, bool night)

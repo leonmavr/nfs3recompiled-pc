@@ -250,6 +250,14 @@ if(NOT ANDROID)
             "$<TARGET_FILE_DIR:nfs3hp>/assets/snowflakes"
         COMMENT "Copying snowflake sprites beside nfs3hp"
         VERBATIM)
+    set(MINIMAP_ATLAS "${NFS_ROOT_DIR}/assets/minimap/minimap-atlas.png")
+    set_property(TARGET nfs3hp APPEND PROPERTY LINK_DEPENDS "${MINIMAP_ATLAS}")
+    add_custom_command(TARGET nfs3hp POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${NFS_ROOT_DIR}/assets/minimap"
+            "$<TARGET_FILE_DIR:nfs3hp>/assets/minimap"
+        COMMENT "Copying minimap sprites beside nfs3hp"
+        VERBATIM)
 endif()
 option(NFS_BUILD_FF_TESTS "Build guest COM force-feedback regression checks" OFF)
 if(NFS_BUILD_FF_TESTS AND NOT ANDROID)

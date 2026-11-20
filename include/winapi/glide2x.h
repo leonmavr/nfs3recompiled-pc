@@ -62,6 +62,9 @@ bool effectParticlesDrawn();
 /* The port's overlay over the race's finished frames (lib/overlay.h): from
  * the next frame on what to draw, null for nothing. */
 void overlay(std::shared_ptr<const Overlay> overlay);
+/* A layer of it for the next frame alone (lib/overlay.h, OverlayLayer), set
+ * again each frame it is to be seen; false when there is no renderer to draw it. */
+bool overlayFrame(int layer, std::shared_ptr<const Overlay> overlay);
 void colourGrade(float red, float green, float blue, float saturation, float contrast);
 /* The player's headlights in the view (origin, direction, the car's up) and the
  * projection's scale and centre, for lighting what stands beside the road. */

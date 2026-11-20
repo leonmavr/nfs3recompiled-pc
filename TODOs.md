@@ -637,13 +637,44 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 - [ ] In performance view/head to head comparison of each car, have an
   'Advanced...' option which shows acceleration curve, top speed and 0-100
   acceleration for each car (like car_perf.py tool does but in game's UI).
-- [ ] Minimap: instead of showing opponents/cops as big blobs, show them as                                                                  
-  pseudo-voxel triangles, i.e. they consist of an invest Y shape with the bottom                                                             
-  of Y as the top and lines that connect the tips. Note just flat single-color 
-  triangles but pseudo-shaded. Cop triangles should ofc pulse in cop light color 
-  scheme (red and blue). Also instead of a solid grey light for a road, have a
-  grey straight line about 12px thick with darker grey outline on each side
-  that's 3px thick.
+- [x] Minimap revamp: the port's own minimap, drawn in its HUD pass, in place
+  of the game's (spec 2026-11-20, from Leo's doodle: a grey road bending
+  away, a colored (same color as driver's car) prism on it pointing up the road).
+  - Done (2026-11-20; native_minimap.cpp, TECHNICAL.md "The minimap"): all of the below, driven by the HUD options' Map display
+    (off/stationary/rotating) and Map Scale, NFS_MINIMAP=off for the game's
+    and NFS_MINIMAP_SCALE on top; split screen and Android keep the game's map.
+  - Road: light grey, with=1/12th of minimap, a darker grey thin outline each side.
+    Height shown along it: lighter where the track is higher, darker where
+    it is lower (the nodes' heights against the track's lowest and highest).
+  - Cars: each a pre-rendered "prism" -- a pointed triangle, its tip the way
+    the car faces. Its skeleton is an inverted Y (the tail of the Y at the
+    tip) in a darker shade, and the three corners are joined by edges of the
+    same dark shade; the areas between are lighter the further from the
+    skeleton and the edges, for a pseudo-3D facet look (not a flat
+    single-colour triangle). The player's in its colour (green in the doodle)
+    and 1.25x the others' size; cops flash red and blue (as the cop lights).
+  - View: the player's triangle always in the middle of the map and turning
+    with the car; the map itself does not turn -- a fixed-orientation view of
+    the track round the player, scrolling under it.
+  - Behind: a translucent panel of the HUD's background colour with faint,
+    lighter grid lines.
+  - Frame: a corner piece at each of the four corners -- a pre-rendered
+    asset, semi-translucent, metallic silver, to read as a metal corner frame
+    part:
+    darker along its outlines, thinner, with a slight shine over its inner
+    part.
+  - Placement: MUST move with the game's HUD layout as the game's own map
+    does -- drawn into the rectangle the game works out for the map element
+    each frame (sub_480910, the HUD's layout fractions), so the HUD options
+    move it; an ini override (anchor, offset, size) may come later.
+  - Scale: MUST be scalable, lke the game's minimap is.
+  - Leads: the game's map is drawn by sub_48d4c0 from hudNative's `map` step
+    (native_render.cpp; its helpers sub_48cb50, sub_48cc60, its state round
+    0x792878-0x79289c, 0x7930fc, 0x79c10c-0x79c120) -- skip that call to
+    switch it off. The track: the nodes at [0x5dd948], 0x24 bytes each, with
+    their places (and heights). The cars: the race's list, position +0x98,
+    forward +0xd8, cop +0x200 & 0x20. Drawn like the Now Playing panel
+    (`drawOverlay`, native_now_playing.cpp).
 - [ ] Lap delta on the HUD: +/-0.00 against the best lap at each split, green
   or red, in a panel like the Now Playing one (`drawOverlay`, the HUD's font).
 

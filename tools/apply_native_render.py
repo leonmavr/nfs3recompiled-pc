@@ -103,6 +103,9 @@ SITES = [
     ("nfs3hp", "sub_48c0e0", "segmentMeter"),
     ("nfs3hp", "sub_4800a0", "hudBand"),
     ("nfs3hp", "sub_482b00", "hud"),
+    # The HUD's map: the port's own instead (native_minimap.cpp), the game's
+    # when that says no.
+    ("nfs3hp", "sub_48d4c0", "minimap"),
     # Loading: the car's and the cabin's textures, the pictures, the loading
     # screen and the movie player.
     ("nfs3hp", "sub_4b7d30", "carTextures"),
