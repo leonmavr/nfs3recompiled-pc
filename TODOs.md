@@ -685,6 +685,13 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     (`drawOverlay`, native_now_playing.cpp).
 - [ ] Lap delta on the HUD: +/-0.00 against the best lap at each split, green
   or red, in a panel like the Now Playing one (`drawOverlay`, the HUD's font).
+- [ ] Opponent list overhaul: same kind of background (grids etc) as mini maps
+  and same corners as minimap. Opponent list doesn't just list Name, it also
+  swtiches between name -> car -> optionally: AI personality, truncated to some
+  letters. Opponents who are faster/slower are shown in red/green as before and
+  relative times are shown the same way. Also there's a bug in it: whenever i
+  try to position it with the HUD menu, it shifts itself up slightly (by 50-100?
+  px).
 
 ### Driving/Gameplay
 - [x] Tire grip by surface: less on snow, sand and grass than on asphalt. Each
@@ -935,6 +942,9 @@ Obviously this effect depends on speed.
   close or open on the player.
 - [ ] Blow-off valve / shift crack on an upshift, timed with the exhaust flame
   and pitched like the crash sounds.
+- [ ] Voice lines for cops to yell from their vehicle when near (loudness based on distance and
+  stero). For this you just need to figure out how to extract cop voice and how
+  you'd play it in race - I'll generate the lines with elevenlabs.
 
 
 ### Career mode
