@@ -3,6 +3,8 @@
 
 namespace nfs3hp
 {
+// Port (tools/apply_ai_wet_recovery.py): defined in native_ai.cpp.
+x86::reg32 aiSlideSkill(win32::WinApplication* app);
 // Port (tools/apply_native_ai.py): defined in native_ai.cpp.
 bool aiDrive(win32::WinApplication* app, x86::CPU& cpu);
 // Port (tools/apply_native_ai.py): defined in native_ai.cpp.
@@ -10547,7 +10549,7 @@ L_0x00408455:
 L_0x00408459:
     // 00408459  833df0d46f0001         +cmp dword ptr [0x6fd4f0], 1
     {
-        x86::reg32 tmp1 = app->getMemory<x86::reg32>(x86::reg32(7329008) /* 0x6fd4f0 */);
+        x86::reg32 tmp1 = aiSlideSkill(app); /* port: the skill level, Expert's recovery at Beginner (tools/apply_ai_wet_recovery.py) */
         x86::reg32 tmp2 = x86::reg32(x86::sreg32(1 /*0x1*/));
         x86::reg32 result = tmp1 - tmp2;
         cpu.flags.cf = tmp1 < tmp2;

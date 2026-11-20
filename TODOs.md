@@ -583,7 +583,7 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   heat levels, e.g. pursuit McLaren, Corvette, or Diablo. -> partly done by
   marking each slot with a car. However they never deploy McLaren (it's an added
   cop car).
-- [ ] SERIOUS BUG: in the rain, opponents often lose control on turnining
+- [x] SERIOUS BUG: in the rain, opponents often lose control on turnining
   (possibly when braking, not sure?) causing them to turn 90 or even 180
   degrees, slow down dramatically, and then they have to re-align with their trajectory.
   Then they essentially lose the race as they have to spend entire seconds
@@ -591,6 +591,14 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   - No longer seen (Leo, 2026-11-14), after the AI and cop pace changes.
   - Re-opening this: happens only at beginner difficulty. Happens on weather=on.
   However still needs fixing.
+  - Fixed, to be tested (2026-11-20): sub_407fa0 pushes a sliding racer back
+    onto its line (force x10, turning x50, every half second) except at
+    Beginner, where it is x1.1 -- so in the wet Beginner opponents could not
+    recover. They now get Expert's push (aiSlideSkill,
+    tools/apply_ai_wet_recovery.py); TECHNICAL.md, "The opponents' driving".
+    Seen fixed in the rain (Leo, 2026-11-20). Beginner opponents also made
+    23% quicker (NFS_AI_BEGINNER, 1.23 by play-testing), with Expert's push
+    in the dry too: done, played spin-free.
 - [x] Traffic: for each traffic car, halve its weight. This way they don't
   complely slow you down when crashing.
   - Done: mass and inertia halved (`NFS_TRAFFIC_WEIGHT`, 0.5).

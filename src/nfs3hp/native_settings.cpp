@@ -136,6 +136,7 @@ each one does.
 [The opponents, the cops and the traffic]
 # NFS_AI_TUNE = on
 # NFS_AI_PACE = 1.06
+# NFS_AI_BEGINNER = 1.23
 # NFS_GRID_TRAFFIC = on
 # NFS_PURSUIT_GRID = on
 # NFS_TRAFFIC_WEIGHT = 0.5

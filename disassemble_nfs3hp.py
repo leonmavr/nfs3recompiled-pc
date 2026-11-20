@@ -893,6 +893,10 @@ if __name__ == '__main__':
     # the generated code to the bit (src/nfs3hp/native_ai.h).
     from tools.apply_native_ai import apply as apply_native_ai
     apply_native_ai(Path(__file__).resolve().parent)
+    # Port: Beginner opponents recover from a slide as Expert ones do
+    # (native_ai.cpp's aiSlideSkill), where in the wet they used to spin round.
+    from tools.apply_ai_wet_recovery import apply as apply_ai_wet_recovery
+    apply_ai_wet_recovery(Path(__file__).resolve().parent)
 
     # The rest of the drawing native, function by function, behind the same
     # kind of hook.

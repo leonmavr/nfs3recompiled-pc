@@ -154,6 +154,42 @@ bool networkRace(win32::WinApplication* app)
     return app->getMemory<x86::reg32>(0x6fd3b0) == 2;
 }
 
+constexpr x86::reg32 kSkill = 0x6fd4f0;     // Skill Level: 1 Beginner, 0 Expert
+constexpr x86::reg32 kWeather = 0x6fd4cc;   // nonzero: rain or snow
+constexpr x86::reg32 kBeginner = 1, kExpert = 0;
+constexpr float kBeginnerPaceDefault = 1.23f;
+constexpr float kBeginnerWetCorners = 0.6f; // the share of it they take the corners with in the wet
+
+/* NFS_AI_BEGINNER: how much quicker Beginner opponents are (1.23 by default, by play:
+ * their engines' pull and the speed they aim for at each point of the track,
+ * so they take the corners quicker too -- in the wet only kBeginnerWetCorners
+ * of that through the corners); 1, 0 or off for the game's Beginner, up to
+ * 1.5.  Expert is left as it is. */
+float beginnerPace(win32::WinApplication* app)
+{
+    static const float pace = []() {
+        const char* value = SDL_getenv("NFS_AI_BEGINNER");
+        if (!value || !*value || SDL_strcasecmp(value, "on") == 0)
+            return kBeginnerPaceDefault;
+        if (SDL_strcmp(value, "0") == 0 || SDL_strcasecmp(value, "off") == 0)
+            return 1.0f;
+        const float parsed = float(SDL_atof(value));
+        return parsed >= 1.0f && parsed <= 1.5f ? parsed : kBeginnerPaceDefault;
+    }();
+    if (!aiTuned() || networkRace(app) || app->getMemory<x86::reg32>(kSkill) != kBeginner)
+        return 1.0f;
+    return pace;
+}
+
+/* The same through the corners: the aim's share of it, less in the wet. */
+float beginnerCorners(win32::WinApplication* app)
+{
+    const float pace = beginnerPace(app);
+    if (app->getMemory<x86::reg32>(kWeather) != 0)
+        return 1.0f + (pace - 1.0f) * kBeginnerWetCorners;
+    return pace;
+}
+
 /* The cars in the race ([0x6fd510]): racers, cops and traffic, which with a
  * full grid and traffic (raceGrid below) go past the first eight. */
 int carsInRace(win32::WinApplication* app)
@@ -497,7 +533,7 @@ void unstick(win32::WinApplication* app, x86::reg32 car, int i)
         const float want = app->getMemory<float>(car + 0x7b0);
         if (want != o.wantWritten && want > 0.0f)
         {
-            o.wantWritten = want * driverOf(app, car).corners * (1.0f + (aiPace() - 1.0f) * 0.5f);
+            o.wantWritten = want * driverOf(app, car).corners * (1.0f + (aiPace() - 1.0f) * 0.5f) * beginnerCorners(app);
             app->getMemory<float>(car + 0x7b0) = o.wantWritten;
         }
     }
@@ -595,6 +631,35 @@ void unstick(win32::WinApplication* app, x86::reg32 car, int i)
 }
 
 }  // namespace
+
+/* The skill level (Skill Level: Beginner 1, Expert 0, [0x6fd4f0]) as sub_407fa0
+ * reads it to push a sliding racer back onto its line
+ * (tools/apply_ai_wet_recovery.py).  Every half second of the race's clock a
+ * racer off its line or sliding has its force times 10 and its turning times
+ * 50 -- or, at Beginner, times 1.1, next to nothing.  In the rain or snow
+ * ([0x6fd4cc]) Beginner opponents slid, could not come back, turned 90 or 180
+ * degrees, all but stopped, and lost the race getting going again; and since
+ * they are quicker (beginnerPace) they slide in the dry too.  So the
+ * comparison is told Expert, in any weather: Beginner opponents get Expert's
+ * push back from a slide.  Off with NFS_AI_TUNE=0, and in a network race,
+ * where every machine has to drive the opponents alike. */
+x86::reg32 aiSlideSkill(win32::WinApplication* app)
+{
+    const x86::reg32 skill = app->getMemory<x86::reg32>(kSkill);
+    const bool wet = app->getMemory<x86::reg32>(kWeather) != 0;
+    const bool helped = skill == kBeginner && aiTuned() && !networkRace(app);
+    static x86::reg32 s_said = 0xffffffffu;
+    const x86::reg32 said = skill * 2 + (wet ? 1 : 0);
+    if (said != s_said)
+    {
+        s_said = said;
+        SDL_Log("[AI] skill level %u (%s), weather %s: a sliding racer gets %s's push back; pace x%.2f, corners x%.2f",
+                unsigned(skill), skill == kBeginner ? "Beginner" : "Expert", wet ? "on" : "off",
+                skill == kBeginner && !helped ? "Beginner" : "Expert", double(beginnerPace(app)),
+                double(beginnerCorners(app)));
+    }
+    return helped ? kExpert : skill;
+}
 
 /* Port: traffic lighter (NFS_TRAFFIC_WEIGHT, 0.5 by default), so a car that
  * hits it is not stopped dead, and the cops heavier (NFS_COP_WEIGHT, 1.25), so
@@ -793,11 +858,12 @@ bool aiPull(win32::WinApplication* app, x86::CPU& cpu)
             }
         }
     }
-    // Port: the difficulty a notch up, and each driver's own pull (above).
-    // Racers only ([+0x200] & 8), not the traffic or the cops.
+    // Port: the difficulty a notch up, each driver's own pull (above), and
+    // Beginner's opponents quicker (beginnerPace).  Racers only ([+0x200] & 8),
+    // not the traffic or the cops.
     if (aiTuned() && !networkRace(app) && opponentIndex(car) >= 0 && (app->getMemory<x86::reg8>(car + 0x200) & 8))
     {
-        const float scale = aiPace() * driverOf(app, car).pull;
+        const float scale = aiPace() * driverOf(app, car).pull * beginnerPace(app);
         float p;
         std::memcpy(&p, &cpu.eax, 4);
         if (p > 0.0f && scale != 1.0f)

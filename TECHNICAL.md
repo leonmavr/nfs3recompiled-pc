@@ -1695,6 +1695,29 @@ backs off -- a hothead, a smooth one, a late braker, a steady one, a bully, a
 cautious one and an opportunist. The aim is written once for each value the
 game writes, so it never builds up.
 
+**Sliding in the wet at Beginner.** `sub_407fa0`, which drives an opponent off
+its line or sliding, gives a racer a push back onto it every half second of the
+race's clock (bits `0x20`/`0x60` of `[0x7d3684]`, by a state `sub_404610`
+answers): its force times 10 and its turning times 50 -- unless the Skill Level
+(`[0x6fd4f0]`) is Beginner (1), when both are times 1.1, next to nothing
+(`0x408459`). In the dry a Beginner opponent seldom slides; in the rain or snow
+(`[0x6fd4cc]`) it did, could not come back, turned 90 or 180 degrees, all but
+stopped and lost the race getting going again -- only at Beginner, only with
+weather on. That comparison now reads the skill level from `aiSlideSkill`
+(`tools/apply_ai_wet_recovery.py` patches the read), which says Expert at
+Beginner in any weather: Beginner opponents get Expert's push back from a
+slide.
+
+**Beginner quicker.** Beginner opponents were far too easy, so they are
+`NFS_AI_BEGINNER` (1.23, by play-testing) quicker: their engines' pull times that, and the speed
+they aim for at each point of the track (`+0x7b0`) times it too, so they take
+the corners quicker as well as pulling away harder -- in the wet only 60% of
+it through the corners (`kBeginnerWetCorners`), since a quicker wet corner is
+more slides. Being quicker they slide in the dry too, which is why the push
+back from a slide above is Expert's in any weather. Expert is left as it was.
+The skill level, the weather, the push and the pace are logged once each race
+(`[AI] skill level ...`).
+
 Network races are left as the game drives them (every machine has to drive the
 opponents alike), and everything runs off the race's own clock
 (`[0x7d3684]`, 64 ticks a second). `NFS_AI_TUNE=0` turns all of it off;
@@ -3128,6 +3151,7 @@ the next time the game starts.
 | `NFS_MINIMAP` | on | The port's minimap, Stationary or Rotating and scaled as the HUD options' Map display and Map Scale say; `off`/`0`: the game's own map (The minimap). |
 | `NFS_MINIMAP_SCALE` | `1` | A zoom on top of the menu's Map Scale: 2 twice as close, 0.5 twice as far (0.1 to 5). |
 | `NFS_MINIMAP_TRACE` | off | `1`: once a second, where the minimap is and how the track's nodes lie against the player's car. |
+| `NFS_AI_BEGINNER` | `1.23` | How much quicker Beginner opponents are: their pull and the speed they aim for (in the wet 60% of it through the corners); `1`/`0`/`off` for the game's Beginner, up to 1.5 (The opponents' driving, tuned). |
 | `NFS_NOW_PLAYING` | on | `0`/`off`: no panel naming the song as a race starts. `1`/`on`: it stays five seconds; another number up to 30: that many (The song now playing). |
 | `NFS_NEXT_SONG_KEY` | `0x5d001b04` (`]`) | The key that starts the next song in a race, as the game writes a binding: its character << 24, its scan code << 8, 4 for the keyboard. Set from Controls (Next song); `0` for none (The song now playing). |
 | `NFS_HEADLIGHT_OBJECTS` | on (`1.6`) | `0`/`off`: the player's headlights light only the road, as the game has them. A number: how bright they are on the walls, fences, trees and buildings (Headlights on what stands by the road). |
