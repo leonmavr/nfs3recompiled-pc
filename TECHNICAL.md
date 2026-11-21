@@ -1391,6 +1391,10 @@ twice as close, 0.1 to 5). `NFS_MINIMAP=off` keeps the game's own map.
   in one pass (`drawOverlays`): the GL state saved and put back once, the
   uniforms' places and the vertex layout set up once, the corners' buffer
   kept.
+- The finish line: a chequered band across the road at the track's first node
+  (its last, point to point), #303030 and #ffffff squares, 4 deep along the
+  road and 6 across it, as wide as the road and square to it there, so it
+  scales with the map as the road does (`kFinishRows`, `kFinishColumns`).
 - Split screen, and a build without the sprites (Android, for now), keep the
   game's own map. `NFS_MINIMAP=off` keeps it too. `NFS_MINIMAP_TRACE=1` says
   once a second where the map is and how the nodes lie against the player's

@@ -148,6 +148,14 @@ constexpr float kReachMargin = 1.5f;      // nodes this far past the edge, in ra
 constexpr float kMiterMost = 2.0f;        // a joint's widening, at most
 constexpr float kLoopGap = 4.0f;          // a track closes when its ends are this many steps apart
 constexpr float kBucket = 64.0f;          // the nodes' index: metres a cell
+/* The finish line: a chequered band across the road at the track's first node
+ * (its last, point to point), as wide as the road and kFinishRows squares deep
+ * along it, so it scales with the map as the road does. */
+constexpr int kFinishRows = 4;            // along the road
+constexpr int kFinishColumns = 6;         // across it
+constexpr float kFinishDark[3] = { 0x30 / 255.0f, 0x30 / 255.0f, 0x30 / 255.0f };    // #303030
+constexpr float kFinishLight[3] = { 1.0f, 1.0f, 1.0f };                             // #ffffff
+constexpr float kFinishAlpha = 1.0f;
 const float kNoClip[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 
 bool tracing()
@@ -571,6 +579,35 @@ void road(win32::WinApplication* app, Builder& b, float metres, float meX, float
                 grey(segments[s].first, rgb[3]);
             }
             b.quad(p, uv, rgb, kRoadAlpha, OverlayQuad::Flat);
+        }
+    }
+
+    // The finish line, over the road: centred on its node, square to the road there.
+    const std::size_t finish = t.loop ? 0 : n - 1;
+    if (inReach[finish] == frame)
+    {
+        float nx, ny;
+        across(finish, nx, ny);
+        const float l = std::hypot(nx, ny);
+        if (l > 0.0f)
+        {
+            nx /= l;
+            ny /= l;
+            const float ax = ny, ay = -nx;   // along the road
+            const float cell = side * kRoadWidth / float(kFinishColumns);
+            const float ox = sx[finish], oy = sy[finish];
+            static const float flat[4][2] = {};
+            for (int r = 0; r < kFinishRows; ++r)
+                for (int c = 0; c < kFinishColumns; ++c)
+                {
+                    const float a0 = (float(r) - kFinishRows * 0.5f) * cell, a1 = a0 + cell;
+                    const float c0 = (float(c) - kFinishColumns * 0.5f) * cell, c1 = c0 + cell;
+                    const float q[4][2] = { { ox + ax * a0 + nx * c0, oy + ay * a0 + ny * c0 },
+                                            { ox + ax * a0 + nx * c1, oy + ay * a0 + ny * c1 },
+                                            { ox + ax * a1 + nx * c1, oy + ay * a1 + ny * c1 },
+                                            { ox + ax * a1 + nx * c0, oy + ay * a1 + ny * c0 } };
+                    b.quad(q, flat, (r + c) % 2 ? kFinishLight : kFinishDark, kFinishAlpha, OverlayQuad::Flat);
+                }
         }
     }
 }
