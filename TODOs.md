@@ -971,6 +971,11 @@ Obviously this effect depends on speed.
   car, etc.
 
 ### Performance
+- [x] Car vertex lookups: every batched vertex scanned all of the frame's car
+  ranges (up to 256) to find it was the world's. Pages of guest memory the
+  ranges lie on are marked now and a vertex on none is rejected at once, same
+  answers (`s_carPages`, `native_vertices.cpp`; ~7 ms to ~1.4 ms a frame in a
+  synthetic 160-range, 40k-vertex test -- to be measured in a race).
 - [x] Races take quite long to load by defaul. Find out if you and reduce
   loading times by caching anything etc.
   - Done (`NFS_FAST_LOAD`): the loading picture's flips were each held to the

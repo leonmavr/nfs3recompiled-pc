@@ -1048,6 +1048,16 @@ not its facets. `NFS_CAR_SHINE` scales it, 1 by default; 0 is the game's own
 reflection. The models themselves are the game's: their polygon counts are
 what they are.
 
+Every vertex THRASH batches is asked for its facing, and every batch's first
+whether it is a car's (`isCarVertex`, which keeps the road's grain off the
+cars). The world's vertices, most of them, are in none of the frame's car
+ranges -- up to 256 of them, the mirror's view of the cars again among them --
+and each went through all of them to be told so: some milliseconds a frame
+with a full grid. So the pages of guest memory the ranges lie on (4 KB, a bit
+each, `s_carPages`) are marked as they are noted and cleared with them at the
+swap: a vertex on no marked page is no car's at once, and one on a marked page
+is looked up as before, so the answers are the same (2026-11-21).
+
 ### Longer headlights
 
 The headlights' patch on the road (`sub_491bc0`, `roadLightNative`) lit at

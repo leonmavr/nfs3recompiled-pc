@@ -9,6 +9,7 @@
 #include <cfenv>
 #include <cfloat>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -776,6 +777,36 @@ struct CarVertexRange
 };
 static std::vector<CarVertexRange> s_carVertices;
 
+/* Port: which pages of guest memory this frame's car ranges (s_carVertices,
+ * s_carFacing) lie on, a bit each.  carFacing is asked of every vertex THRASH
+ * batches and isCarVertex of every batch's first: the world's -- most of them --
+ * are in none of the ranges, and each went through all of them (up to 256, the
+ * mirror's view of the cars again among them) to be told so.  A vertex on no
+ * marked page is no car's, at once; one on a marked page is looked up as
+ * before, so the answer is the same.  Cleared with the ranges. */
+constexpr unsigned kCarPageShift = 12;   // 4 KB pages
+static std::vector<std::uint64_t> s_carPages(std::size_t(1) << (32 - kCarPageShift - 6));
+
+static void markCarPages(x86::reg32 first, x86::reg32 end, bool on)
+{
+    if (end <= first)
+        return;
+    for (x86::reg32 page = first >> kCarPageShift, last = (end - 1) >> kCarPageShift; page <= last; ++page)
+    {
+        const std::uint64_t bit = std::uint64_t(1) << (page & 63);
+        if (on)
+            s_carPages[page >> 6] |= bit;
+        else
+            s_carPages[page >> 6] &= ~bit;
+    }
+}
+
+static inline bool onCarPage(x86::reg32 vertex)
+{
+    const x86::reg32 page = vertex >> kCarPageShift;
+    return (s_carPages[page >> 6] >> (page & 63) & 1u) != 0;
+}
+
 /* Port: how squarely each of a car's reflecting vertices faces the view, as
  * sub_49db70 turns its normal into the view for the reflection's sphere map
  * (|z| of the turned normal): a byte, 1 edge-on to 255 face-on, 0 for none.
@@ -801,11 +832,14 @@ static void noteCarFacing(win32::WinApplication* app, x86::reg32 vertices, x86::
         const float facing = z < 0.0f ? -z : z;
         range.facing[k] = x86::reg8(1 + int(std::min(facing, 1.0f) * 254.0f + 0.5f));
     }
+    markCarPages(range.first, range.end, true);
     s_carFacing.push_back(std::move(range));
 }
 
 x86::reg8 carFacing(x86::reg32 vertex)
 {
+    if (!onCarPage(vertex))
+        return 0;
     for (auto it = s_carFacing.rbegin(); it != s_carFacing.rend(); ++it)
         if (vertex >= it->first && vertex < it->end && (vertex - it->first) % 0x20 == 0)
             return it->facing[(vertex - it->first) / 0x20];
@@ -814,6 +848,8 @@ x86::reg8 carFacing(x86::reg32 vertex)
 
 bool isCarVertex(x86::reg32 vertex)
 {
+    if (!onCarPage(vertex))
+        return false;
     for (const CarVertexRange& range : s_carVertices)
         if (vertex >= range.first && vertex < range.end)
             return true;
@@ -864,6 +900,10 @@ bool carSunNear(win32::WinApplication* app, float x, float y, float& sunX, float
 
 void carVerticesDone()
 {
+    for (const CarVertexRange& range : s_carVertices)
+        markCarPages(range.first, range.end, false);
+    for (const CarFacingRange& range : s_carFacing)
+        markCarPages(range.first, range.end, false);
     s_carVertices.clear();
     s_carFacing.clear();
     win32::glide2x::carSurface(false);
@@ -907,7 +947,10 @@ void shadeNormalsNative(win32::WinApplication* app, x86::CPU& cpu)
             sunZ /= length;
         }
         if (s_carVertices.size() < 256)
+        {
             s_carVertices.push_back({ vertices, vertices + count * 0x20, sunX, sunZ, false, 0, 0, 0, 0 });
+            markCarPages(vertices, vertices + count * 0x20, true);
+        }
     }
     // push esi, edi, ebp; mov ebp, esp; sub esp, 0x14 -- then the two calls
     cpu.ebp = esp - 12;
