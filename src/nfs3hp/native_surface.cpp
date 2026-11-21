@@ -41,7 +41,7 @@ struct Feel
 
 constexpr Feel kAsphalt{ 0.0f, 0.0f, 0.0f, 0.0f };
 constexpr Feel kGrass{ 0.030f, 0.9f, 0.10f, 0.10f };
-constexpr Feel kDirt{ 0.020f, 0.5f, 0.25f, 0.12f };    // sand, dirt, gravel
+constexpr Feel kDirt{ 0.030f, 0.7f, 0.25f, 0.14f };    // sand, dirt, gravel: as slow as grass (0.020 went unnoticed)
 constexpr Feel kSnow{ 0.017f, -0.45f, 0.45f, 0.06f };   // about 5% slower, the tail out a little
 constexpr Feel kMud{ 0.045f, 1.0f, 0.15f, 0.08f };
 constexpr Feel kOther{ 0.015f, 0.4f, 0.10f, 0.08f };   // off the road, not known
@@ -169,9 +169,28 @@ static void feelGround(win32::WinApplication* app, x86::reg32 car, int ticks, fl
     const float right[3] = { value(app, car + 0xc0), value(app, car + 0xc4), value(app, car + 0xc8) };
     const float sideways = v[0] * right[0] + v[1] * right[1] + v[2] * right[2];
     if (trace)
-        SDL_Log("[SURFACE] t %d car %x wheels %u %u %u %u speed %.1f drag %.3f steer %.2f loose %.2f yaw %.3f slip %.2f",
-                clock, car, surfaces[0], surfaces[1], surfaces[2], surfaces[3], speed, feel.drag, feel.steer, feel.loose,
-                yaw, sideways);
+    {
+        /* And the polygon each wheel touches ([wheel+0x18]): its first four
+         * bytes -- the surface is the second's low six bits -- and whether the
+         * game's table has that surface paved; for telling apart grounds that
+         * share a surface (a desert's dirt verge and a paved one). */
+        char polys[4][24];
+        for (int w = 0; w < 4; ++w)
+        {
+            const x86::reg32 poly = word(app, car + 0x300 + x86::reg32(w) * 0x78 + 0x18);
+            if (!poly || app->getMemory<uint16_t>(car + 0x164) != 0)
+                SDL_snprintf(polys[w], sizeof polys[w], "-");
+            else
+                SDL_snprintf(polys[w], sizeof polys[w], "%02x%02x%02x%02x%s", unsigned(app->getMemory<x86::reg8>(poly)),
+                             unsigned(app->getMemory<x86::reg8>(poly + 1)), unsigned(app->getMemory<x86::reg8>(poly + 2)),
+                             unsigned(app->getMemory<x86::reg8>(poly + 3)),
+                             word(app, 0x553090 + (surfaces[w] & 0xf) * 0x24) == 1 ? "p" : "");
+        }
+        SDL_Log("[SURFACE] t %d car %x wheels %u %u %u %u (polygons %s %s %s %s) speed %.1f drag %.3f steer %.2f loose %.2f "
+                "yaw %.3f slip %.2f",
+                clock, car, surfaces[0], surfaces[1], surfaces[2], surfaces[3], polys[0], polys[1], polys[2], polys[3], speed,
+                feel.drag, feel.steer, feel.loose, yaw, sideways);
+    }
     if (amount <= 0.0f || feel.drag + std::fabs(feel.steer) + feel.loose + feel.shake <= 0.0f)
     {
         slip = sideways;

@@ -900,7 +900,7 @@ surface, none below 15 km/h and all of it from 32 km/h:
 | Surface | Drag (speed lost) | Steering softer | Slip kept | Shake |
 |---|---|---|---|---|
 | Grass | 0.030 | 0.9 | 0.10 | 0.10 |
-| Sand, dirt, gravel | 0.020 | 0.5 | 0.25 | 0.12 |
+| Sand, dirt, gravel | 0.030 | 0.7 | 0.25 | 0.14 |
 | Snow | 0.017 | -0.45 (sharper) | 0.45 | 0.06 |
 | Mud | 0.045 | 1.0 | 0.15 | 0.08 |
 | Other, not paved | 0.015 | 0.4 | 0.10 | 0.08 |
@@ -924,7 +924,15 @@ surface, none below 15 km/h and all of it from 32 km/h:
 `NFS_SURFACE_GRIP` (1; up to 3 stronger, `0`/`off` for none).
 `NFS_SURFACE_TEST=grass|dirt|snow|mud` treats every surface as that one -- its
 grip, and the marks, dust and frost it throws -- and
-`NFS_SURFACE_TRACE=1` (or a number of ticks between lines) logs the wheels' surfaces (`[SURFACE]`), for testing.
+`NFS_SURFACE_TRACE=1` (or a number of ticks between lines) logs the wheels' surfaces (`[SURFACE]`), with the first
+four bytes of the polygon each wheel touches and whether the game has that surface paved (`p`), for testing.
+Dirt was 0.020 and 0.5 at first, as gentle as snow: on Lost Canyons' dirt verges (surface 13) it was felt
+not at all (2026-11-21); now it slows as grass does.
+
+**Dirt thrown from the wheels.** As grass throws its blades (`grassFromWheels`), sand, dirt and gravel
+(surfaces 8, 9, 13) throw grains and now and then a puff of dust from each wheel on them, every car going
+faster than 6 m/s, more often the faster (`dirtFromWheels`, `native_particles.cpp`). The game throws its own
+dust there only while a car slides, and only off some of it.
 
 ### Spike strips (in the making)
 

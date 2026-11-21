@@ -1300,6 +1300,37 @@ void grassFromWheels(win32::WinApplication* app, float dt)
     }
 }
 
+/* Sand, dirt and gravel under a moving car's wheels (surfaces 8, 9 and 13,
+ * `groundUnder` 2) throw grains and now and then a puff of dust.  The game
+ * throws its own dust there only while a car slides, and only off some of it:
+ * the dirt verges of Lost Canyons and the desert tracks (surface 13) threw
+ * nothing driven over, but for a few patches (2026-11-21).  As the grass,
+ * each frame from each wheel on it of each car going faster than 6 m/s, more
+ * often the faster; a puff kDirtDust of the times -- every car in the race
+ * throws them, and the puffs are the big soft ones. */
+constexpr float kDirtDust = 0.15f;
+
+void dirtFromWheels(win32::WinApplication* app, float dt)
+{
+    for (x86::reg32 k = 0; k < 16; ++k)
+    {
+        const x86::reg32 car = 0x5e1120 + k * 0x9ac;
+        const float speed = std::fabs(float(app->getMemory<float>(car + 0xb8)));
+        if (!(speed > 6.0f) || app->getMemory<uint16_t>(car + 0x164) != 0)
+            continue;
+        const float velocity[3] = { app->getMemory<float>(car + 0xa4), app->getMemory<float>(car + 0xa8),
+                                    app->getMemory<float>(car + 0xac) };
+        for (int w = 0; w < 4; ++w)
+        {
+            if (random01() >= SDL_min(speed / 25.0f, 1.2f) * 60.0f * dt * setting() || groundUnder(app, car, w) != 2)
+                continue;
+            float at[3];
+            wheelContact(app, car, w, at);
+            throwDirt(at, velocity, false, 1 + int(random01() * 2.5f), random01() < kDirtDust);
+        }
+    }
+}
+
 /* Snow under a moving car's wheels throws frost -- chips of ice and a lot of
  * fine spray, lighter and wider than the dirt of a dry track.  The game throws
  * nothing for a car only driving over it (kinds 2 and 5 are its slides), so
@@ -1726,6 +1757,7 @@ void frameParticles(win32::WinApplication* app)
         if (setting() > 0.0f && app->getMemory<x86::reg32>(0x6fd3b0) != 1)
         {
             grassFromWheels(app, dt);
+            dirtFromWheels(app, dt);
             frostFromWheels(app, dt);
             tyreSmoke(app, dt);
         }
