@@ -1672,7 +1672,7 @@ NFS_SUN_SHADOW_GLSL
 "    vec3 p;"
 "    float level = shadowLevel(uv, p);"
 "    if (level <= 0.0) return 0.0;"
-"    return texture(u_shadowMask, uv).r * level * shadowEdge(uv);"
+"    return texture(u_shadowMask, uv + 0.5 / u_size).r * level * shadowEdge(uv);"
 "}"
 /* Speed you can feel, 2 (initPost, NFS_MOTION_BLUR): the world streaking out
  * from the middle at speed, as a star field does.  What is blurred is the left
@@ -1908,10 +1908,17 @@ static const char g_shadowMaskShader[] =
 "uniform vec3 u_up;"
 "uniform vec2 u_size;"
 NFS_SUN_SHADOW_GLSL
+/* From the middle of the full-size pixel at the top left of this one's four:
+ * the middle of a half-size pixel is the corner between four full-size ones,
+ * whose depth is the nearest of either row's -- the place worked out from the
+ * corner and the depth from a row beside it, every other row's ray started
+ * off the ground and caught it: thin light and dark stripes along the rows of
+ * the flat ground under every shadow (2026-11-21). */
 "void main()"
 "{"
+"    vec2 uv = (floor(gl_FragCoord.xy) * 2.0 + 0.5) / u_size;"
 "    vec3 p;"
-"    float shade = shadowLevel(v_uv, p) > 0.0 ? shadowMarch(p) : 0.0;"
+"    float shade = shadowLevel(uv, p) > 0.0 ? shadowMarch(p) : 0.0;"
 "    o_color = vec4(shade, 0.0, 0.0, 1.0);"
 "}";
 

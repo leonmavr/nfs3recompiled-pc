@@ -365,7 +365,12 @@ rays of nine steps, three reads each -- was 10 to 15 ms of a 1080p frame on an
 Intel UHD (2026-11-21, `NFS_PERF_TRACE=2`), the same at night in the rain,
 where the shadows are a seventh as dark. `NFS_SHADOW_HALF=0` marches every
 pixel, as before; both ways share the one piece of GLSL
-(`NFS_SUN_SHADOW_GLSL`).
+(`NFS_SUN_SHADOW_GLSL`). Each half-size pixel marches from the middle of the
+full-size pixel at the top left of its four, and is read back half a pixel
+over: from its own middle -- the corner between four full-size pixels, whose
+depth is either row's -- every other row's ray started off the ground and
+caught it, thin stripes along the flat ground under every shadow
+(2026-11-21).
 
 A lamp's glow leaves the picture's alpha as it was: its texture is 8888 or
 4444, which counts it as a car's, and the whole square of each glow and of each
