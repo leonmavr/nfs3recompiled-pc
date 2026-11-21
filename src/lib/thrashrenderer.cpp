@@ -478,7 +478,7 @@ ThrashRenderer::~ThrashRenderer()
             glDeleteTextures(1, &m_reflection);
         if (m_detailTexture)
             glDeleteTextures(1, &m_detailTexture);
-        for (unsigned int texture : { m_sky, m_postCopy, m_bright, m_postDepth, m_snowAtlas })
+        for (unsigned int texture : { m_sky, m_postCopy, m_bright, m_postDepth, m_snowAtlas, m_shadowMask })
             if (texture)
                 glDeleteTextures(1, &texture);
         if (m_postFramebuffer)
@@ -489,6 +489,8 @@ ThrashRenderer::~ThrashRenderer()
             glDeleteVertexArrays(1, &m_postArray);
         if (m_brightProgram)
             glDeleteProgram(m_brightProgram);
+        if (m_shadowProgram)
+            glDeleteProgram(m_shadowProgram);
         if (m_compositeProgram)
             glDeleteProgram(m_compositeProgram);
         glDeleteFramebuffers(1, &framebuffer);
@@ -1371,6 +1373,102 @@ static const char g_softLayerShader[] =
 "    o_color = texture(u_layer, v_uv);"
 "}";
 
+#define NFS_SUN_SHADOW_GLSL \
+/* The shadows of what stands by the road (initPost, NFS_OBJECT_SHADOWS): from \
+ * each pixel's place in the view -- the depth buffer holds 1 - 1/z (as the \
+ * game's vertices give THRASH their depth), so z comes back as 1 / (1 - d); \
+ * the screen through the projection -- \
+ * a ray towards the sun, its steps growing, each brought back to the screen; \
+ * where the picture there is nearer than the ray by more than a hair and less \
+ * than a thing's thickness, something stands between this pixel and the sun. \
+ * Soft: the nearer the blocking step, the darker, and faded towards the edges \
+ * of the screen, where what casts may lie beyond it. */ \
+"float viewZ(vec2 uv) { return 1.0 / max(1.0 - texture(u_depth, uv).r, 1e-5); }" \
+/* How level the ground at uv is, 0 for none (the sky, a car, what stands), and \
+ * where it is in the view. */ \
+"float shadowLevel(vec2 uv, out vec3 p)" \
+"{" \
+"    p = vec3(0.0);" \
+"    float d = texture(u_depth, uv).r;" \
+"    if (d >= 0.9999 || texture(u_source, uv).a < 0.5) return 0.0;" \
+"    float z = 1.0 / max(1.0 - d, 1e-5);" \
+"    if (z < 1.0) return 0.0;" \
+"    p = vec3((uv * u_size - u_centre) * z / u_scale, z);" \
+/* Cast onto what lies level -- the road, the verges, the ground -- not onto \
+ * what stands: a fence's own rails, a wall, shaded by themselves, only went \
+ * grey.  Level from the depth of the pixels beside it. */ \
+"    vec2 px = 1.0 / u_size;" \
+"    float zx = viewZ(uv + vec2(px.x, 0.0)), zy = viewZ(uv + vec2(0.0, px.y));" \
+"    vec3 ax = vec3(((uv + vec2(px.x, 0.0)) * u_size - u_centre) * zx / u_scale, zx) - p;" \
+"    vec3 ay = vec3(((uv + vec2(0.0, px.y)) * u_size - u_centre) * zy / u_scale, zy) - p;" \
+"    vec3 n = cross(ax, ay);" \
+"    if (dot(n, n) <= 0.0) return 0.0;" \
+"    float level = smoothstep(0.55, 0.8, abs(dot(normalize(n), u_up)));" \
+"    return level;" \
+"}" \
+/* The rays towards the sun from p: how much of the sun is cut off, 0 to 1. */ \
+"float shadowMarch(vec3 p)" \
+"{" \
+"    float shade = 0.0;" \
+/* Each pixel's steps shifted by its own fraction (interleaved gradient \
+ * noise), so the places a ray happens to sample do not line up across the \
+ * screen into bands; and a ray that passes from in front of the picture to \
+ * behind it has gone through what is there, however thick -- a solid wall -- \
+ * where only the thin was caught before, in stripes.  One ray a pixel left \
+ * that noise in the picture as a checkerboard on every shadow's edge -- unseen \
+ * while the picture's alpha took the whole world for car and the shadows were \
+ * never cast (2026-11-19) -- so each pixel now marches two rays of nine steps, \
+ * their shifts half apart, and takes their mean: the noise halves at the cost \
+ * of the one ray of eighteen (four rays of ten cost too many frames). */ \
+"    float jitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));" \
+"    for (int k = 0; k < 2; ++k) {" \
+"        float shift = fract(jitter + float(k) * 0.5);" \
+"        float before = 1.0;" \
+"        for (int i = 1; i <= 9; ++i) {" \
+"            float s = float(i) - shift;" \
+"            float t = 0.2 * s * s;" \
+"            vec3 q = p + u_sun * t;" \
+"            if (q.z < 0.5) break;" \
+"            vec2 at = (q.xy * u_scale / q.z + u_centre) / u_size;" \
+"            if (at.x < 0.0 || at.y < 0.0 || at.x > 1.0 || at.y > 1.0) break;" \
+"            if (texture(u_source, at).a < 0.5) { before = 1.0; continue; }"   /* a car: casts its own */ \
+"            float there = viewZ(at);" \
+"            float gap = q.z - there;" \
+/* Not the ground itself: what blocks must stand above the level this pixel is \
+ * on.  The depth buffer's steps grow as the square of the distance (16 bits: \
+ * some 4 cm at 50 m, 15 at 100), and the ground a ray passed over came out a \
+ * step nearer than the ray here and there -- the pixel shadowed by the road \
+ * beyond it, in the pattern of the steps' jitter: a fine diagonal lattice of \
+ * dark dots over every road and verge (2026-11-19).  So the blocking point, \
+ * put back in the view from its depth, has to be more than a quarter of a \
+ * metre (and a little more the further the ray) above this pixel's level \
+ * (u_up), and the gap more than two of the depth's steps there. */ \
+"            vec3 o = vec3((at * u_size - u_centre) * there / u_scale, there);" \
+"            bool above = dot(o - p, u_up) > 0.25 + 0.02 * t;" \
+"            float step2 = 3.0e-5 * there * there;" \
+"            bool through = above && before < -0.02 && gap > step2 && gap < 4.0 + 0.5 * t;" \
+"            if ((above && gap > 0.05 + 0.02 * t + step2 && gap < 0.6 + 0.1 * t) || through) {" \
+"                shade += 1.0 - s / 11.0;" \
+"                break;" \
+"            }" \
+"            before = gap;" \
+"        }" \
+"    }" \
+"    return shade * 0.5;" \
+"}" \
+"float shadowEdge(vec2 uv)" \
+"{" \
+"    vec2 edge = min(uv, 1.0 - uv);" \
+"    return smoothstep(0.0, 0.06, min(edge.x, edge.y));" \
+"}" \
+"float sunShadow(vec2 uv)" \
+"{" \
+"    vec3 p;" \
+"    float level = shadowLevel(uv, p);" \
+"    if (level <= 0.0) return 0.0;" \
+"    return shadowMarch(p) * level * shadowEdge(uv);" \
+"}" \
+
 static const char g_compositeShader[] =
 "in vec2 v_uv;"
 "layout (location=0) out vec4 o_color;"
@@ -1383,6 +1481,8 @@ static const char g_compositeShader[] =
 "uniform bool u_aa;"
 "uniform sampler2D u_depth;"
 "uniform float u_shadow;"
+"uniform sampler2D u_shadowMask;"
+"uniform bool u_shadowHalf;"
 "uniform vec3 u_sun;"
 "uniform vec2 u_scale;"
 "uniform vec2 u_centre;"
@@ -1562,82 +1662,17 @@ static const char g_compositeShader[] =
 "    float d = sign(stops) * max(abs(stops) - u_exposure.y, 0.0) * u_exposure.x;"
 "    return exp2(clamp(d, -u_exposure.w, u_exposure.z));"
 "}"
-/* The shadows of what stands by the road (initPost, NFS_OBJECT_SHADOWS): from
- * each pixel's place in the view -- the depth buffer holds 1 - 1/z (as the
- * game's vertices give THRASH their depth), so z comes back as 1 / (1 - d);
- * the screen through the projection --
- * a ray towards the sun, its steps growing, each brought back to the screen;
- * where the picture there is nearer than the ray by more than a hair and less
- * than a thing's thickness, something stands between this pixel and the sun.
- * Soft: the nearer the blocking step, the darker, and faded towards the edges
- * of the screen, where what casts may lie beyond it. */
-"float viewZ(vec2 uv) { return 1.0 / max(1.0 - texture(u_depth, uv).r, 1e-5); }"
-"float sunShadow(vec2 uv)"
+NFS_SUN_SHADOW_GLSL
+/* The same at half size (NFS_SHADOW_HALF): the rays marched for a quarter of the
+ * pixels into u_shadowMask (g_shadowMaskShader) and read back filtered; what is
+ * level, the sky and the cars still tested pixel by pixel, so the shadows keep
+ * off the walls and the cars as sharply as before. */
+"float sunShadowHalf(vec2 uv)"
 "{"
-"    float d = texture(u_depth, uv).r;"
-"    if (d >= 0.9999 || texture(u_source, uv).a < 0.5) return 0.0;"
-"    float z = 1.0 / max(1.0 - d, 1e-5);"
-"    if (z < 1.0) return 0.0;"
-"    vec3 p = vec3((uv * u_size - u_centre) * z / u_scale, z);"
-/* Cast onto what lies level -- the road, the verges, the ground -- not onto
- * what stands: a fence's own rails, a wall, shaded by themselves, only went
- * grey.  Level from the depth of the pixels beside it. */
-"    vec2 px = 1.0 / u_size;"
-"    float zx = viewZ(uv + vec2(px.x, 0.0)), zy = viewZ(uv + vec2(0.0, px.y));"
-"    vec3 ax = vec3(((uv + vec2(px.x, 0.0)) * u_size - u_centre) * zx / u_scale, zx) - p;"
-"    vec3 ay = vec3(((uv + vec2(0.0, px.y)) * u_size - u_centre) * zy / u_scale, zy) - p;"
-"    vec3 n = cross(ax, ay);"
-"    if (dot(n, n) <= 0.0) return 0.0;"
-"    float level = smoothstep(0.55, 0.8, abs(dot(normalize(n), u_up)));"
+"    vec3 p;"
+"    float level = shadowLevel(uv, p);"
 "    if (level <= 0.0) return 0.0;"
-"    float shade = 0.0;"
-/* Each pixel's steps shifted by its own fraction (interleaved gradient
- * noise), so the places a ray happens to sample do not line up across the
- * screen into bands; and a ray that passes from in front of the picture to
- * behind it has gone through what is there, however thick -- a solid wall --
- * where only the thin was caught before, in stripes.  One ray a pixel left
- * that noise in the picture as a checkerboard on every shadow's edge -- unseen
- * while the picture's alpha took the whole world for car and the shadows were
- * never cast (2026-11-19) -- so each pixel now marches two rays of nine steps,
- * their shifts half apart, and takes their mean: the noise halves at the cost
- * of the one ray of eighteen (four rays of ten cost too many frames). */
-"    float jitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));"
-"    for (int k = 0; k < 2; ++k) {"
-"        float shift = fract(jitter + float(k) * 0.5);"
-"        float before = 1.0;"
-"        for (int i = 1; i <= 9; ++i) {"
-"            float s = float(i) - shift;"
-"            float t = 0.2 * s * s;"
-"            vec3 q = p + u_sun * t;"
-"            if (q.z < 0.5) break;"
-"            vec2 at = (q.xy * u_scale / q.z + u_centre) / u_size;"
-"            if (at.x < 0.0 || at.y < 0.0 || at.x > 1.0 || at.y > 1.0) break;"
-"            if (texture(u_source, at).a < 0.5) { before = 1.0; continue; }"   // a car: casts its own
-"            float there = viewZ(at);"
-"            float gap = q.z - there;"
-/* Not the ground itself: what blocks must stand above the level this pixel is
- * on.  The depth buffer's steps grow as the square of the distance (16 bits:
- * some 4 cm at 50 m, 15 at 100), and the ground a ray passed over came out a
- * step nearer than the ray here and there -- the pixel shadowed by the road
- * beyond it, in the pattern of the steps' jitter: a fine diagonal lattice of
- * dark dots over every road and verge (2026-11-19).  So the blocking point,
- * put back in the view from its depth, has to be more than a quarter of a
- * metre (and a little more the further the ray) above this pixel's level
- * (u_up), and the gap more than two of the depth's steps there. */
-"            vec3 o = vec3((at * u_size - u_centre) * there / u_scale, there);"
-"            bool above = dot(o - p, u_up) > 0.25 + 0.02 * t;"
-"            float step2 = 3.0e-5 * there * there;"
-"            bool through = above && before < -0.02 && gap > step2 && gap < 4.0 + 0.5 * t;"
-"            if ((above && gap > 0.05 + 0.02 * t + step2 && gap < 0.6 + 0.1 * t) || through) {"
-"                shade += 1.0 - s / 11.0;"
-"                break;"
-"            }"
-"            before = gap;"
-"        }"
-"    }"
-"    shade *= 0.5;"
-"    vec2 edge = min(uv, 1.0 - uv);"
-"    return shade * level * smoothstep(0.0, 0.06, min(edge.x, edge.y));"
+"    return texture(u_shadowMask, uv).r * level * shadowEdge(uv);"
 "}"
 /* Speed you can feel, 2 (initPost, NFS_MOTION_BLUR): the world streaking out
  * from the middle at speed, as a star field does.  What is blurred is the left
@@ -1806,7 +1841,7 @@ static const char g_compositeShader[] =
 "    if (u_blur > 0.0 || u_blurDebug > 0.0)"
 "        c = motionBlur(v_uv, c);"
 "    if (u_shadow > 0.0)"
-"        c *= 1.0 - u_shadow * sunShadow(v_uv);"
+"        c *= 1.0 - u_shadow * (u_shadowHalf ? sunShadowHalf(v_uv) : sunShadow(v_uv));"
 "    if (u_glare > 0.0)"
 "        c = glare(c);"
 "    if (u_exposure.x > 0.0)"
@@ -1854,6 +1889,30 @@ static const char g_compositeShader[] =
 "    }"
 "    c = snowOnScreen(v_uv, c);"
 "    o_color = vec4(clamp(c, 0.0, 1.0), 1.0);"
+"}";
+
+/* The object shadows' rays, at half size (NFS_SHADOW_HALF): sunShadow's march
+ * (NFS_SUN_SHADOW_GLSL) for each pixel of a layer half the picture's size each
+ * way -- a quarter of the pixels, the march being nearly all of the shadows'
+ * cost (10 to 15 ms a frame of a 1080p race on an Intel UHD, 2026-11-21).  The
+ * composite reads it back filtered and does the rest pixel by pixel
+ * (sunShadowHalf). */
+static const char g_shadowMaskShader[] =
+"in vec2 v_uv;"
+"layout (location=0) out vec4 o_color;"
+"uniform sampler2D u_source;"
+"uniform sampler2D u_depth;"
+"uniform vec3 u_sun;"
+"uniform vec2 u_scale;"
+"uniform vec2 u_centre;"
+"uniform vec3 u_up;"
+"uniform vec2 u_size;"
+NFS_SUN_SHADOW_GLSL
+"void main()"
+"{"
+"    vec3 p;"
+"    float shade = shadowLevel(v_uv, p) > 0.0 ? shadowMarch(p) : 0.0;"
+"    o_color = vec4(shade, 0.0, 0.0, 1.0);"
 "}";
 
 /* The port's own particles (drawParticles; native_particles.cpp makes them):
@@ -2504,6 +2563,9 @@ void ThrashRenderer::initPost()
         glUseProgram(0);
         m_skyOpenProgram = postProgram(compileShader, g_skyOpenShader);
         m_softLayerProgram = postProgram(compileShader, g_softLayerShader);
+        m_shadowHalf = onOff("NFS_SHADOW_HALF", 1.0f) > 0.0f;
+        if (m_shadowHalf)
+            m_shadowProgram = postProgram(compileShader, g_shadowMaskShader);
         m_softHalf = onOff("NFS_PARTICLES_HALF", 1.0f) > 0.0f;
         if (m_exposure > 0.0f)
         {
@@ -2952,6 +3014,15 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        if (m_shadowMask)
+            glDeleteTextures(1, &m_shadowMask);
+        glGenTextures(1, &m_shadowMask);
+        glBindTexture(GL_TEXTURE_2D, m_shadowMask);
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_R8, halfW, halfH);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         m_postW = width;
         m_postH = height;
         allocateLightLayer(width, height);
@@ -3059,10 +3130,40 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
         glGenerateMipmap(GL_TEXTURE_2D);
         glActiveTexture(GL_TEXTURE0);
     }
+    /* The object shadows' rays at half size (g_shadowMaskShader), from the
+     * picture as the composite reads it (unit 0, after the particles) and the
+     * world's depth. */
+    const bool shadowsHalf = shadows && !without(kPerfShadows) && m_shadowHalf && m_shadowProgram && m_shadowMask;
+    if (shadowsHalf)
+    {
+        glBindFramebuffer(GL_FRAMEBUFFER, m_postFramebuffer);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_shadowMask, 0);
+        glViewport(0, 0, halfW, halfH);
+        glUseProgram(m_shadowProgram);
+        glUniform1i(glGetUniformLocation(m_shadowProgram, "u_source"), 0);
+        glUniform1i(glGetUniformLocation(m_shadowProgram, "u_depth"), 2);
+        glUniform3f(glGetUniformLocation(m_shadowProgram, "u_sun"), draw.sun[1], draw.sun[2], draw.sun[3]);
+        glUniform2f(glGetUniformLocation(m_shadowProgram, "u_scale"), draw.sun[4], draw.sun[5]);
+        glUniform2f(glGetUniformLocation(m_shadowProgram, "u_centre"), draw.sun[6], draw.sun[7]);
+        glUniform3f(glGetUniformLocation(m_shadowProgram, "u_up"), draw.sun[8], draw.sun[9], draw.sun[10]);
+        glUniform2f(glGetUniformLocation(m_shadowProgram, "u_size"), float(width), float(height));
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, m_postDepth);
+        glActiveTexture(GL_TEXTURE0);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
     glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_renderer->m_texture, 0);
     glViewport(0, 0, width, height);
     glUseProgram(m_compositeProgram);
+    glUniform1i(glGetUniformLocation(m_compositeProgram, "u_shadowHalf"), shadowsHalf ? 1 : 0);
+    if (shadowsHalf)
+    {
+        glUniform1i(glGetUniformLocation(m_compositeProgram, "u_shadowMask"), 10);
+        glActiveTexture(GL_TEXTURE10);
+        glBindTexture(GL_TEXTURE_2D, m_shadowMask);
+        glActiveTexture(GL_TEXTURE0);
+    }
     glUniform1i(m_compositeSource, 0);
     glUniform1i(m_compositeBright, 1);
     glUniform2f(m_compositePixel, 1.0f / float(width), 1.0f / float(height));

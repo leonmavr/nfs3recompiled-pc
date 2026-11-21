@@ -340,6 +340,10 @@ private:
     unsigned int            m_postCopy = 0, m_bright = 0, m_postFramebuffer = 0, m_postArray = 0;
     unsigned int            m_brightProgram = 0, m_compositeProgram = 0;
     int                     m_postW = 0, m_postH = 0;
+    /* The object shadows' ray march at half size (NFS_SHADOW_HALF; g_shadowMaskShader),
+     * read back filtered by the composite. */
+    unsigned int            m_shadowMask = 0, m_shadowProgram = 0;
+    bool                    m_shadowHalf = true;
     bool                    m_postDone = false;     // this frame's
     bool                    m_hudBegun = false;     // this frame's
     bool                    m_raceView = false;     // the game thread's

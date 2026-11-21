@@ -338,6 +338,17 @@ picture's alpha), and faded at the screen's edges, past which what casts may
 lie. Fainter in the rain and at night as the cars' own are.
 `NFS_OBJECT_SHADOWS`, 0.45.
 
+The rays are marched at half size (`NFS_SHADOW_HALF`, on): for a quarter of
+the pixels, into a layer of their own (`g_shadowMaskShader`, `m_shadowMask`),
+which the whole-picture pass reads back filtered (`sunShadowHalf`); what is
+level, the sky and the cars are still tested pixel by pixel there, so the
+shadows keep off the walls and the cars as sharply as before. The march -- two
+rays of nine steps, three reads each -- was 10 to 15 ms of a 1080p frame on an
+Intel UHD (2026-11-21, `NFS_PERF_TRACE=2`), the same at night in the rain,
+where the shadows are a seventh as dark. `NFS_SHADOW_HALF=0` marches every
+pixel, as before; both ways share the one piece of GLSL
+(`NFS_SUN_SHADOW_GLSL`).
+
 A lamp's glow leaves the picture's alpha as it was: its texture is 8888 or
 4444, which counts it as a car's, and the whole square of each glow and of each
 point of a tail light's trail had marked the road under it as car -- left out
@@ -2340,6 +2351,7 @@ out in turn for two seconds and logs the frame's GPU time without it
 | Haze | 1 to 2 | `NFS_HAZE` |
 | The wet road's reflection | ~1 | `NFS_WET_ROADS` |
 | The port's particles, with the soft ones at half size | ~2 (5 to 18 full size, near the lens in the rain) | `NFS_PARTICLES_HALF` |
+| Shadows of what stands by the road, full size (measured 2026-11-21, night and rain) | 10 to 15 | `NFS_OBJECT_SHADOWS`, `NFS_SHADOW_HALF` |
 
 What was done about the slow frames:
 
@@ -2347,6 +2359,8 @@ What was done about the slow frames:
   a full one (see A full pool, above); now one is replaced where it stands.
 - **The soft particles at half size** (above): the spray's mist and the smoke,
   a quarter of the pixels.
+- **The object shadows at half size** (Shadows of what stands by the road):
+  their rays marched for a quarter of the pixels, 10 to 15 ms a frame before.
 - **Bicubic in 5 taps.** The Catmull-Rom magnification (`sharpTexture`) took
   9 bilinear taps a pixel, the 16 texels' weights folded into the filter's
   own; it takes 5 now -- the middle and the four sides, the corners' weights,
@@ -3332,6 +3346,7 @@ the next time the game starts.
 | `NFS_CAMERA_PULL` | `1.2` | How far back, in metres, the chase camera eases under full throttle; `0`/`off` for none. |
 | `NFS_SPARKS` | `2` | How many times the sparks of a burst, and whether walls throw them on hits and scrapes; `0`/`off`: the game's own (Sparks off walls). |
 | `NFS_CAR_SHADOW` | on | `0`/`off`: no shadow under the cars (Car shadows). |
+| `NFS_SHADOW_HALF` | on | `0`/`off`: the object shadows' rays marched for every pixel rather than in a half-size layer (Shadows of what stands by the road). |
 | `NFS_OBJECT_SHADOWS` | on (`0.45`) | `0`/`off`: no shadows from what stands by the road. A number: how dark (Shadows of what stands by the road); fainter in the rain and at night by `NFS_SHADOW_RAIN` and `NFS_SHADOW_NIGHT`. |
 | `NFS_SND_MIX` | on | `0` leaves the game's sound mixer (`sub_500864` and everything under it) to its generated code instead of `src/nfs3hp/native_mixer.cpp`. `NFS_SND_CHECK=1` (debug) mixes each block natively and with the generated code and logs any byte that differs (`[SNDCHK]`); a block that calls the game, to refill a stream or end a sound, is left to the generated code. |
 | `NFS_TOUCH_STEER_LEFT` etc. | unset | Keys the touch overlay sends for steering and the pedals, so that endpoint can report them as axes. |
