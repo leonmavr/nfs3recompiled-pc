@@ -2463,6 +2463,28 @@ The binary is `build/nfs3hp`. It wants a display: there is no headless mode.
 If SDL3 is installed somewhere CMake does not search, point it there with
 `-DCMAKE_PREFIX_PATH=/path/to/sdl3`.
 
+**Quick rebuilds.** Configure once; after that only build:
+
+```bash
+sudo apt install ccache
+cmake -B build -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache
+cmake --build build -j"$(nproc)"    # every time after
+```
+
+- `cmake -B` again only when `CMakeLists.txt` changes or a source file is
+  added; Ninja recompiles just what changed.
+- Do not run `disassemble_nfs3hp.py` or the `tools/apply_*.py` scripts unless
+  `disasm/` or the patch itself changed: they rewrite every file of
+  `src/nfs3hp/disassembly` and `nfs3hp.h`, which nearly every source includes
+  -- the same contents, but new dates, so some 75 of the biggest files and most
+  of the port's are compiled again.
+- ccache knows a file by its contents, not its date: a rewrite like that, or
+  going back and forth between branches, comes out of its cache in seconds.
+- A header costs what includes it: `include/lib/thrashrenderer.h` is in
+  `gliderenderer.h`, some eight files; `nfs3hp.h`, `winapp.h`, `cpu.h` and
+  `fpu.h` are in nearly everything.
+
 A game folder is `fedata/`, `gamedata/`, `install.win` and the four executables
 from `nfs3hp/` (`nfs3.exe`, `eacsnd.dll`, `softtria.dll`, `voodoo2a.dll`). The
 executables and `install.win` are in the repository — `install.win` is the copy
