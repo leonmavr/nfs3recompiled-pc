@@ -337,6 +337,7 @@ private:
     int                     m_skyW = 0, m_skyH = 0;
     bool                    m_skyTaken = false;     // this frame's
     bool                    m_skyValid = false;
+    bool                    m_skyDrawn = false;     // this frame drew something flat before the world: its sky
     unsigned int            m_postCopy = 0, m_bright = 0, m_postFramebuffer = 0, m_postArray = 0;
     unsigned int            m_brightProgram = 0, m_compositeProgram = 0;
     int                     m_postW = 0, m_postH = 0;

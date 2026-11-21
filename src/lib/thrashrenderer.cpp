@@ -3491,10 +3491,30 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
                 if (m_traceKinds.empty() || m_traceKinds.back() != kind)
                     m_traceKinds.push_back(kind);
             }
+            /* The haze's sky: what was drawn flat before the world.  A frame that
+             * drew none -- the game leaves the sky out under a ridge or in a
+             * tunnel -- had only the cleared picture to take, and the haze round
+             * the car went from the sky's colour to a dark blue for as long as
+             * it was under (Lost Canyons, 2026-11-21).  It keeps the last sky
+             * taken instead. */
+            if (flat && !m_sceneDrawn)
+                m_skyDrawn = true;
             if (!flat)
             {
                 if (!m_sceneDrawn && !m_skyTaken && haze > 0.0f)
-                    takeSky(int(draw.width), int(draw.height));
+                {
+                    const bool keep = !m_skyDrawn && m_skyValid && m_skyW == int(draw.width)
+                                      && m_skyH == int(draw.height);
+                    static const bool s_traced = SDL_getenv("NFS_HAZE_TRACE") != nullptr;
+                    static bool s_kept = false;
+                    if (s_traced && keep != s_kept)
+                        SDL_Log("[HAZE] %s", keep ? "no sky drawn this frame: the last one kept" : "the sky drawn again");
+                    s_kept = keep;
+                    if (keep)
+                        m_skyTaken = true;
+                    else
+                        takeSky(int(draw.width), int(draw.height));
+                }
                 m_sceneDrawn = true;
                 m_roadDrawn = m_roadDrawn || batch.detail;
             }
@@ -4106,6 +4126,7 @@ void ThrashRenderer::swap()
         m_traceDraws = 0;
         m_sceneDrawn = false;
         m_skyTaken = false;
+        m_skyDrawn = false;
         m_postDone = false;
         m_hudBegun = false;
         glDisable(GL_SCISSOR_TEST);

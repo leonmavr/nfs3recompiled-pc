@@ -267,7 +267,11 @@ framebuffer at the world's first draw, with its levels), read blurred at the
 pixel and brought back from the gamma the picture went out at. Far hills take
 the sky's own colour where they meet it. Additive draws keep the old fog: haze
 added onto the sky only brightened it. `NFS_HAZE` takes a number for how far
-towards the sky, 0.8 by default.
+towards the sky, 0.8 by default. The sky is what was drawn flat before the
+world; a frame that drew none -- under a ridge or in a tunnel the game leaves
+it out -- keeps the last sky taken, where it took the cleared picture before
+and the haze round the car went dark blue for as long as it was under (Lost
+Canyons, 2026-11-21). `NFS_HAZE_TRACE=1` says when a frame drew none.
 
 **The whole-picture pass.** As the HUD begins -- the same moment the wet
 road's reflection is taken -- the picture is copied and drawn back over itself
