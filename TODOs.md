@@ -710,6 +710,9 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   relative times are shown the same way. Also there's a bug in it: whenever i
   try to position it with the HUD menu, it shifts itself up slightly (by 50-100?
   px).
+- [ ] Rear view mirror: recently we increased ambience at night since night used
+  to be too dark. However the rear-view mirror still shows what's behind me very
+  dark, as if these changes have not been reflected on the rear-view mirror.
 
 ### Driving/Gameplay
 - [x] Tire grip by surface: less on snow, sand and grass than on asphalt. Each
