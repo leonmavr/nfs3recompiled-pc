@@ -52,6 +52,7 @@ constexpr x86::reg32 kCarAir = 0x164;           // word: ticks in the air
 constexpr x86::reg32 kCarHit = 0x168;           // float: the hit, m/s
 constexpr x86::reg32 kCarTouch = 0x170;         // what it touches
 constexpr x86::reg32 kCarVelocity = 0xa4;
+constexpr x86::reg32 kCarPos = 0x98, kCarRight = 0xc0, kCarTouchAt = 0x178;   // floats x, y, z each
 constexpr x86::reg32 kCarSpeed = 0xb8;          // float, m/s: the player's cars
 constexpr x86::reg32 kTouchKind = 0xefff0000u, kTouchWall = 0x40000u, kTouchObject = 0x60000u;
 constexpr x86::reg32 kCrashBank = 2, kCrashPatch = 46, kScrapePatch = 41;
@@ -68,6 +69,11 @@ struct Shake
     float scrapeBuzz = 0.012f, scrapeFull = 40.0f;   // m at scrapeFull m/s along a wall
     float landMin = 4.0f, landFull = 14.0f;          // m/s falling
     x86::reg32 minAir = 8;                           // ticks
+    /* Rubbing: hit again within rubTicks of the last jolt is the same contact
+     * going on -- a car pressed along a tunnel's wall is hit frame after frame
+     * -- and jolts (and crashes) again only rubHarder times as hard. */
+    x86::sreg32 rubTicks = 12;
+    float rubHarder = 1.5f;
 };
 constexpr Shake kShake{};
 
@@ -127,6 +133,8 @@ struct State
     float lastHit = 0.0f;             // the latest hit of any car, for the sound
     x86::sreg32 lastHitAt = -1000;
     x86::sreg32 played = -1000;       // the port's latest crash
+    float joltHit = 0.0f;             // the hit that last jolted the camera
+    x86::sreg32 joltAt = -1000;       // and the last tick the car was hit since (rubbing)
 };
 State s;
 
@@ -166,12 +174,28 @@ bool crashHit(win32::WinApplication* app, x86::CPU& cpu, x86::reg32 car)
     }
     if (!(hit > kShake.minHit))
         return true;
+    /* Still in contact since the last jolt, no harder: the same rub, not a new
+     * crash.  Jolted again on every hit, each time to the other side by the
+     * clock, the camera shook left and right all the way down Lost Canyons'
+     * tunnel (2026-11-21). */
+    const bool rubbing = clock - s.joltAt <= kShake.rubTicks && clock >= s.joltAt && hit < s.joltHit * kShake.rubHarder;
+    s.joltAt = clock;
+    if (rubbing)
+        return true;
+    s.joltHit = hit;
     const float part = kind == kTouchWall ? 1.0f : kind == kTouchObject ? kShake.objectShare : kShake.carShare;
-    // Knocked aside one way or the other, and a little up.
-    const float side = (clock & 1) ? 1.0f : -1.0f;
+    /* Knocked aside away from where it was hit (the touch, [+0x178], against
+     * the car's right, [+0xc0]), and a little up; head on, one way or the
+     * other. */
+    float across = 0.0f;
+    for (x86::reg32 q = 0; q < 3; ++q)
+        across += (app->getMemory<float>(car + kCarTouchAt + 4 * q) - app->getMemory<float>(car + kCarPos + 4 * q))
+                  * app->getMemory<float>(car + kCarRight + 4 * q);
+    const float side = across > 0.3f ? -1.0f : across < -0.3f ? 1.0f : (clock & 1) ? 1.0f : -1.0f;
     jolt(kShake.jolt * share(hit) * part, side, 0.5f);
     if (tracing())
-        SDL_Log("[CRASH] t %d hit %.1f touch %x: jolt %.3f m", int(clock), hit, unsigned(touch), s.jolt);
+        SDL_Log("[CRASH] t %d hit %.1f touch %x, %.1f m to the right: jolt %.3f m", int(clock), hit, unsigned(touch),
+                double(across), s.jolt);
     if (!soundOn() || clock - s.played < kSound.gap)
         return true;
     s.played = clock;
@@ -208,6 +232,20 @@ void crashFrame(win32::WinApplication* app)
     s.buzz *= std::exp(-kShake.buzzDecay * dt);
     if (clock - s.scrapeSeen < 4 && shakeSetting() > 0.0f)
         s.buzz = SDL_max(s.buzz, kShake.scrapeBuzz * SDL_min(1.0f, s.scrape / kShake.scrapeFull) * shakeSetting());
+    if (tracing())
+    {
+        // Twice a second: what moves the camera now, and what the car touches.
+        static x86::sreg32 s_said = -1000;
+        const x86::reg32 player = app->getMemory<x86::reg32>(kPlayerCar);
+        if ((clock - s_said >= 32 || clock < s_said) && player && (s.jolt > 1e-3f || s.buzz > 1e-3f))
+        {
+            s_said = clock;
+            SDL_Log("[CRASH] t %d shake: jolt %.3f m, buzz %.3f m (scrape %s, %.1f m/s); touch %x hit %.1f", int(clock),
+                    double(s.jolt), double(s.buzz), clock - s.scrapeSeen < 4 ? "on" : "off", double(s.scrape),
+                    unsigned(app->getMemory<x86::reg32>(player + kCarTouch)),
+                    double(app->getMemory<float>(player + kCarHit)));
+        }
+    }
     const x86::reg32 car = app->getMemory<x86::reg32>(kPlayerCar);
     if (!car || ticks == 0)
         return;

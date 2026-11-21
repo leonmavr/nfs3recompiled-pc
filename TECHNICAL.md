@@ -2250,7 +2250,10 @@ object; the rest another car). `collisionEffects` hands every car's to
 aside and up -- swinging back once or twice and dying in a few tenths of a
 second -- with a fast, small vibration under it, both as strong as the hit
 (full at 20 m/s): a wall's whole, another car's 0.7 of it, a sign's or a
-tree's 0.45. Scraping along a wall keeps a light buzz going by the speed; a
+tree's 0.45, knocked away from where it was hit (the touch, `[car+0x178]`,
+against the car's right). Hit again within 12 ticks of the last jolt, and no
+half as hard again, is the same contact going on -- a car rubbing a wall is hit
+frame after frame -- and neither jolts nor crashes again. Scraping along a wall keeps a light buzz going by the speed; a
 landing after 8 ticks in the air, falling at 4 m/s or more, jolts it down.
 `cameraToView` moves the camera by it in any of the player's own views
 (chase, bumper, cockpit; not the replay's television cameras), after the
