@@ -353,8 +353,19 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     nothing. About 6 us a flame on the heaviest body (the Hellcat's 6900
     triangles). The far-side test tried before (9ecd13f, reverted) took the
     view's translation for the camera's place; the camera is -t M^T.
-- [ ] BUG: when press b to look back in rainy weather, the rain drops appear as
+- [x] BUG: when press b to look back in rainy weather, the rain drops appear as
   lines (possibly due to rotation of camera view) - fix it.
+  - Done: a drop's streak ran from where the last projection of it put it to
+    where this one does, and that cache was shared by every view of the frame
+    and kept across a camera's turning -- the rear-view mirror's pass
+    overwrote it with the mirror's own pixels, and the look-back key turned the
+    camera round a drop whose remembered place was still in the old picture, so
+    the streak spanned the screen. Now the cache is the main view's alone
+    (`projectParticles`' `cache`), and a view that turned or jumped since the
+    last frame (`s_cut`: the way it looks turned more than 20 degrees, its place
+    moved more than 8 m) streaks each drop by its own motion for that one frame
+    (`native_particles.cpp`). The streak still carries the view's motion
+    between frames, which is what slants the rain at speed.
 - [ ] After extracting assets, make 3d models such as cops animating (e.g when
   fined/arrested) or be able to add custom model in whatever format the game
   uses (e.g. girls/crowd before race begins)

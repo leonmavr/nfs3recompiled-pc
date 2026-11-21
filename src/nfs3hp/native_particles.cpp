@@ -91,6 +91,11 @@ struct Particle
     float seed;
     float alpha;
     float colour[3];
+    /* Where a spark, a drop or a flake was last drawn, in the picture's pixels
+     * (the main view's own projection of it a frame ago): the streak runs from
+     * there to where it is now, so the view's own motion between the frames
+     * -- the car at speed -- is part of it.  Cleared across a cut, and never
+     * taken from another view's (projectParticles). */
     float last[2];
     bool hasLast;
     bool settled;
@@ -707,6 +712,13 @@ float s_gameWeatherRate = 0.0f;   // and a second, averaged
 float s_weatherOwed = 0.0f;       // this frame's share of one not yet made
 float s_camera[3] = {};           // where the main view's camera is (particlesFrame)
 bool s_cameraKnown = false;
+float s_cameraWas[3] = {};        // where it was a frame before
+float s_forward[3] = {};          // the way it looked, a frame before
+bool s_viewWas = false;
+/* The view turned or jumped since the last frame: the look-back key round the
+ * car, a replay's cut, another car's camera.  Nothing is streaked across a cut
+ * -- a drop would run from one side of the picture to the other as a line. */
+bool s_cut = false;
 
 /* NFS_WEATHER_MAX: the heaviest the weather comes, against the mean (2.5); 1
  * keeps it as the game had it, steady. */
@@ -1700,8 +1712,12 @@ void frameParticles(win32::WinApplication* app)
 /* The frame's particles and flames in one view: its camera (at +0x38 of the
  * view's record) and its matrix (+0x44) turn where each one is into that view's
  * space, and the projection ([0x56009c..a8], set for the pass) into the
- * picture.  The alpha-blended ones go to s_out, the added ones to s_sparks. */
-void projectParticles(win32::WinApplication* app, x86::reg32 view)
+ * picture.  The alpha-blended ones go to s_out, the added ones to s_sparks.
+ * `cache` is the main view's: a spark, a drop and a flake keep where it drew
+ * them a frame ago, for a streak that carries the view's own motion; another
+ * view's pass neither reads nor writes that (the mirror's, behind the car,
+ * would put the streak a picture's width apart). */
+void projectParticles(win32::WinApplication* app, x86::reg32 view, bool cache)
 {
     auto f = [app](x86::reg32 address) { return app->getMemory<float>(address); };
     const bool trails = s_showTrails;
@@ -1735,7 +1751,10 @@ void projectParticles(win32::WinApplication* app, x86::reg32 view)
          * sub_4ca500, and kills them). */
         if (!project(q.p, e.x, e.y, z) || z < 1.5f)
         {
-            q.hasLast = false;
+            /* Behind the camera or on the lens: nothing to run a streak from
+             * when it comes back. */
+            if (cache)
+                q.hasLast = false;
             continue;
         }
         const float near = smoothStep(1.5f, 3.5f, z);
@@ -1756,13 +1775,15 @@ void projectParticles(win32::WinApplication* app, x86::reg32 view)
                       ? q.alpha * near
                       : q.alpha * SDL_min(1.0f, q.age / 0.08f) * SDL_min(1.0f, left * 3.0f) * near;
             e.size = SDL_max(0.8f, SDL_min(scale * q.size / z, 300.0f));
-            if (q.hasLast)
+            if (cache && q.hasLast && !s_cut)
             {
                 e.tx = q.last[0];
                 e.ty = q.last[1];
             }
             else
             {
+                /* Thrown this frame, or the view was cut under it: a streak of
+                 * its own motion alone, as a still view would draw it. */
                 const float back[3] = { q.p[0] - q.v[0] * 0.03f, q.p[1] - q.v[1] * 0.03f, q.p[2] - q.v[2] * 0.03f };
                 float bz;
                 if (!project(back, e.tx, e.ty, bz))
@@ -1771,9 +1792,12 @@ void projectParticles(win32::WinApplication* app, x86::reg32 view)
                     e.ty = e.y;
                 }
             }
-            q.last[0] = e.x;
-            q.last[1] = e.y;
-            q.hasLast = true;
+            if (cache)
+            {
+                q.last[0] = e.x;
+                q.last[1] = e.y;
+                q.hasLast = true;
+            }
             if (q.type == EffectParticle::Droplet)
                 s_sparks.push_back(e);   // added to the picture, like a spark
             else
@@ -1789,7 +1813,7 @@ void projectParticles(win32::WinApplication* app, x86::reg32 view)
             e.b = SDL_max(0.0f, heat * heat * 0.8f - 0.1f);
             e.a = SDL_min(1.0f, left * 1.6f) * near;
             e.size = SDL_max(0.8f, scale * q.size / z);
-            if (q.hasLast)
+            if (cache && q.hasLast && !s_cut)
             {
                 e.tx = q.last[0];
                 e.ty = q.last[1];
@@ -1804,9 +1828,12 @@ void projectParticles(win32::WinApplication* app, x86::reg32 view)
                     e.ty = e.y;
                 }
             }
-            q.last[0] = e.x;
-            q.last[1] = e.y;
-            q.hasLast = true;
+            if (cache)
+            {
+                q.last[0] = e.x;
+                q.last[1] = e.y;
+                q.hasLast = true;
+            }
             s_sparks.push_back(e);
             continue;
         }
@@ -2157,12 +2184,25 @@ void particlesFrame(win32::WinApplication* app, x86::reg32 view)
         for (int i = 0; i < 3; ++i)
             s_camera[i] = -(t[0] * m[i * 3] + t[1] * m[i * 3 + 1] + t[2] * m[i * 3 + 2]);
         s_cameraKnown = true;
+        /* Looked at from where: the way this view looks (the third row of M,
+         * which is what its z is made of) and where from.  A frame that turns
+         * the view round -- the look-back key, a replay's cut, another car's
+         * camera -- is not the drops' motion, and nothing is streaked across
+         * it; the car's own turning of a few degrees is, and is. */
+        const float forward[3] = { m[2], m[5], m[8] };
+        const float dx = s_camera[0] - s_cameraWas[0], dy = s_camera[1] - s_cameraWas[1];
+        const float dz = s_camera[2] - s_cameraWas[2];
+        const float turn = forward[0] * s_forward[0] + forward[1] * s_forward[1] + forward[2] * s_forward[2];
+        s_cut = s_viewWas && (turn < 0.94f || dx * dx + dy * dy + dz * dz > 64.0f);
+        SDL_memcpy(s_forward, forward, sizeof s_forward);
+        SDL_memcpy(s_cameraWas, s_camera, sizeof s_cameraWas);
+        s_viewWas = true;
     }
     // The clock's state and what the cars and the engines make, once a frame.
     const Uint64 began = perfTracing() ? SDL_GetTicksNS() : 0;
     frameParticles(app);
     s_frameOn = true;
-    projectParticles(app, view);
+    projectParticles(app, view, true);
     std::sort(s_out.begin(), s_out.end(), deeper);
     handOver();
     if (perfTracing())
@@ -2193,7 +2233,7 @@ void particlesMirrorFrame(win32::WinApplication* app, x86::reg32 view)
         return;
     const Uint64 began = perfTracing() ? SDL_GetTicksNS() : 0;
     const std::size_t from = s_out.size();
-    projectParticles(app, view);
+    projectParticles(app, view, false);   // the mirror: no cache of its own
     std::sort(s_out.begin() + std::ptrdiff_t(from), s_out.end(), deeper);
     handOver();
     if (perfTracing())

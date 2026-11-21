@@ -450,6 +450,19 @@ A storm makes a great many of them, so they are kept to 900 at once and never
 crowd the dust and the sparks out of the pool. `NFS_WEATHER_PARTICLES`
 (`0`/`off` for the game's own squares).
 
+A streak runs from where the view last drew the drop to where it draws it now,
+so the view's own motion is part of it: the drops slant and lengthen the faster
+the car goes, and at a stop a drop is no longer than its own fall in a frame.
+Two things it must not carry. The rear-view mirror projects the same particles
+again in its own view, and keeps no streak of its own -- a drop's place in the
+mirror is nowhere near its place in the main picture, and a streak between the
+two spanned the whole of it (2026-11-21) -- so the cache of where each was last
+drawn is the main view's alone (`projectParticles`' `cache`). And a cut is not
+the drops' motion -- the look-back key turning the camera round the car, a
+replay's cut, another car's camera -- so the frame after one streaks a drop by
+its own motion alone (`s_cut`), which is why pressing it no longer draws the
+rain as lines.
+
 **A particle that comes onto the camera is left out**, not splashed: the game's
 own particle drawing hands one within 3 of the camera to `sub_4ca500`, which
 lays a splash of the kind's picture over the view and kills the particle -- and
