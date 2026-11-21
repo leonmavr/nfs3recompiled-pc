@@ -338,6 +338,20 @@ picture's alpha), and faded at the screen's edges, past which what casts may
 lie. Fainter in the rain and at night as the cars' own are.
 `NFS_OBJECT_SHADOWS`, 0.45.
 
+**A view with no sky.** The frame's work hangs off the sky's drawing
+(`noteSun`, at the top of `sub_47a190`): the port's particles and weather
+moved, the crash shake and the cars' lean eased, the sun noted for these
+shadows. Under a roof -- a tunnel, a ridge -- `sub_47a880` skips the sky while
+`[0x6fbc2c]` is 2, and a frame then did none of it: the last frame's rain was
+handed to the renderer again and again, frozen streaks all down Lost Canyons'
+tunnel, and the camera's last jolt never died, rocking it left and right until
+the sky came back (2026-11-21). So at the swap (`skylessFrameDone`, from
+`onSwap`), a race frame whose clock moved and that noted nothing does it then,
+in the main view as the game left it -- what it hands the renderer is drawn the
+next frame, a frame late while under the roof -- with no sun (no shadows from
+it, no glare) and no weather starting. A menu or a pause, the clock standing,
+does nothing. `NFS_HAZE_TRACE=1` says so once a second while it happens.
+
 The rays are marched at half size (`NFS_SHADOW_HALF`, on): for a quarter of
 the pixels, into a layer of their own (`g_shadowMaskShader`, `m_shadowMask`),
 which the whole-picture pass reads back filtered (`sunShadowHalf`); what is
@@ -496,7 +510,11 @@ not drawn, and their rate a second, averaged over three seconds, is the mean:
 rain at that rate (its drops took about as long to reach the ground as these
 do), snow at 0.3 of it (these drift down for six seconds, its lived under two).
 Where the game throws fewer than 20 a second, 700 drops or 120 flakes a second
-are the mean. The rate is not steady: the mean times `lo + (max - lo) n²`, `n`
+are the mean -- only until the game has thrown them at a rate this race: after
+that, fewer is the game's own doing, and the port's eases off with its rate and
+comes back with it. Under a roof -- a frame where the game draws no sky (A view
+with no sky) -- none starts at all, whatever the rate, and what is falling runs
+out. The rate is not steady: the mean times `lo + (max - lo) n²`, `n`
 a smooth noise of the race's clock with a knot every 9 s, `max`
 `NFS_WEATHER_MAX` (2.5) and `lo` what makes the mean 1 (0.36 for 2.5) -- lulls
 and showers over half a minute or so. Each starts in a cylinder 14 m across

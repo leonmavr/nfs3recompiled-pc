@@ -709,6 +709,8 @@ constexpr float kRainLife = 1.6f, kSnowLife = 9.0f; // s at most, if no ground s
 
 float s_gameWeather = 0.0f;       // the game's drops and flakes thrown since the last frame
 float s_gameWeatherRate = 0.0f;   // and a second, averaged
+bool s_gameWeatherSeen = false;   // this race the game has thrown them at a rate (kFewest or more)
+bool s_skyless = false;           // this frame drew no sky: under a roof (particlesSkyless)
 float s_weatherOwed = 0.0f;       // this frame's share of one not yet made
 float s_camera[3] = {};           // where the main view's camera is (particlesFrame)
 bool s_cameraKnown = false;
@@ -768,13 +770,26 @@ void fallWeather(win32::WinApplication* app, float dt)
     bool rains = true;
     if (const x86::reg32 track = app->getMemory<x86::reg32>(0x6fd4ac))
         rains = trackRains(track);
-    const float mean = s_gameWeatherRate >= weather::kFewest
+    /* The port's own mean only on a track where the game throws none: once it
+     * has this race, fewer is the game's own doing -- under a roof, in a
+     * tunnel, where it throws none -- and the rain eases off with its rate
+     * (kMeasureSeconds) and comes back with it.  Taken for "none to measure",
+     * the fallback rained a full shower down the tunnels (Lost Canyons,
+     * 2026-11-21). */
+    if (s_gameWeatherRate >= weather::kFewest)
+        s_gameWeatherSeen = true;
+    const float mean = s_gameWeatherRate >= weather::kFewest || s_gameWeatherSeen
                            ? s_gameWeatherRate * (rains ? weather::kRainMatch : weather::kSnowMatch)
                        : rains ? weather::kFallbackRain
                                : weather::kFallbackSnow;
     const float seconds = float(app->getMemory<x86::reg32>(0x7d3684)) / 64.0f;
     const float density = weatherDensity(seconds);
     s_weatherOwed += mean * density * dt;
+    /* Under a roof the game draws no sky (skylessFrameDone, native_render.cpp):
+     * none starts there, and what is falling runs out. */
+    const bool covered = s_skyless;
+    if (covered)
+        s_weatherOwed = 0.0f;
     // The ground: the lowest of the player's wheels; and where the camera is going.
     const x86::reg32 car = playerCar(app);
     float ground = s_camera[1] - 3.0f, ahead[3] = { 0.0f, 0.0f, 0.0f };
@@ -815,10 +830,13 @@ void fallWeather(win32::WinApplication* app, float dt)
         {
             said = seconds;
             SDL_Log("[WEATHER] %s: the game throws %.0f a second%s, now %.2f of the mean (most %.1f): %d this "
-                    "frame, %zu in the air",
+                    "frame, %zu in the air%s",
                     rains ? "rain" : "snow", double(s_gameWeatherRate),
-                    s_gameWeatherRate >= weather::kFewest ? "" : " (too few: the port's own mean)", double(density),
-                    double(weatherMax()), made, s_weatherCount);
+                    s_gameWeatherRate >= weather::kFewest ? ""
+                    : s_gameWeatherSeen               ? " (few: the game's own lull, a roof)"
+                                                      : " (too few: the port's own mean)",
+                    double(density),
+                    double(weatherMax()), made, s_weatherCount, covered ? " (under a roof: none starts)" : "");
         }
     }
 }
@@ -1657,6 +1675,11 @@ void frameParticles(win32::WinApplication* app)
     const bool flames = s_showFlames;
     auto f = [app](x86::reg32 address) { return app->getMemory<float>(address); };
     const x86::sreg32 clock = x86::sreg32(app->getMemory<x86::reg32>(0x7d3684));
+    if (s_clock < 0 || clock < s_clock)
+    {
+        s_gameWeatherSeen = false;   // a new race: the game's rate measured again
+        s_gameWeatherRate = 0.0f;
+    }
     if (s_clock < 0 || clock < s_clock || clock - s_clock > 64)
     {
         for (x86::reg32& gear : s_gear)
@@ -2102,6 +2125,12 @@ void handOver()
 /* Whether the port draws the weather's flakes and drops itself (NFS_WEATHER_PARTICLES):
  * native_vertices.cpp leaves a particle that comes onto the camera out of the
  * game's splash when it does. */
+/* The frame being moved drew no sky (skylessFrameDone, native_render.cpp). */
+void particlesSkyless(bool skyless)
+{
+    s_skyless = skyless;
+}
+
 bool ownWeather()
 {
     return weatherSetting();

@@ -15941,11 +15941,19 @@ static x86::reg32 s_mainView = 0;   // the record of the view the particles were
 /* The frame's first view -- the main one -- notes what the sun and the shadows
  * need of it, and makes the frame's particles.  False for any later view: the
  * rear-view mirror, whose own pass has its own camera and projection. */
-static bool noteSun(win32::WinApplication* app, x86::reg32 view)
+static bool noteSun(win32::WinApplication* app, x86::reg32 view, bool skyDrawn = true)
 {
     if (s_sunNoted || !view)
         return false;
     s_sunNoted = true;
+    {
+        // NFS_HAZE_TRACE: which view the frame's work is done in, when it changes.
+        static const bool s_traced = SDL_getenv("NFS_HAZE_TRACE") != nullptr;
+        if (s_traced && view != s_mainView)
+            SDL_Log("[HAZE] t %u the frame's work in view %#x (was %#x)%s",
+                    unsigned(app->getMemory<x86::reg32>(0x7d3684)), unsigned(view), unsigned(s_mainView),
+                    skyDrawn ? "" : ", no sky");
+    }
     s_mainView = view;
     // The cars' bodies leaned on their springs, for this frame's drawing alone.
     bodyMotionFrame(app);
@@ -15980,7 +15988,8 @@ static bool noteSun(win32::WinApplication* app, x86::reg32 view)
      * 0 or off for none), by day with no weather only. */
     static const float glareSetting = settingOr("NFS_SUN_GLARE", 1.0f, 3.0f);
     float glare = m.word(0x6fd4cc) == 0 && m.word(0x6fd4c8) == 0 ? glareSetting : 0.0f;
-    if (!(length > 1e-4f) || f(0x56009c) == 0.0f || f(0x5600a0) == 0.0f || f(0xa9235c) == 0.0f)
+    // Under a roof (no sky drawn, skylessFrameDone): no sun to cast shadows or glare.
+    if (!skyDrawn || !(length > 1e-4f) || f(0x56009c) == 0.0f || f(0x5600a0) == 0.0f || f(0xa9235c) == 0.0f)
         amount = glare = 0.0f;
     else
         for (float& v : sun)
@@ -16391,6 +16400,42 @@ static void noteHeadlight(win32::WinApplication* app, x86::CPU& cpu)
         v /= length;
     s_headlightNoted = true;
     win32::glide2x::headlights(true, o, d, u, f(0x56009c), f(0x5600a0), f(0x5600a4), f(0x5600a8));
+}
+
+void particlesSkyless(bool skyless);   // native_particles.cpp
+bool raceIsRunning();                  // nfs3hp_main.cpp
+
+/* A race frame that drew no sky.  The frame's work hangs off the sky's drawing
+ * (noteSun, from `sky` at the top of sub_47a190): the port's particles and
+ * weather moved and handed to the renderer, the crash shake and the cars'
+ * lean eased, the sun noted.  Under a roof -- Lost Canyons' long tunnel, a
+ * ridge -- the game draws no sky, and a frame then did none of it: the last
+ * frame's rain and dirt handed over again and again, stuck on the view, and
+ * the camera's last jolt never dying, rocking it left and right until the sky
+ * came back (2026-11-21).  So at the swap, a frame whose race clock moved and
+ * that noted nothing does it then, in the main view as the game left it --
+ * what it hands over is drawn the next frame, a frame late under the roof --
+ * with no sun, and no weather starting.  A menu, a pause: the clock stands,
+ * nothing is done. */
+void skylessFrameDone(win32::WinApplication* app)
+{
+    static x86::reg32 s_clockWas = 0;
+    const x86::reg32 clock = app->getMemory<x86::reg32>(0x7d3684);
+    const bool moved = clock != s_clockWas;
+    s_clockWas = clock;
+    if (s_sunNoted || !s_mainView || !moved || clock == 0 || !raceIsRunning())
+        return;
+    static const bool s_traced = SDL_getenv("NFS_HAZE_TRACE") != nullptr;
+    static x86::reg32 s_saidAt = 0;
+    if (s_traced && clock - s_saidAt >= 64)
+    {
+        s_saidAt = clock;
+        SDL_Log("[HAZE] t %u no sky this frame: the frame's work done at the swap", unsigned(clock));
+    }
+    particlesSkyless(true);
+    noteSun(app, s_mainView, false);
+    particlesSkyless(false);
+    s_sunNoted = true;   // as a frame with its sky: the shadows' sun is the one noteSun set
 }
 
 void headlightsFrameDone()
