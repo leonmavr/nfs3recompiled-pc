@@ -1755,6 +1755,21 @@ apart; reversing straight away, in a crowd or in the wet, only backed into the
 next car. Still stuck after three tries, the game's own counters are run up so
 that it is put back on the road at once.
 
+Stepping aside and reversing do nothing for a car turned across the road and
+crawling -- a nose pushed at a wall, or backed into what is behind it, at 90 or
+180 degrees to the way it wants to go -- and its three tries run out slowly
+while it sits there. So one that is more than 65 degrees off that way (0.18 of
+a turn: the heading error `aiHeading` works out, `[0x56ec60]`) and under 22
+km/h (`kCrookedTurns`, `kCrookedSpeed`) for three seconds (`kCrookedSeconds`)
+is put back on the road at once, whatever its driver's patience. The seconds
+are counted through the reverses, a reverse being that slow too, and the count
+is cleared only once the car is driving again (over 29 km/h) and pointing
+along the road (inside 36 degrees) -- or the race is new. Nothing that is
+still racing is caught by it: a racer's heading error stays inside 0.16 turns
+(at `NFS_AI_TRACE`, a race's own trace never passed it) because it is measured
+against the way the car wants to go, which turns with the road. Both resets
+are `putBack`, the game's own two counters run up.
+
 Splits ahead are seen before they are hit. Each track node (`[0x5dd948]`, 36
 bytes) has at `+0xc` a word that is the road across it in slices, a bit each,
 set where there is road: the lowest set bit at the right-hand edge (`+0x20`),

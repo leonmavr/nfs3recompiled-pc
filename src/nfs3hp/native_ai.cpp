@@ -66,6 +66,17 @@ constexpr x86::reg32 kCarSize = 0x9ac;
 constexpr int kMaxCars = 16;
 constexpr x86::reg32 kRaceClock = 0x7d3684;   // the race's ticks, 64 a second
 constexpr int kTicksPerSecond = 64;
+/* Turned more than this off the road (turns of a circle: 0.18 is 65 degrees)
+ * and slower than this, with nothing coming of it, an opponent is put back on
+ * the road instead of left to fight the wall it is pressed against (unstick).
+ * A racing car's heading error stays well inside this -- it is measured
+ * against the way it wants to go, which turns with the road -- and its speed
+ * is well above it; a car spun across the road and crawling is neither. */
+constexpr float kCrookedTurns = 0.18f;
+constexpr float kCrookedSpeed = 6.0f;    // m/s, 22 km/h
+constexpr float kCrookedSeconds = 3.0f;  // of that before the car is put back
+constexpr float kRecoveredSpeed = 8.0f;  // m/s: driving again, so it came round
+constexpr float kRecoveredTurns = 0.1f;  // and pointing along the road (36 degrees)
 
 struct Driver
 {
@@ -98,6 +109,7 @@ struct Opponent
     x86::sreg32 node = 0;        // the furthest track node reached
     x86::sreg32 progressAt = 0;  // the race tick it got there
     x86::sreg32 stuckFrom = -1;  // since when it has been stuck, or -1
+    x86::sreg32 crookedFrom = -1; // since when it has been turned across the road and crawling, or -1
     x86::sreg32 lastTick = 0;
     int tries = 0;               // backing off since it last got going
     x86::sreg32 avoidUntil = -1; // till when it keeps to avoidLateral
@@ -259,6 +271,20 @@ void backOff(win32::WinApplication* app, x86::reg32 car, x86::sreg32 tick, float
     app->getMemory<x86::reg32>(car + 0x658) = app->getMemory<x86::reg32>(car + 0x658) + 1;
     app->getMemory<x86::reg32>(car + 0x7d0) = x86::reg32(tick + x86::sreg32(seconds * kTicksPerSecond));
     app->getMemory<x86::reg8>(car + 0x620) = x86::reg8(app->getMemory<x86::reg8>(car + 0x620) | 0x40);
+}
+
+/* The game's own reset (sub_429100): what it does when a car has failed nine
+ * tries at reversing ([+0x658]) or has spent a thousand frames under 3 m/s
+ * ([+0x7d8]), and what the port runs up early when nothing else has worked.
+ * The car is put back on the road, facing along it. */
+void putBack(win32::WinApplication* app, x86::reg32 car, Opponent& o, x86::sreg32 tick)
+{
+    app->getMemory<x86::reg32>(car + 0x658) = 9;
+    app->getMemory<x86::reg32>(car + 0x7d8) = 1001;
+    o.progressAt = tick;
+    o.stuckFrom = -1;
+    o.crookedFrom = -1;
+    o.tries = 0;
 }
 
 /* Splits in the road, ahead of time.  Each track node's word at +0xc is the
@@ -548,6 +574,30 @@ void unstick(win32::WinApplication* app, x86::reg32 car, int i)
     const bool reversing = app->getMemory<x86::reg32>(car + 0x7d4) == 1;
     const bool stuck = (speed < 3.0f && still > driver.patience)
                        || (turned > 0.3f && speed < 8.0f && still > driver.patience * 0.75f);
+    /* Turned well across the road and barely moving -- nose into a wall or a
+     * post, or backing into whatever is behind it -- it is not going to drive
+     * itself round, and neither the step aside nor the reverse below is going
+     * to do it; the game's own reset is a thousand frames of that away.  A few
+     * seconds of it and the car goes back on the road, whatever the driver's
+     * patience.  The timer is kept through the tries below -- a reverse is
+     * slower than kCrookedSpeed too -- and cleared only once the car is
+     * driving and pointing along the road again. */
+    if (turned > kCrookedTurns && speed < kCrookedSpeed)
+    {
+        if (o.crookedFrom < 0)
+            o.crookedFrom = tick;
+        else if (float(tick - o.crookedFrom) >= kCrookedSeconds * kTicksPerSecond)
+        {
+            if (aiTracing())
+                SDL_Log("[AI] car %d (%s) %+.2f turns off the road at %.1f m/s for %.1fs at node %d: put back on the road",
+                        i, driver.character, double(o.heading), double(speed),
+                        double(tick - o.crookedFrom) / kTicksPerSecond, int(node));
+            putBack(app, car, o, tick);
+            return;
+        }
+    }
+    else if (speed > kRecoveredSpeed && turned < kRecoveredTurns)
+        o.crookedFrom = -1;
     if (!stuck)
     {
         o.stuckFrom = -1;
@@ -561,11 +611,7 @@ void unstick(win32::WinApplication* app, x86::reg32 car, int i)
     {
         if (aiTracing())
             SDL_Log("[AI] car %d stuck %.1fs at node %d: put back on the road", i, double(stuckFor), int(node));
-        app->getMemory<x86::reg32>(car + 0x658) = 9;
-        app->getMemory<x86::reg32>(car + 0x7d8) = 1001;
-        o.progressAt = tick;
-        o.stuckFrom = -1;
-        o.tries = 0;
+        putBack(app, car, o, tick);
         return;
     }
     /* In a clump the one in front drives away and the ones behind make room:
