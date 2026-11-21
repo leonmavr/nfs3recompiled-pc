@@ -1770,6 +1770,17 @@ still racing is caught by it: a racer's heading error stays inside 0.16 turns
 against the way the car wants to go, which turns with the road. Both resets
 are `putBack`, the game's own two counters run up.
 
+Going at speed and stopped dead, nose into a wall or a track object, an
+opponent is put back on the road at once too, without the step aside or the
+reverse first: from 43 km/h or more to under 5 km/h inside half a second
+(`kSuddenFrom`, `kSuddenStop`, `kSuddenWithin`) -- over 2 g, which no brakes
+do, only a hit -- with what it touched (`[car+0x170]`, the game's own: a wall
+or barrier, 0x4xxxx, or a track object, 0x6xxxx; not another car) ahead of
+its middle along its forward axis (where, `[+0x178..+0x180]`), and no car
+nose to tail in front of it (`around`). Not while it reverses, and not a cop
+(`[+0x200]` & 0x20). A car stopped by another car is left to the step aside
+and the reverse, as before.
+
 Splits ahead are seen before they are hit. Each track node (`[0x5dd948]`, 36
 bytes) has at `+0xc` a word that is the road across it in slices, a bit each,
 set where there is road: the lowest set bit at the right-hand edge (`+0x20`),

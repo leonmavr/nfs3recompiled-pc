@@ -77,6 +77,19 @@ constexpr float kCrookedSpeed = 6.0f;    // m/s, 22 km/h
 constexpr float kCrookedSeconds = 3.0f;  // of that before the car is put back
 constexpr float kRecoveredSpeed = 8.0f;  // m/s: driving again, so it came round
 constexpr float kRecoveredTurns = 0.1f;  // and pointing along the road (36 degrees)
+/* Going at speed and stopped dead, nose into a wall or a track object (not
+ * another car): put back on the road at once (unstick).  From kSuddenFrom to
+ * under kSuddenStop inside kSuddenWithin is over 2 g -- no brakes do that, only
+ * a hit.  What the car touched is the game's own, [+0x170] (native_crash.cpp:
+ * 0x4xxxx a wall or barrier, 0x6xxxx a track object, the rest another car),
+ * and where, [+0x178..+0x180]: ahead of the car's middle, along its forward
+ * axis (+0xd8). */
+constexpr float kSuddenFrom = 12.0f;     // m/s, 43 km/h: it was going
+constexpr float kSuddenStop = 1.5f;      // m/s, 5 km/h: and now it is not
+constexpr float kSuddenWithin = 0.5f;    // seconds between the two
+constexpr x86::reg32 kCarTouch = 0x170, kCarTouchAt = 0x178;
+constexpr x86::reg32 kTouchKind = 0xefff0000u, kTouchWall = 0x40000u, kTouchObject = 0x60000u;
+constexpr x86::reg8 kFlagCop = 0x20;     // [+0x200] (sub_428700)
 
 struct Driver
 {
@@ -110,6 +123,7 @@ struct Opponent
     x86::sreg32 progressAt = 0;  // the race tick it got there
     x86::sreg32 stuckFrom = -1;  // since when it has been stuck, or -1
     x86::sreg32 crookedFrom = -1; // since when it has been turned across the road and crawling, or -1
+    x86::sreg32 fastAt = -1;     // the last tick it was going at kSuddenFrom or more, or -1
     x86::sreg32 lastTick = 0;
     int tries = 0;               // backing off since it last got going
     x86::sreg32 avoidUntil = -1; // till when it keeps to avoidLateral
@@ -284,7 +298,22 @@ void putBack(win32::WinApplication* app, x86::reg32 car, Opponent& o, x86::sreg3
     o.progressAt = tick;
     o.stuckFrom = -1;
     o.crookedFrom = -1;
+    o.fastAt = -1;
     o.tries = 0;
+}
+
+/* Stopped dead against a wall or a track object in front of it (kSuddenFrom
+ * and on, above). */
+bool hitObstacleAhead(win32::WinApplication* app, x86::reg32 car)
+{
+    const x86::reg32 kind = app->getMemory<x86::reg32>(car + kCarTouch) & kTouchKind;
+    if (kind != kTouchWall && kind != kTouchObject)
+        return false;
+    float along = 0.0f;
+    for (x86::reg32 q = 0; q < 3; ++q)
+        along += (app->getMemory<float>(car + kCarTouchAt + 4 * q) - app->getMemory<float>(car + 0x98 + 4 * q))
+                 * app->getMemory<float>(car + 0xd8 + 4 * q);
+    return along > 0.0f;
 }
 
 /* Splits in the road, ahead of time.  Each track node's word at +0xc is the
@@ -572,6 +601,25 @@ void unstick(win32::WinApplication* app, x86::reg32 car, int i)
     const float turned = o.heading < 0.0f ? -o.heading : o.heading;
     const float still = float(tick - o.progressAt) / kTicksPerSecond;
     const bool reversing = app->getMemory<x86::reg32>(car + 0x7d4) == 1;
+    /* Going, then stopped dead against a wall or an object ahead of it -- not
+     * a car, which the step aside and the reverse below are for, and not a
+     * cop: put back on the road now, not after the tries below. */
+    if (speed >= kSuddenFrom)
+        o.fastAt = tick;
+    else if (o.fastAt >= 0 && !reversing && speed < kSuddenStop
+             && float(tick - o.fastAt) <= kSuddenWithin * kTicksPerSecond
+             && !(app->getMemory<x86::reg8>(car + 0x200) & kFlagCop) && hitObstacleAhead(app, car)
+             && !around(app, car, i).blockedAhead)
+    {
+        if (aiTracing())
+            SDL_Log("[AI] car %d (%s) stopped dead (%.1f m/s, %.2fs after %.0f) against %s at node %d: put back on the road",
+                    i, driver.character, double(speed), double(tick - o.fastAt) / kTicksPerSecond,
+                    double(kSuddenFrom),
+                    (app->getMemory<x86::reg32>(car + kCarTouch) & kTouchKind) == kTouchWall ? "a wall" : "an object",
+                    int(node));
+        putBack(app, car, o, tick);
+        return;
+    }
     const bool stuck = (speed < 3.0f && still > driver.patience)
                        || (turned > 0.3f && speed < 8.0f && still > driver.patience * 0.75f);
     /* Turned well across the road and barely moving -- nose into a wall or a

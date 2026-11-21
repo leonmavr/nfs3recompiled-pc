@@ -628,6 +628,13 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     kTextHudArrested); the player's reset bit at [0x79c4ab] goes to
     sub_405220 instead of sub_429100 for a cop. Next: find what writes 1
     there, and the timer before it.
+- [ ] Reset logic enhancement: when an opponent (not cop) gets suddenly to ~0
+  speed and in front of them there's an obstacle (not driver), reset immediately.
+  - Done (2026-11-21), to be tested: from 43 km/h or more to under 5 km/h in
+    half a second, against a wall or a track object ahead of it ([car+0x170]),
+    no car in front, not reversing: put back on the road at once (`unstick`,
+    `hitObstacleAhead`, `native_ai.cpp`; TECHNICAL.md, "The opponents'
+    driving, tuned").
 
 ### UI
 - [ ] Figure out how to add/create menu elements without breaking the visual
