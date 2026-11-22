@@ -190,6 +190,31 @@ Kind kindOf(win32::WinApplication* app, x86::reg32 block, x86::reg32 index, x86:
 
 }  // namespace
 
+/* Whether a lamp post that is down -- falling or lying, till it stands again --
+ * stands under a light at (x, y, z), world metres: the lamp's light is the
+ * track's own glow (sub_491190, native_render.cpp's `glow`), not part of the
+ * post's model, and it hung on in the air over the fallen post at night
+ * (2026-11-22).  Under it is within kLampReach of its foot across the ground,
+ * an arm over the road and all, and kLampLow to kLampHigh above it. */
+constexpr float kLampReach = 4.5f, kLampLow = 2.0f, kLampHigh = 15.0f;   // m
+
+bool lampDownNear(float x, float y, float z)
+{
+    for (const Fallen& f : s_fallen)
+    {
+        if (f.kind != Kind::Lamp)
+            continue;
+        const auto known = s_kinds.find(f.ref);
+        if (known == s_kinds.end())
+            continue;
+        const float* foot = known->second.at;
+        const float dx = x - foot[0], dz = z - foot[2], up = y - foot[1];
+        if (dx * dx + dz * dz <= kLampReach * kLampReach && up >= kLampLow && up <= kLampHigh)
+            return true;
+    }
+    return false;
+}
+
 /* At 0x430f02, before sub_41d350(car eax, index edx). */
 void objectHitBefore(win32::WinApplication* app, x86::reg32 car, x86::reg32 index)
 {

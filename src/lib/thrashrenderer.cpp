@@ -96,6 +96,7 @@ static const char g_fragmentShader[] =
 "uniform float u_surface;"
 "uniform bool u_sharpen;"
 "uniform float u_carShine;"
+"uniform float u_nightLift;"   /* the mirror's world at night: the composite's lift (u_nightLift there) */
 "uniform float u_haze;"
 "uniform float u_headlight;"
 "uniform vec3 u_headOrigin;"
@@ -355,6 +356,14 @@ static const char g_fragmentShader[] =
 "    color.rgb = mix(color.rgb, fogColor, clamp(fog, 0.0, 1.0));"
 "    if (u_gamma != 1.0)"
 "        color.rgb = pow(max(color.rgb, vec3(0.0)), vec3(1.0 / max(u_gamma, 0.001)));"
+/* The night's lift of the darks (NFS_NIGHT_LIGHT), as the whole-picture pass
+ * gives the main view: the rear-view mirror is drawn after that pass, and
+ * stayed all but black at night.  Set for the mirror's world alone
+ * (drawPending: the HUD begun, writing depth). */
+"    if (u_nightLift > 0.0) {"
+"        vec3 lifted = pow(max(color.rgb, vec3(0.0)), vec3(1.0 / (1.0 + u_nightLift)));"
+"        color.rgb += (lifted - color.rgb) * vec3(0.92, 0.97, 1.08);"
+"    }"
 "    o_color = color;"
 /* The Voodoo's 16-bit depth steps where the buffer has finer ones
  * (needsDepthSteps, gliderenderer.cpp). */
@@ -751,6 +760,7 @@ void ThrashRenderer::compileShaders(int depthBits, const char* renderer)
     m_locations.surface = glGetUniformLocation(m_program, "u_surface");
     m_locations.sharpen = glGetUniformLocation(m_program, "u_sharpen");
     m_locations.carShine = glGetUniformLocation(m_program, "u_carShine");
+    m_locations.nightLift = glGetUniformLocation(m_program, "u_nightLift");
     m_locations.haze = glGetUniformLocation(m_program, "u_haze");
     m_locations.headlight = glGetUniformLocation(m_program, "u_headlight");
     m_locations.headOrigin = glGetUniformLocation(m_program, "u_headOrigin");
@@ -1468,6 +1478,41 @@ static const char g_softLayerShader[] =
 "    if (level <= 0.0) return 0.0;" \
 "    return shadowMarch(p) * level * shadowEdge(uv);" \
 "}" \
+/* The sun on a car's paint (NFS_CAR_SUN): a car's pixel (0 in the picture's \
+ * alpha), its place in the view from the depth and its surface's way from the \
+ * depth two pixels round it -- on each side the nearer, so an edge against \
+ * what is behind does not tilt it -- turned to face the eye.  Lit by how \
+ * squarely it faces the sun, and a broad lobe round the sun's reflection \
+ * towards the eye, smeared rather than a point; none where the sun's rays \
+ * (shadowMarch, the shadows' own) meet something first -- the car itself is \
+ * never in the way of them. */ \
+"vec3 viewPoint(vec2 uv)" \
+"{" \
+"    float z = viewZ(uv);" \
+"    return vec3((uv * u_size - u_centre) * z / u_scale, z);" \
+"}" \
+"float carSheen(vec2 uv)" \
+"{" \
+"    float d = texture(u_depth, uv).r;" \
+"    if (d >= 0.9999 || texture(u_source, uv).a >= 0.5) return 0.0;" \
+"    vec3 p = viewPoint(uv);" \
+"    if (p.z < 1.0) return 0.0;" \
+"    vec2 px = 2.0 / u_size;" \
+"    vec3 r = viewPoint(uv + vec2(px.x, 0.0)), l = viewPoint(uv - vec2(px.x, 0.0));" \
+"    vec3 a = viewPoint(uv + vec2(0.0, px.y)), b = viewPoint(uv - vec2(0.0, px.y));" \
+"    vec3 dx = abs(r.z - p.z) < abs(p.z - l.z) ? r - p : p - l;" \
+"    vec3 dy = abs(a.z - p.z) < abs(p.z - b.z) ? a - p : p - b;" \
+"    vec3 n = cross(dx, dy);" \
+"    if (dot(n, n) <= 1e-12) return 0.0;" \
+"    n = normalize(n);" \
+"    vec3 v = normalize(-p);" \
+"    if (dot(n, v) < 0.0) n = -n;" \
+"    float lit = dot(n, u_sun);" \
+"    if (lit <= 0.0) return 0.0;" \
+"    float lobe = pow(max(dot(n, normalize(u_sun + v)), 0.0), 10.0);" \
+"    float sheen = (0.3 * lit + 0.7 * lobe) * lit;" \
+"    return sheen * (1.0 - shadowMarch(p));" \
+"}" \
 
 static const char g_compositeShader[] =
 "in vec2 v_uv;"
@@ -1483,6 +1528,7 @@ static const char g_compositeShader[] =
 "uniform float u_shadow;"
 "uniform sampler2D u_shadowMask;"
 "uniform bool u_shadowHalf;"
+"uniform float u_carSun;"       /* NFS_CAR_SUN times the weather's, 0 for none: u_shadowMask's g */
 "uniform vec3 u_sun;"
 "uniform vec2 u_scale;"
 "uniform vec2 u_centre;"
@@ -1842,6 +1888,13 @@ NFS_SUN_SHADOW_GLSL
 "        c = motionBlur(v_uv, c);"
 "    if (u_shadow > 0.0)"
 "        c *= 1.0 - u_shadow * (u_shadowHalf ? sunShadowHalf(v_uv) : sunShadow(v_uv));"
+/* The sun's sheen on the cars' paint (carSheen, at half size in u_shadowMask's
+ * g): a warm light, half its own colour and half the paint's, so a tyre takes
+ * little of it; on a car's own pixels only, so none spills round it. */
+"    if (u_carSun > 0.0 && texture(u_source, v_uv).a < 0.5) {"
+"        float sheen = texture(u_shadowMask, v_uv + 0.5 / u_size).g;"
+"        c += vec3(1.0, 0.94, 0.82) * (0.5 + 0.5 * c) * sheen * u_carSun;"
+"    }"
 "    if (u_glare > 0.0)"
 "        c = glare(c);"
 "    if (u_exposure.x > 0.0)"
@@ -1907,6 +1960,8 @@ static const char g_shadowMaskShader[] =
 "uniform vec2 u_centre;"
 "uniform vec3 u_up;"
 "uniform vec2 u_size;"
+"uniform float u_wantShadow;"   /* 1: the ground's shadows (r) */
+"uniform float u_wantSheen;"    /* 1: the cars' sheen (g) */
 NFS_SUN_SHADOW_GLSL
 /* From the middle of the full-size pixel at the top left of this one's four:
  * the middle of a half-size pixel is the corner between four full-size ones,
@@ -1918,8 +1973,9 @@ NFS_SUN_SHADOW_GLSL
 "{"
 "    vec2 uv = (floor(gl_FragCoord.xy) * 2.0 + 0.5) / u_size;"
 "    vec3 p;"
-"    float shade = shadowLevel(uv, p) > 0.0 ? shadowMarch(p) : 0.0;"
-"    o_color = vec4(shade, 0.0, 0.0, 1.0);"
+"    float shade = u_wantShadow > 0.5 && shadowLevel(uv, p) > 0.0 ? shadowMarch(p) : 0.0;"
+"    float sheen = u_wantSheen > 0.5 ? carSheen(uv) : 0.0;"
+"    o_color = vec4(shade, sheen, 0.0, 1.0);"
 "}";
 
 /* The port's own particles (drawParticles; native_particles.cpp makes them):
@@ -2218,6 +2274,11 @@ static GLuint postProgram(GLuint (*compile)(GLenum, const std::string&, const ch
 
 /* The alpha under which a blended batch's fragment writes no depth (u_depthCut). */
 constexpr float kDepthCutCar = 0.08f;
+/* The sun's sheen on the cars (carSheen): at NFS_CAR_SUN 1 a fully lit spot
+ * adds this much light, and so much of it in the rain and at night. */
+constexpr float kCarSunScale = 0.35f;
+constexpr float kCarSunWet = 0.5f;
+constexpr float kCarSunNight = 0.25f;
 constexpr float kDepthCutWorld = 0.5f;
 
 /* A car's shadow (soften, SoftenedPicture::Shadow): a superellipse of this
@@ -2571,7 +2632,16 @@ void ThrashRenderer::initPost()
         m_skyOpenProgram = postProgram(compileShader, g_skyOpenShader);
         m_softLayerProgram = postProgram(compileShader, g_softLayerShader);
         m_shadowHalf = onOff("NFS_SHADOW_HALF", 1.0f) > 0.0f;
-        if (m_shadowHalf)
+        {
+            // NFS_CAR_SUN: the sun's sheen on the cars, 1 by default, 0 or off for none, up to 3.
+            const char* value = SDL_getenv("NFS_CAR_SUN");
+            float parsed = 1.0f;
+            if (value && *value && SDL_strcasecmp(value, "on") != 0)
+                parsed = (SDL_strcmp(value, "0") == 0 || SDL_strcasecmp(value, "off") == 0) ? 0.0f : float(SDL_atof(value));
+            m_carSun = parsed >= 0.0f && parsed <= 3.0f ? parsed : 1.0f;
+        }
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[GFX] the sun on the cars %.2f", double(m_carSun));
+        if (m_shadowHalf || m_carSun > 0.0f)
             m_shadowProgram = postProgram(compileShader, g_shadowMaskShader);
         m_softHalf = onOff("NFS_PARTICLES_HALF", 1.0f) > 0.0f;
         if (m_exposure > 0.0f)
@@ -3025,7 +3095,7 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
             glDeleteTextures(1, &m_shadowMask);
         glGenTextures(1, &m_shadowMask);
         glBindTexture(GL_TEXTURE_2D, m_shadowMask);
-        glTexStorage2D(GL_TEXTURE_2D, 1, GL_R8, halfW, halfH);
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_RG8, halfW, halfH);   // r the ground's shadows, g the cars' sheen
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -3084,7 +3154,15 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
         const float out = SDL_max(SDL_max(-glareX, glareX - float(width)), SDL_max(-glareY, glareY - float(height)));
         glareAmount = draw.sun[11] * (1.0f - smoothStep(0.0f, 0.3f, SDL_max(out, 0.0f) / float(height)));
     }
-    const bool needDepth = shadows || blur > 0.0f || particles || glareAmount > 0.0f;
+    /* The sun's sheen on the cars (NFS_CAR_SUN, carSheen): a race's, with a sun
+     * to come from (none under a roof: noteSun sends none there) -- a little
+     * of it in the rain and less at night. */
+    const float sunLength = std::sqrt(draw.sun[1] * draw.sun[1] + draw.sun[2] * draw.sun[2] + draw.sun[3] * draw.sun[3]);
+    const float carSun = draw.race && m_carSun > 0.0f && sunLength > 0.5f && draw.sun[4] != 0.0f && draw.sun[5] != 0.0f
+                             ? kCarSunScale * m_carSun * (draw.night ? kCarSunNight : 1.0f)
+                                   * (draw.wetness > 0.0f ? kCarSunWet : 1.0f)
+                             : 0.0f;
+    const bool needDepth = shadows || blur > 0.0f || particles || glareAmount > 0.0f || carSun > 0.0f;
     if (needDepth)
     {
         // The world's depth, for its shadows and its blur: a copy, as the buffer stays bound.
@@ -3141,7 +3219,8 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
      * picture as the composite reads it (unit 0, after the particles) and the
      * world's depth. */
     const bool shadowsHalf = shadows && !without(kPerfShadows) && m_shadowHalf && m_shadowProgram && m_shadowMask;
-    if (shadowsHalf)
+    const bool sheenOn = carSun > 0.0f && m_shadowProgram && m_shadowMask;
+    if (shadowsHalf || sheenOn)
     {
         glBindFramebuffer(GL_FRAMEBUFFER, m_postFramebuffer);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_shadowMask, 0);
@@ -3154,6 +3233,8 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
         glUniform2f(glGetUniformLocation(m_shadowProgram, "u_centre"), draw.sun[6], draw.sun[7]);
         glUniform3f(glGetUniformLocation(m_shadowProgram, "u_up"), draw.sun[8], draw.sun[9], draw.sun[10]);
         glUniform2f(glGetUniformLocation(m_shadowProgram, "u_size"), float(width), float(height));
+        glUniform1f(glGetUniformLocation(m_shadowProgram, "u_wantShadow"), shadowsHalf ? 1.0f : 0.0f);
+        glUniform1f(glGetUniformLocation(m_shadowProgram, "u_wantSheen"), sheenOn ? 1.0f : 0.0f);
         glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, m_postDepth);
         glActiveTexture(GL_TEXTURE0);
@@ -3164,7 +3245,8 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
     glViewport(0, 0, width, height);
     glUseProgram(m_compositeProgram);
     glUniform1i(glGetUniformLocation(m_compositeProgram, "u_shadowHalf"), shadowsHalf ? 1 : 0);
-    if (shadowsHalf)
+    glUniform1f(glGetUniformLocation(m_compositeProgram, "u_carSun"), sheenOn ? carSun : 0.0f);
+    if (shadowsHalf || sheenOn)
     {
         glUniform1i(glGetUniformLocation(m_compositeProgram, "u_shadowMask"), 10);
         glActiveTexture(GL_TEXTURE10);
@@ -3426,6 +3508,8 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
     }
     float hazeSet = -1.0f;  // what u_haze holds now (per batch, below)
     glUniform1f(m_locations.haze, 0.0f);
+    float liftSet = 0.0f;   // and u_nightLift: the mirror's world at night only
+    glUniform1f(m_locations.nightLift, 0.0f);
     if (m_sky)
     {
         glActiveTexture(GL_TEXTURE3);
@@ -3563,6 +3647,16 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
             {
                 glUniform1f(m_locations.haze, hazeHere);
                 hazeSet = hazeHere;
+            }
+        }
+        /* The rear-view mirror's world -- what writes depth once the HUD has
+         * begun -- lifted at night as the main view is (the composite's u_nightLift). */
+        {
+            const float liftHere = draw.night && m_hudBegun && batch.zBuffer ? m_nightLift : 0.0f;
+            if (liftHere != liftSet)
+            {
+                glUniform1f(m_locations.nightLift, liftHere);
+                liftSet = liftHere;
             }
         }
         if (m_detailTexture && (!previous || batch.detail != previous->detail))

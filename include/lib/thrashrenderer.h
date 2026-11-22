@@ -279,7 +279,7 @@ private:
     {
         int position, color, texCoord, combine;
         int transform, fogW, fogTable, fogColor, alphaRef, depthCut, chromaKey, chromaKeyColor, gamma, wrap, levels, texture,
-            format, detail, detailTexture, detailScale, wet, reflection, screen, surface, sharpen, carShine, haze, sky, headlight, headOrigin, headDir, headUp, projection, projCentre;
+            format, detail, detailTexture, detailScale, wet, reflection, screen, surface, sharpen, carShine, haze, sky, headlight, headOrigin, headDir, headUp, projection, projCentre, nightLift;
     } m_locations;
     unsigned int            m_detailTexture = 0;
     bool                    m_carSurface = false;   // the game thread's
@@ -345,6 +345,7 @@ private:
      * read back filtered by the composite. */
     unsigned int            m_shadowMask = 0, m_shadowProgram = 0;
     bool                    m_shadowHalf = true;
+    float                   m_carSun = 1.0f;          // NFS_CAR_SUN: the sun's sheen on the cars, 0 to 3
     bool                    m_postDone = false;     // this frame's
     bool                    m_hudBegun = false;     // this frame's
     bool                    m_raceView = false;     // the game thread's

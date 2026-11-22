@@ -273,6 +273,14 @@ it out -- keeps the last sky taken, where it took the cleared picture before
 and the haze round the car went dark blue for as long as it was under (Lost
 Canyons, 2026-11-21). `NFS_HAZE_TRACE=1` says when a frame drew none.
 
+**Night.** The game's night tracks are lit by little but the headlights. The
+whole-picture pass lifts the darks at night, a gamma of 1 / (1 +
+`NFS_NIGHT_LIGHT`) (0.6; up to 2, `0`/`off` none), the part it adds a little
+cool, as moonlight, before the lamps' halos and trails. The rear-view mirror
+is drawn after that pass and stayed all but black, so the world's shader gives
+its world -- what writes depth once the HUD has begun -- the same lift
+(`u_nightLift`, 2026-11-22).
+
 **The whole-picture pass.** As the HUD begins -- the same moment the wet
 road's reflection is taken -- the picture is copied and drawn back over itself
 (`postProcess`), before the HUD and the mirror go on top:
@@ -341,6 +349,25 @@ went grey), not by the cars, which have their own (their pixels leave 0 in the
 picture's alpha), and faded at the screen's edges, past which what casts may
 lie. Fainter in the rain and at night as the cars' own are.
 `NFS_OBJECT_SHADOWS`, 0.45.
+
+### The sun on the cars' paint
+
+`NFS_CAR_SUN` (1; up to 3, `0`/`off` none): a smeared sheen of sunlight on
+the cars, by how each part of the body faces the sun, and none where the sun is
+blocked. In the shadows' half-size pass (`g_shadowMaskShader`, the layer's
+green; `carSheen`), for each pixel of a car (0 in the picture's alpha): its
+place in the view from the depth, and the way its surface faces from the depth
+two pixels round it -- on each side the nearer, so an edge against what is
+behind does not tilt it. Lit by `0.3 n·l + 0.7 (n·h)^10`, times `n·l`: how
+squarely it faces the sun, and a broad lobe round where the sun reflects
+towards the eye -- smeared, not a point -- and nothing where the shadows' own
+rays towards the sun (`shadowMarch`) meet something first; the cars are never
+in their way, so a car does not shade itself. The composite adds it on a car's
+own pixels only, a warm light half its own colour and half the paint's (a tyre
+takes little), `0.35` of a fully lit spot at 1 (`kCarSunScale`), half that in
+the rain and a quarter at night; none under a roof, where no sun is sent. At
+half size, so a quarter of the pixels and soft; it runs with the object shadows
+off too.
 
 **A view with no sky.** The frame's work hangs off the sky's drawing
 (`noteSun`, at the top of `sub_47a190`): the port's particles and weather
@@ -2156,7 +2183,11 @@ animation's start pushed on each frame), so it spins and flies more lazily
 than a sign; the car keeps v * 1400 / (1400 + mass) of its speed on the
 ground (an inelastic hit; a tree 150 kg times `NFS_TREE_MASS`, a lamp post 70
 kg times `NFS_LAMP_MASS`: about 90% and 95%); and after `NFS_KNOCK_RESPAWN`
-seconds (10) it stands again, once no car is within 5 m. The sizes, masses
+seconds (10) it stands again, once no car is within 5 m. A lamp post's light
+is the track's own glow (`sub_491190`), not part of the post: while the post
+is down, no glow is drawn within 4.5 m of its foot across the ground and 2 to
+15 m above it (`lampDownNear`), where it hung on in the air at night before
+(2026-11-22). The sizes, masses
 and timings are named constants at the top of the file. `NFS_KNOCK_TRACE=1`
 logs every touch; `NFS_KNOCK_TEST=1` (or `lamp`, `sign`) puts the player's
 car 12 m short of one, 4 s in, at 30 m/s.
@@ -3406,7 +3437,9 @@ the next time the game starts.
 | `NFS_CAMERA_PULL` | `1.2` | How far back, in metres, the chase camera eases under full throttle; `0`/`off` for none. |
 | `NFS_SPARKS` | `2` | How many times the sparks of a burst, and whether walls throw them on hits and scrapes; `0`/`off`: the game's own (Sparks off walls). |
 | `NFS_CAR_SHADOW` | on | `0`/`off`: no shadow under the cars (Car shadows). |
+| `NFS_CAR_SUN` | on (`1`) | `0`/`off`: no sunlight on the cars' paint. A number up to 3: how strong the smeared sheen of the sun on the bodies, by how each part faces it, none where the sun is blocked (The sun on the cars' paint). |
 | `NFS_SHADOW_HALF` | on | `0`/`off`: the object shadows' rays marched for every pixel rather than in a half-size layer (Shadows of what stands by the road). |
+| `NFS_NIGHT_LIGHT` | on (`0.6`) | `0`/`off`: night as dark as the game has it. A number up to 2: how much the darks are lifted at night, the rear-view mirror's too (Night). |
 | `NFS_OBJECT_SHADOWS` | on (`0.45`) | `0`/`off`: no shadows from what stands by the road. A number: how dark (Shadows of what stands by the road); fainter in the rain and at night by `NFS_SHADOW_RAIN` and `NFS_SHADOW_NIGHT`. |
 | `NFS_SND_MIX` | on | `0` leaves the game's sound mixer (`sub_500864` and everything under it) to its generated code instead of `src/nfs3hp/native_mixer.cpp`. `NFS_SND_CHECK=1` (debug) mixes each block natively and with the generated code and logs any byte that differs (`[SNDCHK]`); a block that calls the game, to refill a stream or end a sound, is left to the generated code. |
 | `NFS_TOUCH_STEER_LEFT` etc. | unset | Keys the touch overlay sends for steering and the pedals, so that endpoint can report them as axes. |

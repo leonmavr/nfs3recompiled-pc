@@ -15990,7 +15990,11 @@ static bool noteSun(win32::WinApplication* app, x86::reg32 view, bool skyDrawn =
     float glare = m.word(0x6fd4cc) == 0 && m.word(0x6fd4c8) == 0 ? glareSetting : 0.0f;
     // Under a roof (no sky drawn, skylessFrameDone): no sun to cast shadows or glare.
     if (!skyDrawn || !(length > 1e-4f) || f(0x56009c) == 0.0f || f(0x5600a0) == 0.0f || f(0xa9235c) == 0.0f)
+    {
         amount = glare = 0.0f;
+        if (!skyDrawn)
+            sun[0] = sun[1] = sun[2] = 0.0f;   // no sun at all: none on the cars' paint either (NFS_CAR_SUN)
+    }
     else
         for (float& v : sun)
             v /= length;
@@ -16292,8 +16296,24 @@ bool sparks(win32::WinApplication* app, x86::CPU& cpu)
     return true;
 }
 
+bool lampDownNear(float x, float y, float z);   // native_objects.cpp
+
 bool glow(win32::WinApplication* app, x86::CPU& cpu)
 {
+    /* The light of a lamp post knocked down (NFS_KNOCK_TREES): not drawn while
+     * the post is down -- the light is the track's, not the post's, and hung
+     * in the air over it.  Its place: +4, +8, +0xc, integers times [0x53bca0];
+     * stdcall, four arguments. */
+    if (!nativeOriginalRunning())
+    {
+        const float unit = app->getMemory<float>(0x53bca0);
+        auto at = [&](x86::reg32 k) { return float(x86::sreg32(app->getMemory<x86::reg32>(cpu.esp + k))) * unit; };
+        if (lampDownNear(at(4), at(8), at(0xc)))
+        {
+            cpu.esp += 4 + 0x10;
+            return true;
+        }
+    }
     if (nativeOriginalRunning() || !singlePrecision(cpu) || cpu.flags.df || !renderNativeOn(0x491190))
         return false;
     if (nativeChecking())
