@@ -16676,10 +16676,21 @@ bool hudPanel(win32::WinApplication* app, x86::CPU& cpu)
     return true;
 }
 
+/* Whether the port draws the racers' table itself (native_standings.cpp),
+ * whose panel and rows then are not the game's. */
+bool standingsDraws(win32::WinApplication* app);
+
 bool hudTable(win32::WinApplication* app, x86::CPU& cpu)
 {
     if (nativeOriginalRunning() || !singlePrecision(cpu) || !renderNativeOn(0x481c50))
         return false;
+    if (!nativeChecking() && standingsDraws(app))
+    {
+        // the port's own list: no panel of the game's (no arguments; eax's is the player, unused on the way out)
+        cpu.eax = 0;
+        cpu.esp += 4;
+        return true;
+    }
     if (nativeChecking())
     {
         static void* state = nullptr;

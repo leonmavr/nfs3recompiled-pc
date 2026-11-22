@@ -70,6 +70,9 @@ SITES = [
     ("nfs3hp", "sub_4cb670", "clearBuffers"),
     ("nfs3hp", "sub_4a4410", "bouncers"),
     ("nfs3hp", "sub_491bc0", "roadLight"),
+    # The racers' standings rows, which the port's own list takes the place of
+    # (native_standings.cpp): the game's rows are not drawn when it does.
+    ("nfs3hp", "sub_48ae70", "standingsRows"),
     # The race's views and their records, a view's smoke and its spray
     # streaks.
     ("nfs3hp", "sub_41d960", "raceViews"),

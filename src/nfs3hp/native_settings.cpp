@@ -104,6 +104,7 @@ each one does.
 # NFS_SLIPSTREAM = 1
 # NFS_SLIPSTREAM_TRAILS = 1
 # NFS_SLIP_ICON = on
+# NFS_OPPONENT_LIST = on
 
 [What you feel of the race]
 # NFS_CRASH_SHAKE = 2

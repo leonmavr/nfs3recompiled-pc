@@ -1473,6 +1473,62 @@ twice as close, 0.1 to 5). `NFS_MINIMAP=off` keeps the game's own map.
   once a second where the map is and how the nodes lie against the player's
   car, and once per track the nodes' extents.
 
+### The opponents' list
+
+The game's standings table in the HUD -- the panel of `sub_481c50` with the rows
+of `sub_48ae70` over it -- is replaced by the port's own (`native_standings.cpp`,
+`NFS_OPPONENT_LIST=off` for the game's): a translucent panel of the HUD's navy
+with faint grid lines and a metal corner piece at each corner, the minimap's
+furniture and sprites and its opacity (`native_minimap.cpp`'s `panelFurniture`,
+`minimapSprites`, `kPanelAlpha`), so the race shows through it as it does
+through the map. A row is a racer, in the game's own order, first first: the
+place, then the driver's name in the game's own colour for it, and against the
+right the time to the player, in the colour the game gives that -- red for the
+cars ahead of the player, green for those behind, white and dashes for the
+player's own row.
+
+- **What it reads.** The game's table: `[0x7254f8]` rows from `0x7254fc`, 24
+  bytes each -- +0 the driver's name, a string; +4 its colour, 0xAARRGGBB;
+  +8 the gap in 1/64 s ticks, signed, which `sub_485a60` works out against the
+  player's car and leaves 0 for until the race's eighth second; +0xc the gap's
+  colour (0xffa01010 ahead, 0xff008c00 behind, 0xfff0f0f0 the player's);
+  +0x10 the arrested flag; +0x14 the car's id. A driver's colour too dark for
+  the navy is lifted to `kTintLeast` of its brightest channel, its hue kept.
+- **The car column.** The list cycles what sits between the place and the time:
+  the driver's name, then the car. A car is named from its `fedata.eng` (its
+  folder is the car's own copy at `+0x1e4`, or the loaded record's `+0x110` by
+  id): the first three letters of its make and its model, the two cut to
+  twelve characters in all -- "Jag XK8", "Lam Diablo S", "Mer CLK-GTR". A
+  folder with no text, or a text that cannot be read, is shown as its folder.
+  Each half is shown for `kColumnSeconds` of the race's clock.
+- **Where.** From the element's box in the player's HUD layout
+  (`0x6fbc74 + player x 0x348`, element 13 of 23, four floats: top, left,
+  bottom, right, of `[0x7cdac8]` by `[0x7cdacc]`): the box's left edge, as wide
+  as the game's own table (`[0x7925c8]`), as tall as its rows (`kRowUnits`
+  each) and kept to the box's bottom or its top, whichever the table keeps to
+  (the racer's flags at `0x7256c4 + player x 92`, bit 0x10). So the HUD options
+  move it as they moved the game's list. The element's rectangle
+  (`0x749758 + player x 23 x 16 + 13 x 16`) is then written as that panel every
+  frame of the race, and the HUD editor frames and drags it there: it falls back
+  on the element's rectangle for a table that draws nothing, and the drag writes
+  the box from it.
+- **Why nothing shifts.** The game placed its rows from the panel's top and
+  bottom as `sub_481c50` last worked them out, while the editor moves the
+  element's rectangle, so the table lagged a frame behind a drag. The port's
+  panel and rows are both worked out from the box each frame, so the list is
+  drawn exactly where the editor's frame stands at every moment of a drag.
+- **Drawn** as a layer of the overlay set for one frame at a time
+  (`glide2x::overlayFrame`, `OverlayStandings`), in the HUD's own font
+  (`native_hud_font.cpp`) -- the place and the gap right-aligned, the name as
+  much of itself as the room between them holds. The game's panel and rows are
+  left out meanwhile: `hudTable`'s dispatcher returns at once when the port's
+  list is drawn, and `standingsRows`, a hook at `sub_48ae70`'s top
+  (`tools/apply_native_render.py`), does the same for the rows. Nothing is drawn
+  while the race's clock stands -- a pause, the editor included -- so the
+  overlay never sits over a menu.
+- Split screen and a cop's speeders list keep the game's own. `NFS_OPPONENT_LIST=off`
+  keeps them too.
+
 ### Reading the game's UI art
 
 What the port draws in the game's own style it takes from the game's files,
@@ -3433,6 +3489,7 @@ the next time the game starts.
 | `NFS_SLIPSTREAM` | on (`1`) | `0`/`off`: no slipstream. A number up to 3: how strong the push behind another car (Slipstreaming). |
 | `NFS_SLIPSTREAM_TRAILS` | on (`1`) | `0`/`off`: no air lines round the player's car in a slipstream (Slipstreaming). |
 | `NFS_SLIP_ICON` | on | `0`/`off`: no icon with the slipstream's time at the bottom left (Slipstreaming). |
+| `NFS_OPPONENT_LIST` | on | `0`/`off`: the game's own standings table instead of the port's list. |
 | `NFS_KNOCK_TREES` | on (`1`) | `0`/`off`: trees and lamp posts stand as the game has them, solid (Trees and lamp posts knocked down). |
 | `NFS_TREE_MASS` | `1` | Times 150 kg: how much a tree slows the car that knocks it down; `0` for none. |
 | `NFS_LAMP_MASS` | `1` | Times 70 kg: the same for a lamp post. |

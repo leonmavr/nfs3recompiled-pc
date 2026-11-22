@@ -699,13 +699,24 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     (`drawOverlay`, native_now_playing.cpp).
 - [ ] Lap delta on the HUD: +/-0.00 against the best lap at each split, green
   or red, in a panel like the Now Playing one (`drawOverlay`, the HUD's font).
-- [ ] Opponent list overhaul: same kind of background (grids etc) as mini maps
+- [x] Opponent list overhaul: same kind of background (grids etc) as mini maps
   and same corners as minimap. Opponent list doesn't just list Name, it also
   swtiches between name -> car -> optionally: AI personality, truncated to some
   letters. Opponents who are faster/slower are shown in red/green as before and
   relative times are shown the same way. Also there's a bug in it: whenever i
   try to position it with the HUD menu, it shifts itself up slightly (by 50-100?
   px).
+  - Done (2026-11-22), to be tested on a phone: the list is the port's own
+    (`native_standings.cpp`), the minimap's panel, grid and corners at its
+    opacity, a row a racer with the place, the driver's name in the game's
+    colour and the gap to the player in the game's own red, green or white, the
+    name cycling with the car's -- its make's first three letters and its model,
+    twelve characters in all ("Jag XK8"). The game's panel and rows are not
+    drawn meanwhile. It sits in the table's own element and writes its rectangle
+    every frame, so the HUD editor frames and drags the panel itself and the
+    list cannot be drawn a drag behind it: the shift is gone. No personality
+    column for now. `NFS_OPPONENT_LIST=off` keeps the game's (TECHNICAL.md,
+    "The opponents' list").
 - [x] Rear view mirror: recently we increased ambience at night since night used
   to be too dark. However the rear-view mirror still shows what's behind me very
   dark, as if these changes have not been reflected on the rear-view mirror.

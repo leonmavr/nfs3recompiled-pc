@@ -915,4 +915,53 @@ void minimapTrace(win32::WinApplication* app, x86::reg32 player)
             node >= 0 && node < count ? nodeAt(app, x86::reg32(node), 1) : 0.0f, int(nearest), std::sqrt(best), carDeg, roadDeg);
 }
 
+/* The minimap's sprites, for another overlay's panel (native_standings.cpp):
+ * its atlas copied into `out`'s own picture, the corner pieces and all.  False
+ * when this build has no sprites. */
+bool minimapSprites(OverlayArt& out)
+{
+    const std::shared_ptr<const OverlayArt> atlas = minimap::art();
+    if (!atlas)
+        return false;
+    out.mapW = atlas->mapW;
+    out.mapH = atlas->mapH;
+    out.map = atlas->map;
+    return true;
+}
+
+/* The minimap's own furniture on a panel of another overlay: the HUD's navy at
+ * `alpha`, a faint grid `grid` HUD units apart (0 for none), and a corner piece
+ * at each corner, from the same sprites (`overlay.art` must carry them,
+ * minimapSprites). */
+void panelFurniture(std::vector<OverlayQuad>& quads, float x0, float y0, float x1, float y1, float alpha, float grid)
+{
+    using namespace minimap;
+    if (!(x1 > x0) || !(y1 > y0))
+        return;
+    auto rect = [&](float ax, float ay, float bx, float by, const float rgb[3], float a) {
+        quads.push_back({ ax, ay, bx, by, 0.0f, 0.0f, 0.0f, 0.0f, rgb[0], rgb[1], rgb[2], a, OverlayQuad::Flat });
+    };
+    rect(x0, y0, x1, y1, kPanel, alpha);
+    if (grid > 0.0f)
+    {
+        const float line = SDL_max(0.4f, grid * 0.05f);
+        for (float x = x0 + grid; x < x1 - line; x += grid)
+            rect(x, y0, x + line, y1, kGrid, kGridAlpha);
+        for (float y = y0 + grid; y < y1 - line; y += grid)
+            rect(x0, y, x1, y + line, kGrid, kGridAlpha);
+    }
+    const float side = SDL_min(x1 - x0, y1 - y0);
+    const float cs = side * kCorner;
+    const float grey[3] = { kCornerGrey, kCornerGrey, kCornerGrey };
+    for (int corner = 0; corner < 4; ++corner)
+    {
+        const bool right = corner & 1, bottom = corner & 2;
+        const float qx0 = right ? x1 - cs : x0, qy0 = bottom ? y1 - cs : y0;
+        const float u0 = right ? kCornerU1 : kCornerU0, u1 = right ? kCornerU0 : kCornerU1;
+        const float v0 = bottom ? 1.0f : 0.0f, v1 = bottom ? 0.0f : 1.0f;
+        quads.push_back({ qx0, qy0, qx0 + cs, qy0 + cs, u0, v0, u1, v1, grey[0], grey[1], grey[2], 1.0f,
+                          OverlayQuad::Map });
+    }
+}
+
 }  // namespace nfs3hp
