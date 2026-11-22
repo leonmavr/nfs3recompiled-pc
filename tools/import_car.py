@@ -48,9 +48,10 @@ model, and marks the ones that are another's duplicate -- two folders of the
 same car, which happens when an add-on arrives twice under two names, and which
 the menus show as two identical entries.
 
-`--remove` takes cars out: the folder is zipped whole into `--backup` (default
-the system's temporary folder, so nothing is lost) and then deleted, and its
-line comes out of gamedata/carorder.txt with it.
+`--remove` takes cars out: the folder and its car-specific showcase art and
+slide are zipped into `--backup` (default the system's temporary folder, so
+nothing is lost) and then deleted, and its line comes out of
+gamedata/carorder.txt with it.
 """
 import argparse
 import hashlib
@@ -207,9 +208,48 @@ def duplicates(carmodel):
     return pairs
 
 
+def car_art_files(game, folder):
+    """The showcase pictures and slide installed for this car."""
+    fedata = find(game, "fedata")
+    art_root = find(fedata, "art") if fedata else None
+    if not art_root:
+        return [], []
+
+    text = car_text(folder)
+    name = folder.name.lower()
+    files = []
+    retained = []
+    showcase = find(art_root, "showcase")
+    if showcase:
+        for file in showcase.iterdir():
+            shown = SHOWCASE.match(file.name)
+            if file.is_file() and shown and shown.group(2).lower() == name:
+                files.append(file)
+
+    if text:
+        car_id = text[ID_AT]
+        shared_with = []
+        for other in car_folders(folder.parent):
+            if other == folder:
+                continue
+            other_text = car_text(other)
+            if other_text and other_text[ID_AT] == car_id:
+                shared_with.append(other.name)
+
+        slides = find(art_root, "slides")
+        if slides:
+            for file in slides.iterdir():
+                slide = SLIDE.match(file.name)
+                if file.is_file() and slide and int(slide.group(1)) == car_id:
+                    if shared_with:
+                        retained.append((file, shared_with))
+                    else:
+                        files.append(file)
+    return files, retained
+
+
 def remove(game, names, backup, dry):
-    """Take cars out: each folder zipped into `backup`, then gone, and its line
-    out of gamedata/carorder.txt with it."""
+    """Back up and remove each car folder and its car-specific art."""
     carmodel = find(game, "gamedata") / "carmodel"
     order = find(find(game, "gamedata"), "carorder.txt")
     gone, missing = [], []
@@ -219,8 +259,14 @@ def remove(game, names, backup, dry):
             missing.append(wanted)
             continue
         archive = Path(backup) / ("carmodel-%s-%s.zip" % (folder.name, time.strftime("%Y%m%d-%H%M%S")))
+        art, retained = car_art_files(game, folder)
         if dry:
             print("%s: would zip to %s and remove" % (folder.name, archive))
+            for file in art:
+                print("    would remove %s" % file.relative_to(game))
+            for file, other_names in retained:
+                print("    %s retained: car ID also used by %s" %
+                      (file.relative_to(game), ", ".join(other_names)))
             gone.append(folder.name)
             continue
         Path(backup).mkdir(parents=True, exist_ok=True)
@@ -228,8 +274,15 @@ def remove(game, names, backup, dry):
             for file in sorted(folder.rglob("*")):
                 if file.is_file():
                     zipped.write(file, str(Path(folder.name) / file.relative_to(folder)))
+            for file in art:
+                zipped.write(file, str(file.relative_to(game)))
         shutil.rmtree(folder)
+        for file in art:
+            file.unlink()
         print("%s: %s (%s)" % (folder.name, archive, "and removed" if not dry else ""))
+        for file, other_names in retained:
+            print("    %s retained: car ID also used by %s" %
+                  (file.relative_to(game), ", ".join(other_names)))
         gone.append(folder.name)
     if not dry and gone and order:
         lines = order.read_text(encoding="latin-1").splitlines(True)

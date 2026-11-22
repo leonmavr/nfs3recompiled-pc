@@ -266,9 +266,12 @@ class Carp:
                 % (index, current.label, len(current.values),
                    "" if len(current.values) == 1 else "s", len(values)))
         if current.integer:
-            text = ",".join("%d" % int(round(v)) for v in values)
+            values = [int(round(v)) for v in values]
+            text = ",".join("%d" % v for v in values)
         else:
-            text = ",".join("%.*f" % (current.decimals or 6, v) for v in values)
+            decimals = current.decimals or 6
+            values = [float("%.*f" % (decimals, v)) for v in values]
+            text = ",".join("%.*f" % (decimals, v) for v in values)
         if current.trailing_comma:
             text += ","
         self.lines[current.line] = text

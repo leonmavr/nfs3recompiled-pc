@@ -24,6 +24,8 @@ Save writes when the box below Save says "Rebuild AI tables on Save: yes" (the
 curve the AI drives to, carp.txt's ACC sections, which nothing else
 recomputes).  Its level stays the car's own, so an add-on car whose engine
 figures are optimistic does not hand the AI a table it cannot drive to.
+In the editor, drag a gear's endpoint left or right to change that gear's
+ratio, or drag the redline up or down; the gearbox and wheel-push charts follow.
 
 CARMODEL_DIR defaults to gamedata/carmodel.  Each car folder's performance
 data is its carp.txt -- loose in the folder, or packed in its car.viv (a BIGF
@@ -280,13 +282,14 @@ def top_kmh(car):
     return max(car.top_speed, car.speed_cap, 1.0) * 3.6
 
 
-def draw_gearbox(ax, car):
+def draw_gearbox(ax, car, handles=False):
     """Engine rpm against road speed in each gear, the shift at the redline."""
     style(ax, "Gearbox: engine speed in each gear", "road speed (km/h)", "engine speed (rpm)")
-    top = top_kmh(car)
+    cuts = [(g, car.redline / car.rpm_per_speed[g]) for g in car.forward]
+    top = max([top_kmh(car)] + [speed * 3.6 for _, speed in cuts]) * 1.25
     for n, g in enumerate(car.forward):
         cut = car.redline / car.rpm_per_speed[g]
-        v = [0, min(cut, top / 3.6)]
+        v = [0, cut]
         ax.plot([x * 3.6 for x in v], [x * car.rpm_per_speed[g] for x in v], color=SERIES[n % len(SERIES)],
                 linewidth=2, label="gear %s" % gear_label(car, g))
         if n + 1 < len(car.forward) and cut < top / 3.6:
@@ -296,8 +299,17 @@ def draw_gearbox(ax, car):
         end = min(cut, top / 3.6)
         ax.annotate(gear_label(car, g), (end * 3.6, end * car.rpm_per_speed[g]), xytext=(3, 2),
                     textcoords="offset points", fontsize=8, color=INK)
+        if handles:
+            ax.plot([cut * 3.6], [car.redline], "o", color=SERIES[n % len(SERIES)], markersize=6,
+                    markeredgecolor=SURFACE, markeredgewidth=1.5, zorder=5)
     ax.axhline(car.redline, color=MARK, linewidth=1.2, linestyle="--")
+    if handles:
+        ax.plot([top * 0.96], [car.redline], "o", color=MARK, markersize=6,
+                markeredgecolor=SURFACE, markeredgewidth=1.5, zorder=6)
     ax.set_xlim(0, top * 1.02)
+    if handles:
+        curve_top = (len(car.torque) - 1) * 256 if car.torque else car.redline
+        ax.set_ylim(0, max(car.redline * 1.15, min(curve_top, car.redline * 1.75)))
     ax.legend(fontsize=8, frameon=False, labelcolor=INK, loc="lower right")
 
 
@@ -765,6 +777,65 @@ class CurveDrag:
         self.on_drop()
 
 
+class GearboxDrag:
+    """Drag a gear endpoint horizontally or the redline vertically."""
+
+    TOLERANCE_PX = 11.0
+
+    def __init__(self, fig, ax, endpoints, redline, on_gear, on_redline, on_drop):
+        self.fig = fig
+        self.ax = ax
+        self.endpoints = endpoints
+        self.redline = redline
+        self.on_gear = on_gear
+        self.on_redline = on_redline
+        self.on_drop = on_drop
+        self.active = None
+        self.bounds = None
+        fig.canvas.mpl_connect("button_press_event", self._press)
+        fig.canvas.mpl_connect("motion_notify_event", self._move)
+        fig.canvas.mpl_connect("button_release_event", self._release)
+
+    def _press(self, event):
+        if event.inaxes is not self.ax or event.x is None or event.y is None:
+            return
+        nearest = None
+        distance = self.TOLERANCE_PX
+        for gear, speed, rpm in self.endpoints():
+            x, y = self.ax.transData.transform((speed * 3.6, rpm))
+            candidate = math.hypot(float(event.x) - x, float(event.y) - y)
+            if candidate <= distance:
+                nearest, distance = gear, candidate
+        if nearest is not None:
+            self.active = ("gear", nearest)
+        else:
+            y = self.ax.transData.transform((0, self.redline()))[1]
+            if abs(float(event.y) - y) > self.TOLERANCE_PX:
+                return
+            self.active = ("redline", None)
+        self.bounds = (self.ax.bbox.bounds, self.ax.get_xlim(), self.ax.get_ylim())
+
+    def _move(self, event):
+        if self.active is None or event.x is None or event.y is None:
+            return
+        (x0, y0, width, height), xlim, ylim = self.bounds
+        if self.active[0] == "gear":
+            fraction = min(max((float(event.x) - x0) / width, 0.0), 1.0)
+            speed = xlim[0] + fraction * (xlim[1] - xlim[0])
+            self.on_gear(self.active[1], speed)
+        else:
+            fraction = min(max((float(event.y) - y0) / height, 0.0), 1.0)
+            rpm = ylim[0] + fraction * (ylim[1] - ylim[0])
+            self.on_redline(rpm)
+
+    def _release(self, _event):
+        if self.active is None:
+            return
+        self.active = None
+        self.bounds = None
+        self.on_drop()
+
+
 # What the editor lets you change: its label, carp.txt's field number (or
 # "torque x", the whole torque curve scaled), how it is shown from the field's
 # value and read back.
@@ -802,15 +873,16 @@ HINTS = {
         "shape itself, drag the points on the torque chart: each is one of the curve's 41 figures.",
     "Redline (rpm)":
         "Where the engine is cut off, and where each line of the gearbox chart ends. Raising it lets the gears "
-        "reach further, but past the curve's peak the pull is falling away already, so the last few hundred rpm "
-        "buy little.",
+        "reach further. Drag the red line up or down on the gearbox chart to change it; past the curve's peak "
+        "the pull is falling away already, so the last few hundred rpm buy little.",
     "Idle (rpm)":
         "The slowest the engine turns: the gearbox never reads an engine speed below it. It is what the first "
         "metres of a standing start are made of, off the bottom of the torque curve.",
     "Gear ratios":
         "The size of each gear, first to last. A bigger number is more pull at the wheels and a lower speed "
         "before the redline, a smaller one is a long gear for top speed; each line of the gearbox chart ends "
-        "where its gear runs out. The rpm-per-speed figures the game reads follow them.",
+        "where its gear runs out. Drag a gear's endpoint on the gearbox chart to change it; the rpm-per-speed "
+        "figures the game reads follow it.",
     "Final drive":
         "Multiplies every gear at once. Bigger shortens the whole box -- quicker, and out of gears sooner; "
         "smaller lengthens it -- slower off the line, faster flat out. The gearbox chart and the rpm-per-speed "
@@ -1205,7 +1277,7 @@ def edit(carmodel, start=None):
         # drags (CurveDrag, below)
         "torque": lambda ax, car, est: draw_torque(ax, car, handles=True),
         "power": lambda ax, car, est: draw_power(ax, car),
-        "gearbox": lambda ax, car, est: draw_gearbox(ax, car),
+        "gearbox": lambda ax, car, est: draw_gearbox(ax, car, handles=True),
         "push": lambda ax, car, est: draw_push(ax, car),
         # the game's table, with this tune's estimate dashed over it
         "accel": lambda ax, car, est: draw_accel(ax, car, est),
@@ -1262,12 +1334,25 @@ def edit(carmodel, start=None):
             readout.text(0.0, y, k, transform=readout.transAxes, fontsize=9, color=INK_2, va="top")
             readout.text(0.42, y, v, transform=readout.transAxes, fontsize=9, color=INK, va="top")
         title.set_text(car.name + ("  (changed, not saved)" if changed(folder) else ""))
-        subtitle.set_text("%s  -  drag the torque chart's points  -  dashed: what this tune makes; AI tables %s"
+        subtitle.set_text("%s  -  drag torque points, gear endpoints or the redline  -  dashed: this tune; AI tables %s"
                           % (folder, "rebuilt on Save" if state["derive"] else "only by the box below"))
         fields = load(folder)
         for n, (label, field, kind) in enumerate(EDITABLE):
             fields_ui.set(n, shown(field, kind, fields, folder))
         fig.canvas.draw_idle()
+
+    def redraw_drag_charts(names):
+        car = car_now()
+        canvas = fig.canvas
+        if getattr(canvas, "renderer", None) is None:
+            canvas.draw()
+        renderer = canvas.get_renderer()
+        for name in names:
+            ax = chart_axes[name]
+            ax.clear()
+            painters[name](ax, car, None)
+            ax.draw(renderer)
+            present(canvas, ax.bbox)
 
     def curve_value(index):
         """Point `index` of the curve as it is being edited, or None where there
@@ -1377,6 +1462,45 @@ def edit(carmodel, start=None):
         redraw()                                # everything that follows the curve, once
 
     state["drag"] = CurveDrag(fig, chart_axes["torque"], curve_value, curve_move, curve_drop, curve_pick)
+
+    def gear_endpoints():
+        car = car_now()
+        return [(g, car.redline / car.rpm_per_speed[g], car.redline)
+                for g in car.forward if car.rpm_per_speed[g] > 0]
+
+    def gearbox_move(gear, speed_kmh):
+        folder = current()
+        fields = load(folder)
+        rolling = rolling_of(state["original"][folder])
+        final = (fields.get(11) or [0])[0]
+        if not rolling or final <= 0 or speed_kmh <= 0:
+            return
+        speed = max(1.0, float(speed_kmh)) / 3.6
+        ratio = fields[13][0] * rolling / (speed * final * 60.0)
+        if not math.isfinite(ratio) or ratio <= 0:
+            return
+        fields[8] = list(fields.get(8, []))
+        if not 0 <= gear < len(fields[8]):
+            return
+        fields[8][gear] = ratio
+        resync(fields, rolling)
+        status.set_text("%s: gear %s ratio %.3f (not saved)" % (folder, gear - 1, ratio))
+        redraw_drag_charts(("gearbox", "push"))
+
+    def redline_move(rpm):
+        folder = current()
+        fields = load(folder)
+        lower = max(1.0, (fields.get(12) or [0])[0])
+        fields[13] = [round(max(lower, float(rpm)))]
+        status.set_text("%s: redline %d rpm (not saved)" % (folder, fields[13][0]))
+        redraw_drag_charts(("torque", "power", "gearbox", "push"))
+
+    def gearbox_drop():
+        redraw()
+
+    state["gearbox_drag"] = GearboxDrag(
+        fig, chart_axes["gearbox"], gear_endpoints,
+        lambda: car_now().redline, gearbox_move, redline_move, gearbox_drop)
 
     # The AI acceleration tables: Save rebuilds them from the engine, the
     # gearing and the mass (car_perf.py derive), or leaves the donor's.
