@@ -1495,11 +1495,17 @@ player's own row.
   +0x10 the arrested flag; +0x14 the car's id. A driver's colour too dark for
   the navy is lifted to `kTintLeast` of its brightest channel, its hue kept.
 - **The car column.** The list cycles what sits between the place and the time:
-  the driver's name, then the car. A car is named from its `fedata.eng` (its
-  folder is the car's own copy at `+0x1e4`, or the loaded record's `+0x110` by
-  id): the first three letters of its make and its model, the two cut to
-  twelve characters in all -- "Jag XK8", "Lam Diablo S", "Mer CLK-GTR". A
-  folder with no text, or a text that cannot be read, is shown as its folder.
+  the driver's name, then the car. A row keeps its car's place among the loaded
+  cars (row +0x14, which the table fills from the car's own `+0x1f0`), so the
+  car is found by that place among the race's racers (`0x5efc48`) and its folder
+  is that car's own copy of the name (`+0x1e4`). The folder's `fedata.eng` names
+  it: its text holds the car's code, then a header, then its strings -- make,
+  model, its full name, its figures -- each ending at a NUL with a u32 offset to
+  it from `0x2f` on (`kFedataStrings`). The first three letters of its make and
+  its model, the two cut to twelve characters in all -- "Jag XK8", "Lam Diablo
+  S", "Mer CLK-GTR". A text whose table does not read is taken as runs of
+  letters between the header's bytes (as `tools/import_car.py` does, which reads
+  the table the same way), and a folder with no text at all is shown as it is.
   Each half is shown for `kColumnSeconds` of the race's clock.
 - **Where.** From the element's box in the player's HUD layout
   (`0x6fbc74 + player x 0x348`, element 13 of 23, four floats: top, left,

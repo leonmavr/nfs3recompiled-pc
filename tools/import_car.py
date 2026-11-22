@@ -131,25 +131,31 @@ def car_folders(carmodel):
     return [f for f in sorted(carmodel.iterdir()) if f.is_dir() and f.name.lower() != "traffic"]
 
 
+def full_text_of(folder):
+    """A car's whole fedata text -- its code, its header, its strings and its
+    figures -- from a loose fedata.eng, else from the one in its archive;
+    None where there is none."""
+    loose = find(folder, "fedata.eng")
+    if loose:
+        return loose.read_bytes()
+    archive = find(folder, "car.viv")
+    if not archive:
+        return None
+    data = archive.read_bytes()
+    try:
+        for entry, offset, size in entries(data):
+            if entry.lower() == "fedata.eng":
+                return data[offset:offset + size]
+    except (ValueError, struct.error, IndexError):
+        return None
+    return None
+
+
 def words_of(folder):
     """What a car's text holds as words, in order: its four-letter code, make,
     model, full name, then its statistics -- from a loose fedata.eng, else from
     the one in its archive."""
-    text = None
-    loose = find(folder, "fedata.eng")
-    if loose:
-        text = loose.read_bytes()
-    else:
-        archive = find(folder, "car.viv")
-        if archive:
-            data = archive.read_bytes()
-            try:
-                for entry, offset, size in entries(data):
-                    if entry.lower() == "fedata.eng":
-                        text = data[offset:offset + size]
-                        break
-            except (ValueError, struct.error, IndexError):
-                text = None
+    text = full_text_of(folder)
     if not text:
         return []
     # A byte of the header that happens to be a printable character comes out a
@@ -157,9 +163,42 @@ def words_of(folder):
     return [run.decode("latin-1").strip() for run in re.split(rb"[^\x20-\x7e]+", text) if len(run.strip()) >= 3]
 
 
+STRINGS_AT = 0x2F
+
+
+def table_make_model(text):
+    """A car text's make and model from its own table of strings: the header
+    holds the text's strings -- its make, its model, its full name, then its
+    figures -- each ending at a NUL, with a u32 offset to each from STRINGS_AT
+    on.  None when the table does not read, which is what an add-on packed by an
+    older tool can do."""
+    if len(text) < STRINGS_AT + 8:
+        return None
+    make_at, model_at = struct.unpack_from("<2I", text, STRINGS_AT)
+
+    def word(offset):
+        if not 0 <= offset < len(text):
+            return None
+        end = text.find(b"\0", offset)
+        if not 0 < end - offset <= 63:
+            return None
+        run = text[offset:end]
+        if any(c < 0x20 or c == 0x7F for c in run):
+            return None
+        return run.decode("latin-1").strip() or None
+
+    make, model = word(make_at), word(model_at)
+    return (make, model) if make and model else None
+
+
 def name_of(folder, text):
-    """A car's make and model, as the menus show them: the first two words
-    after its code; its code where its text has no more."""
+    """A car's make and model, as the menus show them: its text's own table of
+    strings, else the first two words after its code; its code where its text
+    has no more."""
+    full = full_text_of(folder)
+    named = table_make_model(full) if full else None
+    if named:
+        return " ".join(named)
     words = words_of(folder)
     if len(words) > 2:
         return " ".join(words[1:3])

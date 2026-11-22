@@ -29,11 +29,12 @@
  * for the cars ahead of the player, 0xff008c00 for those behind, 0xfff0f0f0 for
  * the player, whose gap is 0 and is drawn as dashes -- and the car's id.  The
  * list cycles what sits between the place and the time every kColumnSeconds of
- * the race's clock: the driver's name, then the car.  The car is its folder
- * (the car's own copy at +0x1e4), named from its fedata.eng -- its make's first
- * three letters and its model, as much of the two as kCarNameMost characters
- * hold ("Jag XK8", "Lam Diablo S"); a folder with no text, or none to read, is
- * shown as it is.
+ * the race's clock: the driver's name, then the car.  The row keeps the car's
+ * place among the loaded cars (+0x14, the car's own at +0x1f0), and the car
+ * holds its folder (+0x1e4), from which its fedata.eng names it -- its make's
+ * first three letters and its model, as much of the two as kCarNameMost
+ * characters hold ("Jag XK8", "Lam Diablo S"); a folder with no text, or none
+ * to read, is shown as it is.
  *
  * Where.  Over the table's own element -- 13 of the 23 a player -- from the
  * layout's box: the box's left edge, as tall as its rows (kRowUnits each), and
@@ -81,7 +82,9 @@ constexpr int kFlagBottom = 0x10;
 constexpr x86::reg32 kRacers = 0x5efc48, kRacerCount = 0x5efda0;
 constexpr x86::reg32 kPlayerIndex = 0x6fd4f4;
 constexpr x86::reg32 kPlayerCars = 0x5efa48;
-constexpr x86::reg32 kCarRecord = 0x220, kRecordId = 0x14, kCarFolder = 0x1e4;
+constexpr x86::reg32 kCarSlot = 0x1f0;          // a car's place in the list of the loaded
+constexpr x86::reg32 kCarFolder = 0x1e4;        // and its folder, its own copy of the name
+constexpr std::size_t kFedataStrings = 0x2f;    // a fedata's table of its strings
 constexpr x86::reg32 kCarFlags = 0x200;
 constexpr x86::reg8 kCopBit = 0x20;
 constexpr x86::reg32 kSplitScreen = 0x6fd3b0;
@@ -89,7 +92,6 @@ constexpr x86::reg32 kRaceClock = 0x7d3684;
 constexpr x86::reg32 kHudRects = 0x749758;
 constexpr x86::reg32 kHudRectsPerPlayer = 23;
 constexpr x86::reg32 kTableElement = 13;
-constexpr x86::reg32 kCarSlotName = 0x110;      // a loaded car's folder, in the game's own record
 constexpr x86::reg32 kLayout = 0x6fbc74;         // the elements' place as fractions, 16 bytes each
 constexpr x86::reg32 kLayoutStride = 0x348;      // a player's layouts, 0x1a4 each
 constexpr x86::reg32 kHudWidth = 0x7cdac8;       // the HUD's own, in pixels
@@ -170,11 +172,34 @@ std::string lowerCase(std::string text)
     return text;
 }
 
-/* A car's make and model, from its folder's fedata.eng: its code, make, model
- * and full name, then its figures, as runs of letters between the header's
- * bytes -- tools/import_car.py's words.  Three letters of the make and the
- * model, as much of the two as kCarNameMost holds; the folder itself where
- * there is no text to read. */
+/* A string of a fedata's own table of them: the text at `at`, up to its NUL,
+ * when all of it prints. */
+bool fedataString(const char* data, std::size_t size, std::size_t at, std::string& out)
+{
+    if (at >= size)
+        return false;
+    std::size_t length = 0;
+    while (at + length < size && data[at + length] && length < 64)
+    {
+        const unsigned char c = static_cast<unsigned char>(data[at + length]);
+        if (c < 0x20 || c == 0x7f)
+            return false;
+        ++length;
+    }
+    if (!length || at + length >= size)
+        return false;
+    out.assign(data + at, length);
+    return true;
+}
+
+/* A car's make and model, from its folder's fedata.eng.  The text holds its
+ * code, then a header, then its strings -- make, model, its full name, its
+ * figures -- each ending at a NUL and a u32 offset to each from kFedataStrings
+ * on.  Three letters of the make and the model, as
+ * much of the two as kCarNameMost holds ("Jag XK8", "Mer CLK-GTR"); a text
+ * whose table does not read is taken as runs of letters between the header's
+ * bytes, as tools/import_car.py does, and a folder with no text at all is
+ * shown as it is. */
 const std::string& carName(const std::string& folder)
 {
     using namespace standings;
@@ -184,36 +209,53 @@ const std::string& carName(const std::string& folder)
     std::string made = lowerCase(folder);
     const std::string path = win32::File::dataDirectory() + "gamedata/carmodel/" + made + "/fedata.eng";
     std::size_t size = 0;
-    if (void* data = SDL_LoadFile(path.c_str(), &size))
+    if (void* loaded = SDL_LoadFile(path.c_str(), &size))
     {
-        std::vector<std::string> words;
-        std::string run;
-        for (std::size_t i = 0; i <= size; ++i)
+        const char* data = static_cast<const char*>(loaded);
+        std::string make, model;
+        uint32_t makeAt = 0, modelAt = 0;
+        if (size > kFedataStrings + 8)
         {
-            const char c = i < size ? static_cast<const char*>(data)[i] : '\0';
-            const bool printed = c >= 0x20 && c <= 0x7e;
-            if (printed)
-            {
-                run.push_back(c);
-                continue;
-            }
-            while (!run.empty() && run.front() == ' ')
-                run.erase(run.begin());
-            while (!run.empty() && run.back() == ' ')
-                run.pop_back();
-            if (run.size() >= 3)
-                words.push_back(run);
-            run.clear();
+            SDL_memcpy(&makeAt, data + kFedataStrings, 4);
+            SDL_memcpy(&modelAt, data + kFedataStrings + 4, 4);
         }
-        SDL_free(data);
-        if (words.size() >= 3)
+        if (!fedataString(data, size, makeAt, make) || !fedataString(data, size, modelAt, model))
         {
-            made = words[1].substr(0, 3);
+            // no table to read: the runs of letters, its code, make, model and full name
+            std::vector<std::string> words;
+            std::string run;
+            for (std::size_t i = 0; i <= size; ++i)
+            {
+                const char c = i < size ? data[i] : '\0';
+                const bool printed = c >= 0x20 && c <= 0x7e;
+                if (printed)
+                {
+                    run.push_back(c);
+                    continue;
+                }
+                while (!run.empty() && run.front() == ' ')
+                    run.erase(run.begin());
+                while (!run.empty() && run.back() == ' ')
+                    run.pop_back();
+                if (run.size() >= 3)
+                    words.push_back(run);
+                run.clear();
+            }
+            if (words.size() >= 3)
+            {
+                make = words[1];
+                model = words[2];
+            }
+        }
+        SDL_free(loaded);
+        if (!make.empty())
+        {
+            made = make.substr(0, 3);
             while (!made.empty() && made.back() == ' ')
                 made.pop_back();
-            if (!made.empty())
+            if (!made.empty() && !model.empty())
                 made += ' ';
-            made += words[2];
+            made += model;
             if (int(made.size()) > kCarNameMost)
                 made.resize(std::size_t(kCarNameMost));
             while (!made.empty() && made.back() == ' ')
@@ -223,26 +265,22 @@ const std::string& carName(const std::string& folder)
     return s_carNames.emplace(folder, made).first->second;
 }
 
-/* The folder of the car with this id, among the race's (its own copy of the
- * name at +0x1e4), or the game's record of the car by id. */
-std::string carFolder(win32::WinApplication* app, x86::reg32 id)
+/* The folder of the car in this place among the loaded cars -- what the
+ * table's row keeps at +0x14, the car's own at +0x1f0 -- from that car's own
+ * copy of the name (+0x1e4). */
+std::string carFolder(win32::WinApplication* app, x86::reg32 slot)
 {
     using namespace standings;
     const x86::reg32 count = SDL_min(app->getMemory<x86::reg32>(kRacerCount), x86::reg32(kMostRows));
     for (x86::reg32 k = 0; k < count; ++k)
     {
         const x86::reg32 car = app->getMemory<x86::reg32>(kRacers + k * 4);
-        if (!car)
+        if (!car || app->getMemory<x86::reg32>(car + kCarSlot) != slot)
             continue;
-        if (app->getMemory<x86::reg32>(car + kCarRecord + kRecordId) == id)
-        {
-            const std::string folder = guestText(app, car + kCarFolder);
-            if (!folder.empty())
-                return folder;
-        }
+        const std::string folder = guestText(app, car + kCarFolder);
+        if (!folder.empty())
+            return folder;
     }
-    if (const x86::reg32 record = carSlotRecord(id))
-        return guestText(app, record + kCarSlotName);
     return std::string();
 }
 
@@ -376,7 +414,6 @@ void draw(win32::WinApplication* app, float x0, float y0, float x1, float y1)
     const float whoX = left + turns + kPad * 0.5f;
     const x86::sreg32 clock = x86::sreg32(app->getMemory<x86::reg32>(kRaceClock));
     const int column = int(float(clock) / kTicksPerSecond / kColumnSeconds) % 2;
-    const x86::reg32 count = SDL_min(app->getMemory<x86::reg32>(kRacerCount), x86::reg32(kMostRows));
     char place[8];
     for (x86::reg32 r = 0; r < rows; ++r)
     {
@@ -385,18 +422,7 @@ void draw(win32::WinApplication* app, float x0, float y0, float x1, float y1)
         float name[3], gapColour[3];
         colour(app->getMemory<x86::reg32>(rec + kRowNameColour), name);
         colour(app->getMemory<x86::reg32>(rec + kRowGapColour), gapColour);
-        const x86::reg32 id = app->getMemory<x86::reg32>(rec + kRowCar);
-        std::string folder;
-        for (x86::reg32 k = 0; k < count; ++k)
-        {
-            const x86::reg32 car = app->getMemory<x86::reg32>(kRacers + k * 4);
-            if (!car || app->getMemory<x86::reg32>(car + kCarRecord + kRecordId) != id)
-                continue;
-            folder = guestText(app, car + kCarFolder);
-            break;
-        }
-        if (folder.empty())
-            folder = carFolder(app, id);
+        const std::string folder = carFolder(app, app->getMemory<x86::reg32>(rec + kRowCar));
         // the place, against the left edge
         SDL_snprintf(place, sizeof place, "%d", int(r) + 1);
         const float placeX = left + turns - hudTextAdvance(a->font, place) * scale;
