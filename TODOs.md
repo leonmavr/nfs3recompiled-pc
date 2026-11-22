@@ -628,7 +628,7 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     kTextHudArrested); the player's reset bit at [0x79c4ab] goes to
     sub_405220 instead of sub_429100 for a cop. Next: find what writes 1
     there, and the timer before it.
-- [ ] Reset logic enhancement: when an opponent (not cop) gets suddenly to ~0
+- [x] Reset logic enhancement: when an opponent (not cop) gets suddenly to ~0
   speed and in front of them there's an obstacle (not driver), reset immediately.
   - Done (2026-11-21), to be tested: from 43 km/h or more to under 5 km/h in
     half a second, against a wall or a track object ahead of it ([car+0x170]),
@@ -640,10 +640,6 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
 - [ ] Figure out how to add/create menu elements without breaking the visual
   style, make them seamless with the style of the game. Can you find any menu
   assets?
-- [ ] Currently the sides of screen are padded with black as the game was made
-  for narrower resolution. Fill the whole screen all the time (menus: expand
-  main screen, move fields towards the edges, rage: expand the main screen/view)
-  without however stetching/scaling things sideways.
 - [ ] Add those added graphics enhancements in graphics menu in game (e.g. as
   toggleable)
   - Done, the first half: every `NFS_*` switch the port reads now lives in
@@ -710,9 +706,12 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   relative times are shown the same way. Also there's a bug in it: whenever i
   try to position it with the HUD menu, it shifts itself up slightly (by 50-100?
   px).
-- [ ] Rear view mirror: recently we increased ambience at night since night used
+- [x] Rear view mirror: recently we increased ambience at night since night used
   to be too dark. However the rear-view mirror still shows what's behind me very
   dark, as if these changes have not been reflected on the rear-view mirror.
+  - Done (2026-11-22), to be tested: the world's shader lifts the mirror's
+    world at night as the whole-picture pass lifts the main view
+    (`u_nightLift`; TECHNICAL.md, "Night").
 
 ### Driving/Gameplay
 - [x] Tire grip by surface: less on snow, sand and grass than on asphalt. Each
@@ -778,16 +777,17 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   much harder to happen - possibly set twisting effect via a switch. Jump up is
   high but twisting sideways is annoying.
   - Done (`NFS_AIR_ROLL_DAMP`): in the air a car's roll dies away, every car.
-- [ ] Slipstreaming: slipstreaming (driving behind another driver) should be
+- [x] Slipstreaming: slipstreaming (driving behind another driver) should be
   possible and emulate less air resistance, possibly by increasing acceleration
   (?). While slipstremaing a flickering faded icon bottom left shows up and
   showsthe slipstreaming time like XX.Y sec. Also add subtle visual cues, like
   'air line' trails left and right on player's only car that follow the car's
   path. Opponents can slip stream too and opponent AI knows it but it's not
   their priority. If slipstreaming AI is a lot of effort, just skip it.
-  - Partly done (`NFS_SLIPSTREAM`, `NFS_SLIPSTREAM_TRAILS`): the push behind
-    another car, for every car, and the air trails beside the player's car.
-    Still to do: the icon with the slipstream's time.
+  - Done (`NFS_SLIPSTREAM`, `NFS_SLIPSTREAM_TRAILS`, `NFS_SLIP_ICON`): the push
+    behind another car, for every car; the air trails beside the player's car;
+    and the icon at the bottom left with the time in the slipstream, white by
+    day and pulsing green with a faint halo at night.
 - [x] More car visual feedback based on actions; e.g. Slight body roll during cornering.
       Front-end compression under hard braking.
       Rear-end compression during acceleration.
