@@ -1275,9 +1275,9 @@ last song named is kept from race to race: a race on the track just raced may
 not open its file again, and it still shows its song. The whole panel, glow
 and emblem and all, is 70% opaque (`kOpacity`). The font is `gamedata/dashhud/cp16bi.ffn`
 (4 bits a texel, the high half first; the low values are the characters' dark
-edges, so it is drawn white with them kept), the emblem cut round out of
-`hud98.fsh`'s picture `4444`, both read once
-(`src/nfs3hp/native_now_playing.cpp`). The renderer lays it over the finished
+edges, so it is drawn white with them kept, `native_hud_font.cpp`, as the
+slipstream's timer has it), the emblem cut round out of `hud98.fsh`'s picture
+`4444`, both read once (`src/nfs3hp/native_now_playing.cpp`). The renderer lays it over the finished
 frame, HUD and all (`ThrashRenderer::drawOverlay`, `include/lib/overlay.h`:
 quads in HUD units, 480 to the picture's height). `NFS_NOW_PLAYING` (on, five
 seconds; a number for how many, up to 30; `0`/`off` never).
@@ -2153,6 +2153,24 @@ once its last point has gone a new one starts at its place, a little off it
 (up to 18 cm aside, 10 cm up or down, 35 cm along) and 25% wider or narrower.
 At most three quarters opaque, times the slipstream. `NFS_SLIP_TEST=1` puts the player's car
 in a slipstream all the time from 10 km/h, and `NFS_SLIP_TRACE=1` logs it.
+
+The time in it, at the bottom left (`slipstreamTick`, `native_slipstream.cpp`;
+`NFS_SLIP_ICON`, on): `assets/slipstream/slip_icon.png`, two cars seen from
+above, one following the other through its wake, shaded white and pulsing -- a
+sine of 1.3 s, its opacity 0.30 to 0.80, faded in and out over a fifth of a
+second either way -- with "12.3" and SEC in the HUD's font (`native_hud_font.cpp`,
+the song panel's) printed over it and steady at 0.95. By day it is white and
+at night ([0x6fd4c8]) bright green, `(0.35, 1, 0.45)`, the shader tinting the
+icon's quads by their colour; at night a faint halo of the same green, its
+alpha blurred 10 texels along each way twice at load and kept as a second tile
+of the same picture, drawn 1.15 times the size at 0.20 to 0.42, so the glow is
+a quad and no pass. It is drawn 40 by 84 HUD units, `kLeft` 12 and `kBottom`
+14 from the picture's edges, from beside the executable (a desktop build copies
+it there) or the app's assets (Android), its picture kept a third of its texels
+(254 by 527). A spell's time is the race's clock's, so a pause does not count
+it, and every spell starts it again; a menu, a pause or a race's end shows
+none (a layer of the port's overlay, set for one frame at a time, `OverlaySlip`,
+under the song panel's).
 
 ### Trees and lamp posts knocked down
 
@@ -3414,6 +3432,7 @@ the next time the game starts.
 | `NFS_GRIP_ON_OPPONENTS` | on (`1`) | `0`/`off`: grip by terrain for the player's car only, not every car (Grip by terrain). |
 | `NFS_SLIPSTREAM` | on (`1`) | `0`/`off`: no slipstream. A number up to 3: how strong the push behind another car (Slipstreaming). |
 | `NFS_SLIPSTREAM_TRAILS` | on (`1`) | `0`/`off`: no air lines round the player's car in a slipstream (Slipstreaming). |
+| `NFS_SLIP_ICON` | on | `0`/`off`: no icon with the slipstream's time at the bottom left (Slipstreaming). |
 | `NFS_KNOCK_TREES` | on (`1`) | `0`/`off`: trees and lamp posts stand as the game has them, solid (Trees and lamp posts knocked down). |
 | `NFS_TREE_MASS` | `1` | Times 150 kg: how much a tree slows the car that knocks it down; `0` for none. |
 | `NFS_LAMP_MASS` | `1` | Times 70 kg: the same for a lamp post. |

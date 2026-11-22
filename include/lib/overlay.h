@@ -7,18 +7,22 @@
 #include <vector>
 
 /* Port: what the port lays over a finished race frame, HUD and all
- * (ThrashRenderer::drawOverlay) -- the song now playing
- * (src/nfs3hp/native_now_playing.cpp) and the minimap
- * (src/nfs3hp/native_minimap.cpp), each a layer of its own (OverlayLayer).  Laid out in HUD units: the picture is
- * kOverlayUnits high, x from its left edge, y down from its top, whatever its
- * size in pixels; the renderer scales them by the picture's height. */
+ * (ThrashRenderer::drawOverlay) -- the minimap (src/nfs3hp/native_minimap.cpp),
+ * the slipstream's icon (src/nfs3hp/native_slipstream.cpp) and the song now
+ * playing (src/nfs3hp/native_now_playing.cpp), each a layer of its own
+ * (OverlayLayer).  Laid out in HUD units: the picture is kOverlayUnits high, x
+ * from its left edge, y down from its top, whatever its size in pixels; the
+ * renderer scales them by the picture's height. */
 constexpr float kOverlayUnits = 480.0f;
 
-/* The overlay's layers, drawn in this order: each source sets its own. */
+/* The overlay's layers, drawn in this order: each source sets its own.  The
+ * slipstream's icon is under the song's panel, which slides over the same
+ * corner of the picture. */
 enum OverlayLayer
 {
     OverlayMinimap = 0,
-    OverlayNowPlaying = 1,
+    OverlaySlip = 1,
+    OverlayNowPlaying = 2,
     OverlayLayerCount
 };
 
@@ -29,7 +33,7 @@ struct OverlayArt
     int fontW = 0, fontH = 0;
     std::vector<std::uint8_t> font;   // the HUD's font, white, its dark edge kept
     int iconW = 0, iconH = 0;
-    std::vector<std::uint8_t> icon;   // the NFS emblem
+    std::vector<std::uint8_t> icon;   // a layer's own icon: the NFS emblem, the slipstream's two cars
     int mapW = 0, mapH = 0;
     std::vector<std::uint8_t> map;    // the minimap's sprites (assets/minimap/minimap-atlas.png)
 };

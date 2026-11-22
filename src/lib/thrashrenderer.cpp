@@ -3813,7 +3813,8 @@ void ThrashRenderer::drawPending(const ThrashDraw& draw)
 
 /* The port's overlay (lib/overlay.h), over a race's finished frame, HUD and
  * all: quads in the picture's pixels, each a panel worked out here, a
- * character of the HUD's font or the emblem.  The panel: the HUD's navy,
+ * character of the HUD's font or a layer's icon, tinted by its colour (the
+ * slipstream's is white by day and green at night).  The panel: the HUD's navy,
  * darker to its foot, its corners rounded, a yellow line round it and a glow
  * fading out from that (u_panel: half its width and height, the corners'
  * radius and the glow's reach, HUD units; u_unit: pixels a unit).  The
@@ -3856,7 +3857,7 @@ static const char g_overlayShader[] =
 "    }"
 "    if (v_kind == 2)"
 "    {"
-"        o_color = texture(u_icon, v_uv) * v_color.a;"
+"        o_color = texture(u_icon, v_uv) * vec4(v_color.rgb, v_color.a);"
 "        return;"
 "    }"
 "    if (v_kind == 3)"

@@ -1079,6 +1079,7 @@ void nowPlayingStream(const char* path);              // native_now_playing.cpp
 void nowPlayingTick(win32::WinApplication* app);      // and the panel that shows it
 const char* nowPlayingOverride();                     // and the next song, while it starts
 void nowPlayingSwap(win32::WinApplication* app, x86::CPU& cpu);
+void slipstreamTick(win32::WinApplication* app);      // native_slipstream.cpp, the slipstream's icon
 
 void musicIndexOpened(win32::WinApplication* app, x86::reg32 path)
 {
@@ -2673,6 +2674,7 @@ void onSwap(win32::WinApplication* app)
     wetRoadTick(app);
     colourGradeTick(app);
     nfs3hp::nowPlayingTick(app);
+    nfs3hp::slipstreamTick(app);
 #ifndef __ANDROID__
     scriptTick();
 #endif

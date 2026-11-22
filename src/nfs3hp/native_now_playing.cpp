@@ -1,5 +1,6 @@
 #include <nfs3hp.h>
 #include "native_guest.h"
+#include "native_hud_font.h"
 #include "native_radio.h"
 #include "native_settings.h"
 #include <lib/file.h>
@@ -34,10 +35,10 @@
  * so the last song named is kept from race to race.  The clock standing (a pause) hides the panel where it is.
  *
  * Its pictures, read once from the game's files: the HUD's font
- * (gamedata/dashhud/cp16bi.ffn -- a 4-bit picture of every character, the
- * edges dark) and the emblem (gamedata/dashhud/hud98.fsh, the picture "4444",
- * cut out round).  The renderer draws the panel over the finished frame,
- * HUD and all (ThrashRenderer::drawOverlay; include/lib/overlay.h).
+ * (gamedata/dashhud/cp16bi.ffn, native_hud_font.cpp, as the slipstream's
+ * timer has it) and the emblem (gamedata/dashhud/hud98.fsh, the picture
+ * "4444", cut out round).  The renderer draws the panel over the finished
+ * frame, HUD and all (ThrashRenderer::drawOverlay; include/lib/overlay.h).
  *
  * The next song (NFS_NEXT_SONG_KEY, ] by default; Controls lists it as Next
  * Song, native_frontend_controls.cpp): pressed in a race, its music stops and
@@ -111,12 +112,9 @@ constexpr x86::reg32 kKeyboard = 4;             // a binding's low byte: the key
 constexpr x86::reg32 kDefaultKey = 0x5d001b04;  // ']': its character, its scan code, the keyboard
 constexpr const char* kKeySetting = "NFS_NEXT_SONG_KEY";
 // The pictures.
-constexpr const char* kFontFile = "gamedata/dashhud/cp16bi.ffn";
 constexpr const char* kHudFile = "gamedata/dashhud/hud98.fsh";
 constexpr int kEmblemX = 130, kEmblemY = 65, kEmblemSize = 64;   // in hud98.fsh's "4444"
 constexpr float kEmblemRadius = 31.5f;   // texels; its edge eased over one
-constexpr int kAtlasWidth = 512;         // the font's characters, laid out again apart
-constexpr int kAtlasPad = 4;             // texels round each, so its smaller levels never bleed
 }  // namespace nowplaying
 
 struct Song
@@ -156,19 +154,10 @@ float holdSeconds()
     return hold;
 }
 
-struct Glyph
-{
-    int w = 0, h = 0;         // texels
-    int x = 0, y = 0;         // where in the atlas
-    int advance = 0, left = 0, top = 0;   // texels: to the next, and its offset from the pen and the line's top
-    bool known = false;
-};
-
 struct Art
 {
     std::shared_ptr<OverlayArt> pictures;
-    Glyph glyphs[256];
-    float capTexels = 18.0f, capTop = 5.0f;   // 'A': its height and offset from the line's top
+    HudFont font;
 };
 
 const Song* s_song = nullptr;     // the race's, from its stream's name
@@ -206,93 +195,6 @@ std::vector<std::uint8_t> loadFile(const char* name)
     else
         SDL_Log("[MUSIC] now playing: %s not read (%s)", path.c_str(), SDL_GetError());
     return bytes;
-}
-
-/* An .ffn: "FNTF", its characters' count (+8), the line's height (+0x12), the
- * picture's offset (+0x1c); from +0x20 a character each 11 bytes -- its code,
- * width and height, where in the picture, its advance and its offsets from
- * the pen and from the line's top; the picture a 16-byte header (0x7a, width
- * +4, height +6) and 4 bits a texel, the first in the high half.  Laid out
- * again here kAtlasPad apart, white, its alpha whether it is drawn at all:
- * the low values are the characters' dark edges. */
-bool readFont(Art& art, OverlayArt& out)
-{
-    using namespace nowplaying;
-    const std::vector<std::uint8_t> d = loadFile(kFontFile);
-    if (d.size() < 0x20 || SDL_memcmp(d.data(), "FNTF", 4) != 0)
-        return false;
-    const int count = le16(&d[8]);
-    const std::size_t picture = le32(&d[0x1c]);
-    if (0x20 + std::size_t(count) * 11 > d.size() || picture + 16 > d.size() || d[picture] != 0x7a)
-        return false;
-    const int pw = le16(&d[picture + 4]), ph = le16(&d[picture + 6]);
-    if (picture + 16 + std::size_t(pw) * ph / 2 > d.size())
-        return false;
-    auto texel = [&](int x, int y) {
-        const std::size_t i = std::size_t(y) * pw + x;
-        const std::uint8_t b = d[picture + 16 + i / 2];
-        return (i & 1) ? (b & 15) : (b >> 4);
-    };
-    // Shelves of characters, as wide as the atlas.
-    int penX = kAtlasPad, penY = kAtlasPad, shelf = 0;
-    struct Place { int code, sx, sy; };
-    std::vector<Place> places;
-    for (int k = 0; k < count; ++k)
-    {
-        const std::uint8_t* r = &d[0x20 + std::size_t(k) * 11];
-        const int code = le16(r);
-        if (code < 0 || code > 255)
-            continue;
-        Glyph& g = art.glyphs[code];
-        g.w = r[2];
-        g.h = r[3];
-        g.advance = std::int8_t(r[8]);
-        g.left = std::int8_t(r[9]);
-        g.top = std::int8_t(r[10]);
-        g.known = true;
-        const int sx = le16(r + 4), sy = le16(r + 6);
-        if (g.w <= 1 || g.h <= 1 || sx + g.w > pw || sy + g.h > ph)
-        {
-            g.w = g.h = 0;   // a space: an advance alone
-            continue;
-        }
-        if (penX + g.w + kAtlasPad > kAtlasWidth)
-        {
-            penX = kAtlasPad;
-            penY += shelf + kAtlasPad;
-            shelf = 0;
-        }
-        g.x = penX;
-        g.y = penY;
-        penX += g.w + kAtlasPad;
-        shelf = SDL_max(shelf, g.h);
-        places.push_back({ code, sx, sy });
-    }
-    int height = 1;
-    while (height < penY + shelf + kAtlasPad)
-        height <<= 1;
-    out.fontW = kAtlasWidth;
-    out.fontH = height;
-    out.font.assign(std::size_t(kAtlasWidth) * height * 4, 0);
-    for (const Place& p : places)
-    {
-        const Glyph& g = art.glyphs[p.code];
-        for (int y = 0; y < g.h; ++y)
-            for (int x = 0; x < g.w; ++x)
-            {
-                const int v = texel(p.sx + x, p.sy + y);
-                std::uint8_t* o = &out.font[(std::size_t(g.y + y) * kAtlasWidth + g.x + x) * 4];
-                o[0] = o[1] = o[2] = std::uint8_t(v * 17);
-                o[3] = v ? 255 : 0;
-            }
-    }
-    const Glyph& a = art.glyphs['A'];
-    if (a.known && a.h > 0)
-    {
-        art.capTexels = float(a.h);
-        art.capTop = float(a.top);
-    }
-    return true;
 }
 
 /* An .fsh ("SHPI"): its pictures' count (+8), from +16 a name and an offset
@@ -338,7 +240,7 @@ const Art* art()
         return s_art.get();
     auto made = std::make_unique<Art>();
     made->pictures = std::make_shared<OverlayArt>();
-    if (!readFont(*made, *made->pictures) || !readEmblem(*made->pictures))
+    if (!readHudFont(*made->pictures, made->font) || !readEmblem(*made->pictures))
     {
         SDL_Log("[MUSIC] now playing: the HUD's font or emblem could not be read; no panel");
         s_artFailed = true;
@@ -364,7 +266,7 @@ void show(const Art& a, const char* artist, const char* title, float shown)
     using namespace nowplaying;
     auto overlay = std::make_shared<Overlay>();
     overlay->art = a.pictures;
-    const float scale = kCapHeight / a.capTexels;   // HUD units a texel
+    const float scale = kCapHeight / a.font.capTexels;   // HUD units a texel
     const OverlayArt& pics = *a.pictures;
     struct Run { const char* text; const float* colour; };
     std::vector<Run> runs;
@@ -376,9 +278,7 @@ void show(const Art& a, const char* artist, const char* title, float shown)
     runs.push_back({ title ? title : "", kWhite });
     float textW = 0.0f;
     for (const Run& run : runs)
-        for (const char* c = run.text; *c; ++c)
-            textW += float(a.glyphs[std::uint8_t(*c)].known ? a.glyphs[std::uint8_t(*c)].advance
-                                                             : a.glyphs[' '].advance) * scale;
+        textW += hudTextAdvance(a.font, run.text) * scale;
     const float textAt = kIcon * kIconInto + kIcon * 0.5f + kTextGap;   // from the panel's left edge
     const float width = textAt + textW + kRightPad;
     const float away = kLeft + width + kGlow * 2.0f;   // all of it past the edge, glow and all
@@ -401,23 +301,13 @@ void show(const Art& a, const char* artist, const char* title, float shown)
     overlay->quads.push_back({ ix - kIcon * 0.5f, cy - kIcon * 0.5f, ix + kIcon * 0.5f, cy + kIcon * 0.5f,
                                0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, kOpacity, OverlayQuad::Icon });
     // The line's top such that a capital sits in the panel's middle.
-    const float lineTop = cy - kCapHeight * 0.5f - a.capTop * scale;
+    const float lineTop = cy - kCapHeight * 0.5f - a.font.capTop * scale;
     float pen = textX;
-    const float fw = float(pics.fontW), fh = float(pics.fontH);
     for (const Run& run : runs)
-        for (const char* c = run.text; *c; ++c)
-        {
-            const Glyph& g = a.glyphs[std::uint8_t(*c)].known ? a.glyphs[std::uint8_t(*c)] : a.glyphs[' '];
-            if (g.w > 0)
-            {
-                const float x0 = pen + float(g.left) * scale, y0 = lineTop + float(g.top) * scale;
-                overlay->quads.push_back({ x0, y0, x0 + float(g.w) * scale, y0 + float(g.h) * scale,
-                                           float(g.x) / fw, float(g.y) / fh, float(g.x + g.w) / fw,
-                                           float(g.y + g.h) / fh, run.colour[0], run.colour[1], run.colour[2], kOpacity,
-                                           OverlayQuad::Glyph });
-            }
-            pen += float(g.advance) * scale;
-        }
+    {
+        addHudText(overlay->quads, pics, a.font, pen, lineTop, scale, run.text, run.colour, kOpacity);
+        pen += hudTextAdvance(a.font, run.text) * scale;
+    }
     win32::glide2x::overlay(std::move(overlay));
     s_overlaySet = true;
 }

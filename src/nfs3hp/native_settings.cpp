@@ -103,6 +103,7 @@ each one does.
 # NFS_EXHAUST_DEFAULTS = 0
 # NFS_SLIPSTREAM = 1
 # NFS_SLIPSTREAM_TRAILS = 1
+# NFS_SLIP_ICON = on
 
 [What you feel of the race]
 # NFS_CRASH_SHAKE = 2

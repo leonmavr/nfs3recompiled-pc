@@ -121,7 +121,11 @@ android {
     }
 
     sourceSets.main {
-        assets.srcDirs = ['src/main/assets']
+        // The game's data first; then the repository's own art (assets/ at the
+        // root: the minimap's and snowflakes' sprites, the slipstream's icon),
+        // which the port reads from the APK's assets when it finds no file
+        // beside itself (native_slipstream.cpp).
+        assets.srcDirs = ['src/main/assets', '../../../assets']
     }
 
     lint {

@@ -264,6 +264,14 @@ if(NOT ANDROID)
             "$<TARGET_FILE_DIR:nfs3hp>/assets/minimap"
         COMMENT "Copying minimap sprites beside nfs3hp"
         VERBATIM)
+    set(SLIP_ICON "${NFS_ROOT_DIR}/assets/slipstream/slip_icon.png")
+    set_property(TARGET nfs3hp APPEND PROPERTY LINK_DEPENDS "${SLIP_ICON}")
+    add_custom_command(TARGET nfs3hp POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${NFS_ROOT_DIR}/assets/slipstream"
+            "$<TARGET_FILE_DIR:nfs3hp>/assets/slipstream"
+        COMMENT "Copying the slipstream's icon beside nfs3hp"
+        VERBATIM)
 endif()
 option(NFS_BUILD_FF_TESTS "Build guest COM force-feedback regression checks" OFF)
 if(NFS_BUILD_FF_TESTS AND NOT ANDROID)
