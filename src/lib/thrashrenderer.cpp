@@ -413,6 +413,7 @@ struct ThrashDraw
     bool                                race;
     float                               speed;
     bool                                night;       // a night race: no motion blur, the night lift
+    float                               nitro;       // the bottle burning, 0 to 1: doubles the blur
     std::shared_ptr<const std::vector<EffectParticle>> particles;  // the port's own (drawParticles)
     float                               alphaTestRef;
     x86::reg32                          chromaKeyColor;
@@ -1180,6 +1181,7 @@ void ThrashRenderer::renderPending()
     draw->race = m_raceView;
     draw->speed = m_speed;
     draw->night = m_night;
+    draw->nitro = m_nitro;
     draw->particles = m_particles;
     draw->chromaKeyColor = m_chromaKeyColor;
     draw->width = m_renderer->m_width;
@@ -3121,7 +3123,7 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
      * sharp middle band has narrowed.  None at night (draw.night). */
     const float ramp = !draw.night ? SDL_max(0.0f, SDL_min(1.0f, (draw.speed - 80.0f / 3.6f) / (170.0f / 3.6f))) : 0.0f;
     const float blurShare = ramp * ramp * (3.0f - 2.0f * ramp);
-    const float blur = 2.0f * m_motionBlur * blurShare;
+    const float blur = 2.0f * m_motionBlur * blurShare * (1.0f + draw.nitro);
     const bool particles = m_particlesOn && draw.particles && !draw.particles->empty();
     float snowAmount = 0.0f;
     if (particles && m_snowAtlas)
@@ -3278,8 +3280,9 @@ void ThrashRenderer::postProcess(const ThrashDraw& draw)
         if (now - s_lastNs > 1000000000)
         {
             s_lastNs = now;
-            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[BLUR] %.0f km/h: strength %.2f, the triangles' tips at %.2f of the half width",
-                        double(draw.speed * 3.6f), double(blur), double(1.0f - blurShare));
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "[BLUR] %.0f km/h: strength %.2f (nitro %.2f), the triangles' tips at %.2f of the half width",
+                        double(draw.speed * 3.6f), double(blur), double(draw.nitro), double(1.0f - blurShare));
         }
     }
     if (needDepth)

@@ -1,6 +1,7 @@
 #include <nfs3hp.h>
 #include "native_guest.h"
 #include "native_exhausts.h"
+#include "native_nitro.h"
 #include <winapi/glide2x.h>
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -134,10 +135,18 @@ struct Flame
     float colour[3];
 };
 constexpr std::size_t kMostFlames = 96;
+/* The bottle of nitro burning throws a jet out of every exhaust for as long as
+ * it burns: one flame every kNitroEvery seconds, two and a half times an
+ * ordinary flame's size at full burn.  A flame lives a second, so the ones in
+ * the air overlap into a stream -- each growing, trembling and fading as it
+ * goes, so the stream moves. */
+constexpr float kNitroEvery = 0.12f;    // s between two flames of the jet
+constexpr float kNitroFlame = 2.5f;     // times an ordinary flame's size, at full burn
 std::vector<Flame> s_flames;
 x86::reg32 s_gear[16];   // each car's gear, as last seen: a shift up is a flame
 float s_pop[16];         // seconds until a car revving at rest pops its next flame
 float s_crackle[16];     // seconds until an engine on the overrun pops its next
+float s_jet[16];         // seconds until a car burning nitro throws its next jet
 float s_revs[16];        // each car's revs a frame ago: rising fast is being revved
 bool s_revsKnown[16];
 float s_saidRevs[16];    // the revs NFS_EXHAUSTS_TRACE last said of a car at rest
@@ -952,6 +961,7 @@ void engineFlames(win32::WinApplication* app, float dt)
             s_gear[k] = 0;   // not in the race: nothing remembered of it
             s_pop[k] = 0.0f;
             s_crackle[k] = 0.0f;
+            s_jet[k] = 0.0f;
             s_revsKnown[k] = false;
             s_saidRevs[k] = 0.0f;
             s_traced[k] = 0;
@@ -1051,6 +1061,26 @@ void engineFlames(win32::WinApplication* app, float dt)
                     s_traced[k] |= 8;
                     SDL_Log("[EXHAUST] slot %u \"%s\": crackling on the overrun at %.1f m/s, %.0f of %u rpm",
                             unsigned(k), exhausts->folder.c_str(), speed, revs, unsigned(limit));
+                }
+            }
+        }
+        /* The nitro burning: a jet out of every exhaust, kept up while it burns
+         * (the player's own car -- no opponent is given the bottle yet). */
+        if (car == player)
+        {
+            const float nitro = nfs3hp::nitroBurning();
+            s_jet[k] = nitro > 0.0f ? SDL_max(0.0f, s_jet[k] - dt) : 0.0f;
+            if (nitro > 0.0f && s_jet[k] <= 0.0f)
+            {
+                for (std::size_t tip = 0; tip < exhausts->tips.size(); ++tip)
+                    throwFlame(*exhausts, car, tip, kNitroFlame * nitro);
+                s_jet[k] = kNitroEvery;
+                if (trace && !(s_traced[k] & 16))
+                {
+                    s_traced[k] |= 16;
+                    SDL_Log("[EXHAUST] slot %u \"%s\": burning nitro, a jet out of %zu tips at %.1fx",
+                            unsigned(k), exhausts->folder.c_str(), exhausts->tips.size(),
+                            double(kNitroFlame * nitro));
                 }
             }
         }

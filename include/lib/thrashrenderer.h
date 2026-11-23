@@ -132,7 +132,14 @@ public:
             m_particles.reset();   // none left over for the next race's first frame
     }
     /* How fast the first player goes, m/s (glide2x::motion): the motion blur's. */
-    void setMotion(float speed, bool night) { m_speed = speed; m_night = night; }
+    /* `nitro`, 0 to 1: how hard the bottle burns, doubling the motion blur's
+     * strength while it does (a night race has none to double). */
+    void setMotion(float speed, bool night, float nitro = 0.0f)
+    {
+        m_speed = speed;
+        m_night = night;
+        m_nitro = nitro;
+    }
     /* The port's own particles for this frame (glide2x::effectParticles). */
     void setParticles(std::vector<EffectParticle>&& particles)
     {
@@ -350,6 +357,7 @@ private:
     bool                    m_hudBegun = false;     // this frame's
     bool                    m_raceView = false;     // the game thread's
     float                   m_speed = 0.0f;         // the game thread's
+    float                   m_nitro = 0.0f;         // and the nitro's burn, 0 to 1
     bool                    m_night = false;        // the game thread's: a night race (no motion blur, the night lift)
     float                   m_nightLift = 0.0f;     // NFS_NIGHT_LIGHT
     float                   m_blurFringe = 0.0f;    // NFS_BLUR_FRINGE

@@ -2210,18 +2210,19 @@ none):
 
 | Way | Rate | What it reads |
 |---|---|---|
-| Slipstream | 4 s tucked in | `slipstreamOf` (`native_surface.cpp`), the number that pushes the car too |
-| Drift | 3 s at full scrub | the sideways speed the tyre smoke and marks come of: 1.2 m/s up to 4.2 (`native_particles.cpp`'s scrub), which is the slide of a turn, brakes or no brakes, over 6 m/s of speed |
+| Slipstream | 8 s tucked in | `slipstreamOf` (`native_surface.cpp`), the number that pushes the car too |
+| Drift | 15 s at full scrub | the sideways speed the tyre smoke and marks come of: 1.2 m/s up to 4.2 (`native_particles.cpp`'s scrub), which is the slide of a turn, brakes or no brakes, over 6 m/s of speed |
 | Jump | 3.5 s off the ground | `[car+0x164]`, the ticks the car has been off the ground, once past 8 of them -- the air the crash shake calls a landing |
 
 Earning and burning at once nets out: a bottle burns in 3 s, quicker than any of
-the three fills it. On the race's clock with the rest, so a pause earns nothing.
+the three fills it -- the slipstream is the quickest (a quarter of a second of it
+to a second of burn), the drift the slowest (a fifth). On the race's clock with
+the rest, so a pause earns nothing.
 
 Nothing burns in split screen, nor while the start's countdown shows -- the
 game draws it while the race's clock is up to 0x220 (`sub_482620`), which is
 where the cars are let go -- so a car held on the line is not pushed out from
-under it. The bottle starts a race full; how it is earned back (slipstreaming,
-air time, drifting) is the next step of the milestone (`TODOs.md`).
+under it. The bottle starts a race full.
 `NFS_NITRO_TEST` keeps it full and skips the key, so a run with no hands can
 watch the push, and `NFS_NITRO_TRACE` says what it is doing once a second, and
 as it lights and goes out.
@@ -2250,6 +2251,23 @@ does (the race's clock stands then), and every race fills the bottle: the one
 the nitro is first lit in, a race restarted from the pause menu, and a new car
 alike. `NFS_NITRO_CHARGE` pins the level for a look at it full, half and
 empty.
+
+It is felt as well as used (`native_nitro.cpp`'s `nitroPull`, `nitroBurning`):
+
+- The motion blur doubles while it burns, and only where the blur is drawn at
+  all: `glide2x::motion` carries the burn along with the speed, `setMotion` gives
+  it to the renderer, and the composite's strength -- twice `NFS_MOTION_BLUR`
+  times the speed's share -- takes `(1 + nitro)`. A stop, or a night race, has no
+  share for it to double.
+- The view is pulled back with it: `nitroPull` multiplies the projection's
+  tangents on top of the speed's own widening (`projectionSet`,
+  `native_effects.cpp`) -- kicked to 1.3 the frame it lights, eased (8 a second)
+  down to 1.1 while it burns, and back to 1 when it goes out.
+- A jet out of every exhaust while it burns (`native_particles.cpp`,
+  `engineFlames`): a flame every 0.12 s, two and a half times an ordinary
+  flame's size at full burn, so the flames in the air (each living a second,
+  growing, trembling, fading) overlap into a moving stream. `NFS_EXHAUSTS_TRACE`
+  says when a car starts burning.
 
 The key is read where the game keeps its keyboard: a byte a scan code at
 `0x564818`, as the next song's key is. A key message's scan code comes from

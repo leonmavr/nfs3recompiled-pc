@@ -52,8 +52,9 @@ void wetLightsLit(bool lit);
  * none (the native THRASH renderer's whole-picture pass, NFS_GRADE). */
 /* Whether a race is being drawn (the haze and whole-picture pass are for it). */
 void raceView(bool race);
-/* How fast the first player goes, m/s (the motion blur; 0 for none). */
-void motion(float speed, bool night = false);
+/* How fast the first player goes, m/s (the motion blur; 0 for none), and how
+ * hard the nitro burns, 0 to 1 (doubling the blur while it does). */
+void motion(float speed, bool night = false, float nitro = 0.0f);
 /* Port: this frame's particles of the port's own (native_particles.cpp), back
  * to front, the sparks last; false when the renderer cannot draw them (the
  * game's own are kept then). */

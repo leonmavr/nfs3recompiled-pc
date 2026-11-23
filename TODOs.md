@@ -814,8 +814,8 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
       car close by without `car+0x170` set, positions at `car+0x98`), and a
       trickle at the car's own top speed (`car+0xb8`).
       - Done (2026-11-23), to be tested: all three are in `native_nitro.cpp` --
-        `slipstreamOf` at 4 s of slipstream to a bottle, the smoke's own
-        sideways scrub (1.2 to 4.2 m/s, over 6 m/s of speed) at 3 s of drift,
+        `slipstreamOf` at 8 s of slipstream to a bottle, the smoke's own
+        sideways scrub (1.2 to 4.2 m/s, over 6 m/s of speed) at 15 s of drift,
         and `car+0x164` past 8 ticks at 3.5 s off the ground --
         `NFS_NITRO_FILL` scaling all three, and `NFS_NITRO_TRACE` now printing
         `slip`, `sideways`, `air` and what the second earned.  Near misses and
@@ -831,6 +831,13 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
       `scale`, native_particles.cpp:850 -- its size and the light it throws both
       take it, the overrun's own pop is 0.5); optionally a light camera kick from
       the crash shake's machinery (cameraToView, native_effects.cpp).
+      - Done (2026-11-23), to be tested: the blur takes `(1 + burning)`
+        (thrashrenderer.cpp's composite, the burn carried through
+        `glide2x::motion` and `setMotion`), `nitroPull` kicks the projection to
+        1.3 and eases it to 1.1 (1.3 again on a fresh press) on top of
+        `s_speedFov`, and `engineFlames` throws a jet every 0.12 s out of every
+        exhaust at 2.5 times a flame's size while it burns (the player's car).
+        Sound is not in, nor the camera kick.
     - **5. The opponents** (M, after the player's is in).  They never seek to
       refill: a slow trickle plus whatever slipstreams and jumps they happen to
       get.  When to fire: the aim speed it already holds at `car+0x7b0` against

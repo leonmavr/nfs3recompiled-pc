@@ -25,9 +25,8 @@
  *
  * Earned back.  Three ways, each at a rate of its own, NFS_NITRO_FILL times them
  * all (1 by default; 0 or `off` for none):
- *  - the slipstream: kSlipSeconds of one at full strength empties the bottle in
- *    the other direction (slipstreamOf, native_surface.cpp, the same number
- *    that pushes the car);
+ *  - the slipstream: kSlipSeconds of one at full strength fills an empty bottle
+ *    (slipstreamOf, native_surface.cpp, the same number that pushes the car);
  *  - a drift: the tyres dragged sideways, kDriftSeconds of one at full scrub --
  *    the sideways speed the tyre smoke and marks come of (native_particles.cpp,
  *    the same 1.2 m/s up to 4.2), which is the sliding of a turn, brakes or no
@@ -75,13 +74,19 @@ constexpr float kMostSeconds = 10.0f;            // the most NFS_NITRO_SECONDS m
 constexpr float kRelight = 0.15f;                // emptied below this, it cannot be lit again
 // What fills it, in seconds of each to fill an empty bottle (NFS_NITRO_FILL
 // scales all three).
-constexpr float kSlipSeconds = 4.0f;             // tucked in behind another car
-constexpr float kDriftSeconds = 3.0f;            // tyres dragged sideways
+constexpr float kSlipSeconds = 8.0f;             // tucked in behind another car
+constexpr float kDriftSeconds = 15.0f;           // tyres dragged sideways
 constexpr float kAirSeconds = 3.5f;              // off the ground, a second each 3.5
 constexpr float kDriftFrom = 1.2f;               // m/s sideways: the tyre smoke's own thresholds
 constexpr float kDriftFull = 4.2f;               // (native_particles.cpp's scrub)
 constexpr float kDriftLeastSpeed = 6.0f;         // m/s: slower than this is not a drift
 constexpr x86::sreg32 kLeastAir = 8;             // ticks off the ground before a jump counts
+// The view's pull-back when the bottle lights (the projection's tangents, times
+// the speed's own widening): a kick at kKickPull, settling to kHoldPull while it
+// burns, and back to none after.
+constexpr float kKickPull = 1.3f;
+constexpr float kHoldPull = 1.1f;
+constexpr float kPullEase = 8.0f;                // 1/s: to the settle, and back
 constexpr float kEase = 12.0f;                   // 1/s: how fast burning eases to on or off
 }  // namespace nitro
 
@@ -124,6 +129,7 @@ struct State
     bool wasLit = false;
     x86::sreg32 traceAt = 0;    // the race tick it last said anything at
     float earned = 0.0f;        // what the race has put in since that, for the trace
+    float pull = 1.0f;          // the view's pull-back now, kKickPull down to 1
 };
 State s_state;
 
@@ -173,6 +179,11 @@ float nitroCharge()
 float nitroBurning()
 {
     return s_state.burning;
+}
+
+float nitroPull()
+{
+    return s_state.pull;
 }
 
 void nitroFrame(win32::WinApplication* app, int ticks)
@@ -273,9 +284,16 @@ void nitroFrame(win32::WinApplication* app, int ticks)
 
     s_state.burning += ((s_state.lit ? 1.0f : 0.0f) - s_state.burning) * SDL_min(1.0f, dt * kEase);
 
+    /* The light: the view kicked back as it lights, then held a little wider
+     * while it burns, and back to none after -- eased on the race's clock. */
+    if (s_state.lit && !s_state.wasLit)
+        s_state.pull = kKickPull;
+    const float pullWanted = s_state.lit ? kHoldPull : 1.0f;
+    s_state.pull += (pullWanted - s_state.pull) * SDL_min(1.0f, dt * kPullEase);
+
     if (trace && s_state.lit != s_state.wasLit)
-        SDL_Log("[NITRO] t %d %s, charge %.2f speed %.1f", int(clock), s_state.lit ? "lit" : "out",
-                s_state.charge, speed);
+        SDL_Log("[NITRO] t %d %s, charge %.2f speed %.1f, the view pulled to %.2f", int(clock),
+                s_state.lit ? "lit" : "out", s_state.charge, speed, s_state.pull);
     s_state.wasLit = s_state.lit;
 
     if (trace && (clock / 64 != s_state.traceAt / 64 || s_state.traceAt == 0))
@@ -286,10 +304,10 @@ void nitroFrame(win32::WinApplication* app, int ticks)
                                                + valueAt(app, car + kCarVelocity + 8) * valueAt(app, car + kCarRight + 8))
                                    : 0.0f;
         SDL_Log("[NITRO] t %d charge %.2f burning %.2f speed %.1f %.1f m/s2 key %d slip %.2f sideways %.1f air %u"
-                " earned %.3f",
+                " earned %.3f pull %.2f",
                 int(clock), s_state.charge, s_state.burning, speed, push * SDL_clamp(1.0f - speed / kTaper, 0.0f, 1.0f),
                 int(keyDown), car ? slipstreamOf(app, car) : 0.0f, sideways,
-                car ? unsigned(app->getMemory<uint16_t>(car + kCarAir)) : 0u, s_state.earned);
+                car ? unsigned(app->getMemory<uint16_t>(car + kCarAir)) : 0u, s_state.earned, s_state.pull);
         s_state.earned = 0.0f;
     }
 }

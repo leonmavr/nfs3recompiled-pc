@@ -1082,6 +1082,7 @@ void nowPlayingSwap(win32::WinApplication* app, x86::CPU& cpu);
 void slipstreamTick(win32::WinApplication* app);      // native_slipstream.cpp, the slipstream's icon
 void standingsTick(win32::WinApplication* app);       // native_standings.cpp, the opponents' list
 void nitroGaugeTick(win32::WinApplication* app);      // native_nitro_gauge.cpp, the bottle of nitro
+float nitroBurning();                                 // native_nitro.cpp, how hard it burns, 0 to 1
 
 void musicIndexOpened(win32::WinApplication* app, x86::reg32 path)
 {
@@ -2661,7 +2662,7 @@ void colourGradeTick(win32::WinApplication* app)
             s_speed = 0.0f;
         s_clock = clock;
         // And whether it is night ([0x6fd4c8]): no motion blur then, and the night lift.
-        win32::glide2x::motion(s_speed, app->getMemory<x86::reg32>(0x6fd4c8) != 0);
+        win32::glide2x::motion(s_speed, app->getMemory<x86::reg32>(0x6fd4c8) != 0, nfs3hp::nitroBurning());
         ::nfs3hp::windSpeed(s_speed);   // and the wind's roar (native_mixer.cpp)
     }
     win32::glide2x::colourGrade(grade.red, grade.green, grade.blue, grade.saturation, grade.contrast);

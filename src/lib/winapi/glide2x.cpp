@@ -204,10 +204,10 @@ bool overlayFrame(int layer, std::shared_ptr<const Overlay> overlay)
     return true;
 }
 
-void motion(float speed, bool night)
+void motion(float speed, bool night, float nitro)
 {
     if (s_directRenderer)
-        s_directRenderer->setMotion(speed, night);
+        s_directRenderer->setMotion(speed, night, nitro);
 }
 
 void colourGrade(float red, float green, float blue, float saturation, float contrast)

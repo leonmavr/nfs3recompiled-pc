@@ -24,6 +24,10 @@ float nitroCharge();
 /* How hard it burns, 0 to 1, eased: for the gauge and the feel. */
 float nitroBurning();
 
+/* How much wider the view is pulled while it burns: 1 for none, kicked to
+ * kKickPull as it lights and held at kHoldPull after. */
+float nitroPull();
+
 /* The key that lights it, in the game's own shape for a binding: a character,
  * a scan code and the device (4 is the keyboard). */
 x86::reg32 nitroKey();

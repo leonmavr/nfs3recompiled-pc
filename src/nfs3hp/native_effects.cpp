@@ -1,5 +1,6 @@
 #include <nfs3hp.h>
 #include "native_guest.h"
+#include "native_nitro.h"
 #include <SDL3/SDL.h>
 
 /* Port: the race's effects, made more of (tools/apply_native_effects.py).
@@ -223,7 +224,11 @@ static float speedFovShare(float speed)
  * zero -- each angle becomes the one whose tangent is s_speedFov times its own. */
 bool projectionSet(win32::WinApplication* app, x86::CPU& cpu)
 {
-    if (s_speedFov <= 1.0001f || !raceIsRunning() || app->getMemory<x86::reg32>(0x6fd3b0) == 1)
+    /* And the nitro's pull-back on top of the speed's widening (nitroPull,
+     * native_nitro.cpp): kicked out as the bottle lights, held a little wide
+     * while it burns, back to none after. */
+    const float fov = s_speedFov * nfs3hp::nitroPull();
+    if (fov <= 1.0001f || !raceIsRunning() || app->getMemory<x86::reg32>(0x6fd3b0) == 1)
         return false;
     const x86::reg32 args = cpu.esp;
     const float width = app->getMemory<float>(args + 0xc);
@@ -239,7 +244,7 @@ bool projectionSet(win32::WinApplication* app, x86::CPU& cpu)
     for (const x86::reg32 at : { args + 0x14, args + 0x18 })
     {
         const float angle = app->getMemory<float>(at);
-        const double wide = SDL_atan(SDL_tan(double(angle) * SDL_PI_D / 180.0) * double(s_speedFov)) * 180.0 / SDL_PI_D;
+        const double wide = SDL_atan(SDL_tan(double(angle) * SDL_PI_D / 180.0) * double(fov)) * 180.0 / SDL_PI_D;
         app->getMemory<float>(at) = float(SDL_min(wide, 85.0));
     }
     return false;
