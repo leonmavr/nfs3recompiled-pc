@@ -2204,6 +2204,19 @@ top while the push is felt low down. Ticked from `surfaceFrame`
 (`native_surface.cpp`) on the race's clock: a pause neither burns it nor fills
 it.
 
+Earned back, three ways, each at its own rate -- seconds of it to fill an empty
+bottle -- all of them scaled by `NFS_NITRO_FILL` (1; up to 5, `0`/`off` for
+none):
+
+| Way | Rate | What it reads |
+|---|---|---|
+| Slipstream | 4 s tucked in | `slipstreamOf` (`native_surface.cpp`), the number that pushes the car too |
+| Drift | 3 s at full scrub | the sideways speed the tyre smoke and marks come of: 1.2 m/s up to 4.2 (`native_particles.cpp`'s scrub), which is the slide of a turn, brakes or no brakes, over 6 m/s of speed |
+| Jump | 3.5 s off the ground | `[car+0x164]`, the ticks the car has been off the ground, once past 8 of them -- the air the crash shake calls a landing |
+
+Earning and burning at once nets out: a bottle burns in 3 s, quicker than any of
+the three fills it. On the race's clock with the rest, so a pause earns nothing.
+
 Nothing burns in split screen, nor while the start's countdown shows -- the
 game draws it while the race's clock is up to 0x220 (`sub_482620`), which is
 where the cars are let go -- so a car held on the line is not pushed out from
@@ -3557,6 +3570,7 @@ the next time the game starts.
 | `NFS_NITRO_SECONDS` | `3` | How long a full bottle burns, up to 10 (Nitro). |
 | `NFS_NITRO_KEY` | `0x00002a04` | The key that lights it: a binding's character, scan code and device. Left shift as shipped; Controls writes it (Nitro). |
 | `NFS_NITRO_UI` | on | `0`/`off`: no bottle on the HUD (Nitro). |
+| `NFS_NITRO_FILL` | `1` | How quickly the race fills the bottle, a multiplier on the slipstream's, a drift's and a jump's, up to 5; `0`/`off` for a bottle nothing fills (Nitro). |
 | `NFS_NITRO_CHARGE` | unset | `0` to `1`: pins the bottle's level there, for a look at the gauge (Nitro). |
 | `NFS_OPPONENT_LIST` | on | `0`/`off`: the game's own standings table instead of the port's list. |
 | `NFS_KNOCK_TREES` | on (`1`) | `0`/`off`: trees and lamp posts stand as the game has them, solid (Trees and lamp posts knocked down). |

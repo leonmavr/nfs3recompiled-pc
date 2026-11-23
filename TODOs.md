@@ -813,6 +813,13 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
       an empty bottle never dead-ends.  Later, if it wants more: near misses (a
       car close by without `car+0x170` set, positions at `car+0x98`), and a
       trickle at the car's own top speed (`car+0xb8`).
+      - Done (2026-11-23), to be tested: all three are in `native_nitro.cpp` --
+        `slipstreamOf` at 4 s of slipstream to a bottle, the smoke's own
+        sideways scrub (1.2 to 4.2 m/s, over 6 m/s of speed) at 3 s of drift,
+        and `car+0x164` past 8 ticks at 3.5 s off the ground --
+        `NFS_NITRO_FILL` scaling all three, and `NFS_NITRO_TRACE` now printing
+        `slip`, `sideways`, `air` and what the second earned.  Near misses and
+        the top-speed trickle are not in.
     - **4. Immersion** (S to M).  Stronger motion blur while it burns (the
       renderer's `u_blur`, thrashrenderer.cpp:3119, fed through the same
       `setMotion` the speed uses); a brief FOV kick on the press and back over a

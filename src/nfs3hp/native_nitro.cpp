@@ -23,15 +23,30 @@
  * are let go -- so a car held on the line is not pushed out from under it.  A
  * standstill is where it is worth the most, and it is meant to be lit there.
  *
- * The bottle starts a race full and empties as it burns; how it is earned back
- * (slipstreaming, air time, drifting) is the next step of the milestone
- * (TODOs.md).  NFS_NITRO_TEST keeps it full, so a headless run can watch the
- * push, and NFS_NITRO_TRACE says what it is doing once a second, and as it
- * lights and goes out. */
+ * Earned back.  Three ways, each at a rate of its own, NFS_NITRO_FILL times them
+ * all (1 by default; 0 or `off` for none):
+ *  - the slipstream: kSlipSeconds of one at full strength empties the bottle in
+ *    the other direction (slipstreamOf, native_surface.cpp, the same number
+ *    that pushes the car);
+ *  - a drift: the tyres dragged sideways, kDriftSeconds of one at full scrub --
+ *    the sideways speed the tyre smoke and marks come of (native_particles.cpp,
+ *    the same 1.2 m/s up to 4.2), which is the sliding of a turn, brakes or no
+ *    brakes;
+ *  - a jump: kAirSeconds of one per second off the ground, once it has been off
+ *    for kLeastAir ticks -- the same air the crash shake calls a landing
+ *    ([car+0x164], native_crash.cpp).
+ * Earning and burning at once is allowed and nets out: a bottle burns in
+ * kSeconds, which is quicker than any of the three fills it.
+ *
+ * NFS_NITRO_TEST keeps it full, so a headless run can watch the push, and
+ * NFS_NITRO_TRACE says what it is doing once a second -- its charge, what the
+ * second earned and of what: `slip`, `sideways` and `air` -- and as it lights
+ * and goes out. */
 namespace nfs3hp
 {
 
-bool raceIsRunning();                       // nfs3hp_main.cpp
+bool raceIsRunning();                                            // nfs3hp_main.cpp
+float slipstreamOf(win32::WinApplication* app, x86::reg32 car);   // native_surface.cpp
 
 namespace
 {
@@ -44,7 +59,9 @@ constexpr x86::reg32 kRaceClock = 0x7d3684;      // 64 ticks a second
 constexpr x86::reg32 kSplitScreen = 0x6fd3b0;    // 1: two players
 constexpr x86::reg32 kKeys = 0x564818;           // a byte a scan code: held
 constexpr x86::reg32 kCarVelocity = 0xa4;        // floats x, y, z, m/s
+constexpr x86::reg32 kCarRight = 0xc0;
 constexpr x86::reg32 kCarForward = 0xd8;
+constexpr x86::reg32 kCarAir = 0x164;            // word: ticks off the ground
 constexpr x86::sreg32 kCountdownTo = 0x220;      // sub_482620 draws the start's countdown up to here
 constexpr x86::reg32 kKeyboard = 4;              // a binding's low byte: the keyboard's
 // The port's.
@@ -56,6 +73,15 @@ constexpr float kTaper = 90.0f;                  // m/s: the push is gone by her
 constexpr float kSeconds = 3.0f;                 // a full bottle burns this long
 constexpr float kMostSeconds = 10.0f;            // the most NFS_NITRO_SECONDS may ask for
 constexpr float kRelight = 0.15f;                // emptied below this, it cannot be lit again
+// What fills it, in seconds of each to fill an empty bottle (NFS_NITRO_FILL
+// scales all three).
+constexpr float kSlipSeconds = 4.0f;             // tucked in behind another car
+constexpr float kDriftSeconds = 3.0f;            // tyres dragged sideways
+constexpr float kAirSeconds = 3.5f;              // off the ground, a second each 3.5
+constexpr float kDriftFrom = 1.2f;               // m/s sideways: the tyre smoke's own thresholds
+constexpr float kDriftFull = 4.2f;               // (native_particles.cpp's scrub)
+constexpr float kDriftLeastSpeed = 6.0f;         // m/s: slower than this is not a drift
+constexpr x86::sreg32 kLeastAir = 8;             // ticks off the ground before a jump counts
 constexpr float kEase = 12.0f;                   // 1/s: how fast burning eases to on or off
 }  // namespace nitro
 
@@ -72,6 +98,22 @@ float settingOf(const char* name, float otherwise, float most)
     return parsed >= 0.0f && parsed <= most ? parsed : otherwise;
 }
 
+/* NFS_NITRO_FILL: how quickly the race fills the bottle, a multiplier on the
+ * three ways of earning it (1 by default, up to 5; 0 or `off` for none). */
+float fillRate()
+{
+    static const float rate = [] {
+        const char* text = SDL_getenv("NFS_NITRO_FILL");
+        if (!text || !*text)
+            return 1.0f;
+        if (!SDL_strcasecmp(text, "off"))
+            return 0.0f;
+        const float parsed = float(SDL_atof(text));
+        return parsed >= 0.0f && parsed <= 5.0f ? parsed : 1.0f;
+    }();
+    return rate;
+}
+
 struct State
 {
     x86::reg32 car = 0;         // the car it belongs to: a new one fills the bottle
@@ -81,6 +123,7 @@ struct State
     bool lit = false;           // burning this tick
     bool wasLit = false;
     x86::sreg32 traceAt = 0;    // the race tick it last said anything at
+    float earned = 0.0f;        // what the race has put in since that, for the trace
 };
 State s_state;
 
@@ -178,6 +221,39 @@ void nitroFrame(win32::WinApplication* app, int ticks)
     if (!keyHeld || !allowed)
         s_state.lit = false;
 
+    /* What the race has earned it: the slipstream, a drift, a jump.  On the
+     * race's clock with the rest, so a pause earns nothing. */
+    if (ticks > 0)
+    {
+        float gain = 0.0f;
+        const float slip = slipstreamOf(app, car);
+        if (slip > 0.0f)
+            gain += slip * dt / kSlipSeconds;
+        const bool grounded = app->getMemory<uint16_t>(car + kCarAir) == 0;
+        if (!grounded)
+        {
+            if (app->getMemory<uint16_t>(car + kCarAir) >= uint16_t(kLeastAir))
+                gain += dt / kAirSeconds;
+        }
+        else if (speed > kDriftLeastSpeed)
+        {
+            const float right[3] = { valueAt(app, car + kCarRight), valueAt(app, car + kCarRight + 4),
+                                     valueAt(app, car + kCarRight + 8) };
+            const float v[3] = { valueAt(app, car + kCarVelocity), valueAt(app, car + kCarVelocity + 4),
+                                 valueAt(app, car + kCarVelocity + 8) };
+            const float sideways = SDL_fabsf(v[0] * right[0] + v[1] * right[1] + v[2] * right[2]);
+            const float drift = SDL_clamp((sideways - kDriftFrom) / (kDriftFull - kDriftFrom), 0.0f, 1.0f);
+            if (drift > 0.0f)
+                gain += drift * dt / kDriftSeconds;
+        }
+        if (gain > 0.0f)
+        {
+            gain *= fillRate();
+            s_state.charge = SDL_min(1.0f, s_state.charge + gain);
+            s_state.earned += gain;
+        }
+    }
+
     if (s_state.lit)
     {
         if (!test)
@@ -205,8 +281,16 @@ void nitroFrame(win32::WinApplication* app, int ticks)
     if (trace && (clock / 64 != s_state.traceAt / 64 || s_state.traceAt == 0))
     {
         s_state.traceAt = clock;
-        SDL_Log("[NITRO] t %d charge %.2f burning %.2f speed %.1f %.1f m/s2 key %d", int(clock), s_state.charge,
-                s_state.burning, speed, push * SDL_clamp(1.0f - speed / kTaper, 0.0f, 1.0f), int(keyDown));
+        const float sideways = car ? SDL_fabsf(valueAt(app, car + kCarVelocity) * valueAt(app, car + kCarRight)
+                                               + valueAt(app, car + kCarVelocity + 4) * valueAt(app, car + kCarRight + 4)
+                                               + valueAt(app, car + kCarVelocity + 8) * valueAt(app, car + kCarRight + 8))
+                                   : 0.0f;
+        SDL_Log("[NITRO] t %d charge %.2f burning %.2f speed %.1f %.1f m/s2 key %d slip %.2f sideways %.1f air %u"
+                " earned %.3f",
+                int(clock), s_state.charge, s_state.burning, speed, push * SDL_clamp(1.0f - speed / kTaper, 0.0f, 1.0f),
+                int(keyDown), car ? slipstreamOf(app, car) : 0.0f, sideways,
+                car ? unsigned(app->getMemory<uint16_t>(car + kCarAir)) : 0u, s_state.earned);
+        s_state.earned = 0.0f;
     }
 }
 
