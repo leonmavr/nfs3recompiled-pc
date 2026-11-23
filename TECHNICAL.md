@@ -2264,10 +2264,14 @@ It is felt as well as used (`native_nitro.cpp`'s `nitroPull`, `nitroBurning`):
   `native_effects.cpp`) -- kicked to 1.3 the frame it lights, eased (8 a second)
   down to 1.1 while it burns, and back to 1 when it goes out.
 - A jet out of every exhaust while it burns (`native_particles.cpp`,
-  `engineFlames`): a flame every 0.12 s, two and a half times an ordinary
-  flame's size at full burn, so the flames in the air (each living a second,
-  growing, trembling, fading) overlap into a moving stream. `NFS_EXHAUSTS_TRACE`
-  says when a car starts burning.
+  `throwJet`, from `engineFlames`): one every 0.12 s, drawn out along the pipe
+  rather than balled up at its mouth -- two and a quarter times an ordinary
+  flame's length at full burn and 1.3 times its radius. A flame is a round glow,
+  so a long one is `kNitroBeads` of them strung back along the exhaust's way,
+  the one at the mouth alone throwing light on the road (a whole jet of them
+  laid over the tarmac is a sun, not a glow). Each lives a second, growing,
+  trembling and fading, so the ones in the air overlap into a moving stream.
+  `NFS_EXHAUSTS_TRACE` says when a car starts burning.
 
 The key is read where the game keeps its keyboard: a byte a scan code at
 `0x564818`, as the next song's key is. A key message's scan code comes from

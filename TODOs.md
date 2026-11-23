@@ -836,8 +836,9 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
         `glide2x::motion` and `setMotion`), `nitroPull` kicks the projection to
         1.3 and eases it to 1.1 (1.3 again on a fresh press) on top of
         `s_speedFov`, and `engineFlames` throws a jet every 0.12 s out of every
-        exhaust at 2.5 times a flame's size while it burns (the player's car).
-        Sound is not in, nor the camera kick.
+        exhaust while it burns (the player's car) -- 2.25 times a flame's length
+        and 1.3 times its radius, strung back along the pipe as `throwJet`'s two
+        beads. Sound is not in, nor the camera kick.
     - **5. The opponents** (M, after the player's is in).  They never seek to
       refill: a slow trickle plus whatever slipstreams and jumps they happen to
       get.  When to fire: the aim speed it already holds at `car+0x7b0` against

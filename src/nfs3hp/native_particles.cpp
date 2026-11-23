@@ -136,12 +136,18 @@ struct Flame
 };
 constexpr std::size_t kMostFlames = 96;
 /* The bottle of nitro burning throws a jet out of every exhaust for as long as
- * it burns: one flame every kNitroEvery seconds, two and a half times an
- * ordinary flame's size at full burn.  A flame lives a second, so the ones in
- * the air overlap into a stream -- each growing, trembling and fading as it
- * goes, so the stream moves. */
-constexpr float kNitroEvery = 0.12f;    // s between two flames of the jet
-constexpr float kNitroFlame = 2.5f;     // times an ordinary flame's size, at full burn
+ * it burns: one every kNitroEvery seconds, drawn out along the pipe rather than
+ * balled up at its mouth -- kNitroLength times an ordinary flame's length at
+ * full burn, and only kNitroRadius times as thick.  A flame is a round glow, so
+ * a long one is kNitroBeads of them strung back along the exhaust's own way.
+ * A flame lives a second, so the ones in the air overlap into a stream -- each
+ * growing, trembling and fading as it goes, so the stream moves. */
+constexpr float kNitroEvery = 0.12f;    // s between two jets out of a tip
+constexpr float kNitroLength = 2.25f;   // times an ordinary flame's length, at full burn
+constexpr float kNitroRadius = 1.3f;    // times an ordinary flame's radius
+constexpr int kNitroBeads = 2;          // flames strung out along the one jet
+constexpr float kNitroPool = 0.5f;      // the light the jet throws, times an ordinary flame's
+constexpr float kNitroDim = 0.7f;       // a bead's colour, times the car's flame
 std::vector<Flame> s_flames;
 x86::reg32 s_gear[16];   // each car's gear, as last seen: a shift up is a flame
 float s_pop[16];         // seconds until a car revving at rest pops its next flame
@@ -882,6 +888,43 @@ void throwFlames(const CarExhausts& exhausts, x86::reg32 car)
         throwFlame(exhausts, car, tip);
 }
 
+/* The nitro's jet out of one of a car's exhausts: kNitroBeads flames, each
+ * kNitroRadius times an ordinary flame's radius, strung back along the pipe so
+ * the whole is kNitroLength times as long -- tip to tail exactly that, the row
+ * of them spaced to just overlap.  `strength` is how hard the bottle burns. */
+void throwJet(const CarExhausts& exhausts, x86::reg32 car, std::size_t tip, float strength)
+{
+    /* An ordinary flame's own two measures: its radius, and the whole of it
+     * (a diameter).  The jet is so many of each. */
+    const float ordinary = SDL_clamp(exhausts.tips[tip].radius * 2.6f, 0.05f, 0.16f);
+    const float radius = ordinary * kNitroRadius * strength;
+    const float length = 2.0f * ordinary * kNitroLength * strength;
+    const float step = (length - 2.0f * radius) / float(SDL_max(1, kNitroBeads - 1));
+    for (int bead = 0; bead < kNitroBeads; ++bead)
+    {
+        Flame flame{};
+        flame.car = car;
+        flame.exhausts = &exhausts;
+        flame.at[0] = exhausts.tips[tip].x;
+        flame.at[1] = exhausts.tips[tip].y;
+        flame.at[2] = exhausts.tips[tip].z - 0.06f - (radius + step * float(bead));
+        flame.life = 1.0f;
+        flame.size = radius;
+        /* Only the bead at the pipe's mouth lights the road: a whole jet of them
+         * laid over the tarmac is a sun, not a glow. */
+        flame.light = bead == 0 ? kNitroRadius * strength * kNitroPool : 0.0f;
+        flame.seed = random01();
+        /* Dimmed, the beads of a jet add up to about one flame's brightness --
+         * laid over each other they would burn white through the middle. */
+        for (int i = 0; i < 3; ++i)
+            flame.colour[i] = exhausts.flame[i] * kNitroDim;
+        /* As throwFlame: the oldest flame makes room for a new one. */
+        if (s_flames.size() >= kMostFlames)
+            s_flames.erase(s_flames.begin());
+        s_flames.push_back(flame);
+    }
+}
+
 /* A pop of the overrun -- a downshift, or the throttle lifted at the top of the
  * revs: one exhaust, half the size, a crackle rather than a flame. */
 void popFlame(const CarExhausts& exhausts, x86::reg32 car)
@@ -1073,14 +1116,15 @@ void engineFlames(win32::WinApplication* app, float dt)
             if (nitro > 0.0f && s_jet[k] <= 0.0f)
             {
                 for (std::size_t tip = 0; tip < exhausts->tips.size(); ++tip)
-                    throwFlame(*exhausts, car, tip, kNitroFlame * nitro);
+                    throwJet(*exhausts, car, tip, nitro);
                 s_jet[k] = kNitroEvery;
                 if (trace && !(s_traced[k] & 16))
                 {
                     s_traced[k] |= 16;
-                    SDL_Log("[EXHAUST] slot %u \"%s\": burning nitro, a jet out of %zu tips at %.1fx",
+                    SDL_Log("[EXHAUST] slot %u \"%s\": burning nitro, a jet out of %zu tips, %.2fx long "
+                            "and %.2fx as thick",
                             unsigned(k), exhausts->folder.c_str(), exhausts->tips.size(),
-                            double(kNitroFlame * nitro));
+                            double(kNitroLength * nitro), double(kNitroRadius * nitro));
                 }
             }
         }
