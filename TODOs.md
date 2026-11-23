@@ -745,6 +745,79 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   in the HUD; it should be right of the speed
   meter as a vertical  bottle-shaped bar if gauge is selected to be on the top part of screen,
   else as an outer circle around it.
+  - The way in (decided 2026-11-23): the gauge gets a movable element of its own
+    rather than hanging off the speedometer; the bottle is earned from
+    slipstreaming, air time and drifting first; the player has nitro before the
+    opponents do.  Six steps, each a commit of its own and each playable on its
+    own, in this order -- the resources each needs are named where it uses them.
+    - **1. Its state and its push** (S).  `src/nfs3hp/native_nitro.cpp`, ticked
+      from `surfaceFrame` (native_surface.cpp:662) beside `slipstream(app, ticks)`
+      and on the race's clock, so a pause neither burns nor refills it: each car
+      slot's charge 0 to 1, whether it is burning and since when, a key (an ini
+      key code like `NFS_NEXT_SONG_KEY`, native_frontend_controls.cpp) and a pad
+      button.  The force is the slipstream's own way of moving a car -- a push
+      along forward (`car+0xd8`) added to the velocity (`car+0xa4`, `+0xa8`,
+      `+0xac`), as `slipstream()` does it (native_surface.cpp:493): a = kPush x
+      (1 - v / vBoost), 4 to 6 m/s2 and about a tenth more top speed, so no
+      engine, gearbox or drag code is touched and no generated code changes.
+      Switches `NFS_NITRO`, `NFS_NITRO_PUSH`, `NFS_NITRO_SECONDS` and
+      `NFS_NITRO_TEST` (a bottle that never empties), and a `[NITRO]` trace a
+      second.  Balance per car can come from its `carp.txt` -- its maximum
+      velocity and its acceleration against speed, which tools/car_perf.py
+      already reads.
+    - **2. The gauge** (M).  A movable element of its own, so HUD -> Positions
+      frames, drags and measures the bottle itself: the replay bar's rectangle,
+      element 8 of the 23 a player (elements 1, 3, 6 and 8 are the analog
+      speedometer and tachometer, the tutorial icon and the replay bar,
+      nfs3hp_main.cpp:624), which draws nothing in a race; the tutorial icon (6)
+      and the spike belt indicator (21) are the fallbacks if it ever does.  The
+      element's rectangle is written from the layout every race frame as the
+      opponents' list writes its own (native_standings.cpp's `writeRect`), and
+      the bottle drawn into it as a layer of the overlay (lib/overlay.h): the
+      picture, then the fill through an interior mask baked at load the way the
+      slipstream's halo is (native_slipstream.cpp), its gradient from the
+      overlay's per-vertex colours -- one quad, one colour at the top and another
+      at the bottom.  The widescreen path has to be told the element is the
+      port's (widescreenHudScale, nfs3hp_main.cpp:597): those elements are
+      narrowed on a wide screen, and the editor's frame would drift from the
+      bottle drawn.  Art: `assets/nitro/bottle.png`, copied beside the executable
+      and bundled in the APK as the slipstream's icon is (CMakeLists.txt,
+      android/app/build.gradle).  Furnishing and text, if any, from the minimap's
+      code (`panelFurniture`, `minimapSprites`) and the HUD's font
+      (native_hud_font.cpp).
+    - **3. Earning it back** (M).  Three sources first, each a rate in the ini,
+      all of them data the port already computes: the slipstream
+      (`slipstreamOf()`, native_surface.cpp:478 -- the strongest, and the one
+      that ties nitro to the game's own drafting), air time (`car+0x164`, ticks
+      in the air, credited on landing as the crash shake reads it,
+      native_crash.cpp:51), and drift (the sideways speed against the car's right
+      axis that the tyre smoke already works out, native_particles.cpp:1395,
+      with the throttle held).  A small trickle when none of them is happening, so
+      an empty bottle never dead-ends.  Later, if it wants more: near misses (a
+      car close by without `car+0x170` set, positions at `car+0x98`), and a
+      trickle at the car's own top speed (`car+0xb8`).
+    - **4. Immersion** (S to M).  Stronger motion blur while it burns (the
+      renderer's `u_blur`, thrashrenderer.cpp:3119, fed through the same
+      `setMotion` the speed uses); a brief FOV kick on the press and back over a
+      tenth of a second (`s_speedFov`, native_effects.cpp:177); sound -- a whoosh
+      as it lights and a hiss while it burns, made by the mixer's own add as the
+      wind is (native_mixer.cpp) or played from the game's banks through
+      `sub_4182b0` as the port's crash is (native_crash.cpp:211); **exhaust
+      flames 2.5 times their size while the key is held** (`throwFlame`'s
+      `scale`, native_particles.cpp:850 -- its size and the light it throws both
+      take it, the overrun's own pop is 0.5); optionally a light camera kick from
+      the crash shake's machinery (cameraToView, native_effects.cpp).
+    - **5. The opponents** (M, after the player's is in).  They never seek to
+      refill: a slow trickle plus whatever slipstreams and jumps they happen to
+      get.  When to fire: the aim speed it already holds at `car+0x7b0` against
+      its own speed at `car+0x4f4` (the game's aim already carries the corner's
+      speed, so the difference is the straight ahead of it), the line it keeps to
+      at `car+0x7b8` steady, nothing within a dozen metres ahead (the "held up"
+      test, native_ai.cpp:521), not crooked and not in the air.  Who uses it
+      early and who saves it is `kDrivers`' business (native_ai.cpp:104).
+    - **6. Switches, docs and the TODO** (S).  The six switches in the ini's
+      defaults (native_settings.cpp), a "Nitro" section in TECHNICAL.md with the
+      numbers the port settled on, and this entry ticked with what is left.
 - [ ] More means/more effective stratgies of police to chase you; e.g. at higher heat levels; helicopter
 - [x] Mark exhausts in the side view too (some cars have side exits).
   - Done: `tools/car_exhausts.py` marks in any of its three views -- from
