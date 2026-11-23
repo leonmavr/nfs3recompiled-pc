@@ -2213,6 +2213,26 @@ air time, drifting) is the next step of the milestone (`TODOs.md`).
 watch the push, and `NFS_NITRO_TRACE` says what it is doing once a second, and
 as it lights and goes out.
 
+The bottle on the screen (`native_nitro_gauge.cpp`, `NFS_NITRO_UI`, on) is
+drawn from the player's own SVG, `assets/nitro/nos_bottle.svg`, baked by
+`tools/generate_nitro_art.py` (cairosvg) into `assets/nitro/nitro-atlas.png`:
+two tiles of 184 by 465 texels, the silhouette filled solid and the bottle as
+drawn -- grey outline, blue valve, the label whose window is cut out. The first
+masks the liquid: nothing outside the outline is painted, and the window, the
+label's 40% blue and the lettering cut out of it behave as they do on a real
+bottle -- the window shows the liquid, the label tints it, the opaque parts
+hide it, and the second tile goes over the liquid to do so. The liquid rises
+from the bottom by the level (`nitroCharge`, 0 to 1), a straight surface across
+the bottle: both the quad and the texels it reads are cut, so the shape is
+never squashed. Its colour runs across the bottle from `#b8523b` at the left to
+`#47e000` at the right, the right end fading back towards the left as the
+bottle empties -- warm red nearly empty, green full -- in `kSlices` columns of
+one tinted quad each, so no shader is added for it. As tall as the slipstream's
+icon (84 HUD units) and to its right (62 from the left, its bottom 14 from the
+bottom), as a layer of the port's own overlay (`OverlayNitro`); a movable
+element of its own, HUD -> Positions, is still to come. `NFS_NITRO_CHARGE`
+pins the level for a look at it full, half and empty.
+
 The key is read where the game keeps its keyboard: a byte a scan code at
 `0x564818`, as the next song's key is. A key message's scan code comes from
 SDL's scancode through `s_scancodeTable` (`src/lib/window.cpp`), which covered
@@ -3531,6 +3551,8 @@ the next time the game starts.
 | `NFS_NITRO_PUSH` | `5` | m/s2 the bottle adds at a standstill, less the faster the car goes; up to 15 (Nitro). |
 | `NFS_NITRO_SECONDS` | `3` | How long a full bottle burns, up to 10 (Nitro). |
 | `NFS_NITRO_KEY` | `0x00002a04` | The key that lights it: a binding's character, scan code and device. Left shift as shipped; Controls writes it (Nitro). |
+| `NFS_NITRO_UI` | on | `0`/`off`: no bottle on the HUD (Nitro). |
+| `NFS_NITRO_CHARGE` | unset | `0` to `1`: pins the bottle's level there, for a look at the gauge (Nitro). |
 | `NFS_OPPONENT_LIST` | on | `0`/`off`: the game's own standings table instead of the port's list. |
 | `NFS_KNOCK_TREES` | on (`1`) | `0`/`off`: trees and lamp posts stand as the game has them, solid (Trees and lamp posts knocked down). |
 | `NFS_TREE_MASS` | `1` | Times 150 kg: how much a tree slows the car that knocks it down; `0` for none. |

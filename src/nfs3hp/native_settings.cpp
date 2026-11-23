@@ -109,6 +109,7 @@ each one does.
 # NFS_NITRO_PUSH = 5
 # NFS_NITRO_SECONDS = 3
 # NFS_NITRO_KEY = 0x00002a04
+# NFS_NITRO_UI = on
 
 [What you feel of the race]
 # NFS_CRASH_SHAKE = 2

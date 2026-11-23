@@ -264,6 +264,14 @@ if(NOT ANDROID)
             "$<TARGET_FILE_DIR:nfs3hp>/assets/minimap"
         COMMENT "Copying minimap sprites beside nfs3hp"
         VERBATIM)
+    set(NITRO_ATLAS "${NFS_ROOT_DIR}/assets/nitro/nitro-atlas.png")
+    set_property(TARGET nfs3hp APPEND PROPERTY LINK_DEPENDS "${NITRO_ATLAS}")
+    add_custom_command(TARGET nfs3hp POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${NFS_ROOT_DIR}/assets/nitro"
+            "$<TARGET_FILE_DIR:nfs3hp>/assets/nitro"
+        COMMENT "Copying the nitro bottle beside nfs3hp"
+        VERBATIM)
     set(SLIP_ICON "${NFS_ROOT_DIR}/assets/slipstream/slip_icon.png")
     set_property(TARGET nfs3hp APPEND PROPERTY LINK_DEPENDS "${SLIP_ICON}")
     add_custom_command(TARGET nfs3hp POST_BUILD

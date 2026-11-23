@@ -10,7 +10,8 @@
  * (ThrashRenderer::drawOverlay) -- the minimap (src/nfs3hp/native_minimap.cpp),
  * the opponents' list (src/nfs3hp/native_standings.cpp), the slipstream's icon
  * (src/nfs3hp/native_slipstream.cpp) and the song now playing
- * (src/nfs3hp/native_now_playing.cpp), each a layer of its own
+ * (src/nfs3hp/native_now_playing.cpp), the nitro bottle
+ * (src/nfs3hp/native_nitro_gauge.cpp), each a layer of its own
  * (OverlayLayer).  Laid out in HUD units: the picture is kOverlayUnits high, x
  * from its left edge, y down from its top, whatever its size in pixels; the
  * renderer scales them by the picture's height. */
@@ -18,14 +19,15 @@ constexpr float kOverlayUnits = 480.0f;
 
 /* The overlay's layers, drawn in this order: each source sets its own.  The
  * opponents' list is over the minimap and under the slipstream's icon, which
- * shares the picture's bottom left with it, and the song's panel slides over
- * them both. */
+ * shares the picture's bottom left with the nitro bottle beside it, and the
+ * song's panel slides over them all. */
 enum OverlayLayer
 {
     OverlayMinimap = 0,
     OverlayStandings = 1,
     OverlaySlip = 2,
-    OverlayNowPlaying = 3,
+    OverlayNitro = 3,
+    OverlayNowPlaying = 4,
     OverlayLayerCount
 };
 

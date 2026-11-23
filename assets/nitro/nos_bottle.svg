@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 368 930" width="368" height="930">
+  <!-- Bottle outline only: grey body is transparent -->
+  <path id="bottle-outline" fill="none" stroke="#4f565b" stroke-width="6" stroke-linejoin="round"
+        d="M130 22 H207 V50 H243 V105 H207 V152 H258
+           A70 70 0 0 1 328 222 V850
+           Q328 905 270 905 H66
+           Q8 905 8 850 V222
+           A70 70 0 0 1 78 152 H130 V105 H100 V50 H130 Z"/>
+
+  <!-- Blue valve notch: solid fill -->
+  <rect x="69" y="33" width="32" height="89" rx="14" fill="#3f5fb0"/>
+
+  <defs>
+    <mask id="nosCut" maskUnits="userSpaceOnUse" x="0" y="0" width="368" height="930">
+      <rect width="368" height="930" fill="#fff"/>
+      <g fill="#000">
+    <!-- N -->
+    <path d="M62 435 V368 H90 L106 402 V368 H132 V435 H105 L88 401 V435 Z"/>
+    <!-- O -->
+    <path fill-rule="evenodd" d="M140 392 H188 V435 H140 Z M155 404 V423 H173 V404 Z"/>
+    <!-- S -->
+    <path d="M196 392 H244 V404 H216 V408 H244 V435 H196 V423 H224 V419 H196 Z"/>
+    <!-- arrow: shaft + head -->
+    <path d="M106 368 H256 V356 L286 374 L256 392 V380 H106 Z"/>
+  </g>
+    </mask>
+  </defs>
+  <g mask="url(#nosCut)">
+  <!-- Label: white border/panel parts are filled white -->
+  <path fill="#ffffff" fill-rule="evenodd" d="M65 326 H270 A30 30 0 0 1 300 356 V674 A30 30 0 0 1 270 704 H65 A30 30 0 0 1 35 674 V356 A30 30 0 0 1 65 326 Z M66 455 H270 A8 8 0 0 1 278 463 V662 A8 8 0 0 1 270 670 H66 A8 8 0 0 1 58 662 V463 A8 8 0 0 1 66 455 Z"/>
+
+  <!-- Blue label background: 40% opacity -->
+  <path fill="#3f5fb0" fill-opacity="0.4" fill-rule="evenodd" d="M66 333 H269 A25 25 0 0 1 294 358 V672 A25 25 0 0 1 269 697 H66 A25 25 0 0 1 41 672 V358 A25 25 0 0 1 66 333 Z M66 455 H270 A8 8 0 0 1 278 463 V662 A8 8 0 0 1 270 670 H66 A8 8 0 0 1 58 662 V463 A8 8 0 0 1 66 455 Z"/>
+  </g>
+
+  <!-- Info panel is now a transparent cut-out -->
+  
+
+  <!-- Blue details inside the panel: one group at 40% opacity so overlaps don't get darker -->
+  <g opacity="0.4" fill="none" stroke="#3f5fb0" stroke-width="3" stroke-linecap="round">
+    <line x1="74" y1="478" x2="262" y2="478"/>
+    <line x1="74" y1="495" x2="262" y2="495"/>
+    <line x1="74" y1="512" x2="262" y2="512"/>
+    <line x1="74" y1="627" x2="262" y2="627"/>
+    <line x1="74" y1="643" x2="262" y2="643"/>
+    <line x1="74" y1="659" x2="262" y2="659"/>
+    <rect x="112" y="540" width="150" height="57" rx="6"/>
+    <path d="M74 568 L107 535 L140 568 L107 601 Z" fill="#3f5fb0" stroke="none"/>
+  </g>
+</svg>

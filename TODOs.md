@@ -794,6 +794,14 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
       android/app/build.gradle).  Furnishing and text, if any, from the minimap's
       code (`panelFurniture`, `minimapSprites`) and the HUD's font
       (native_hud_font.cpp).
+      - Partly done (2026-11-23): the bottle is drawn from the player's own SVG
+        (`assets/nitro/nos_bottle.svg`, baked by tools/generate_nitro_art.py into
+        assets/nitro/nitro-atlas.png -- the silhouette as the liquid's mask, the
+        bottle's own art over it), rising bottom-up by `nitroCharge()` with a
+        gradient across it from #b8523b to #47e000, as tall as the slipstream's
+        icon and to its right (`native_nitro_gauge.cpp`, `NFS_NITRO_UI`).  What
+        is left here is its own element, so HUD -> Positions can move it: it
+        stands at a fixed place until then (element 8, as above).
     - **3. Earning it back** (M).  Three sources first, each a rate in the ini,
       all of them data the port already computes: the slipstream
       (`slipstreamOf()`, native_surface.cpp:478 -- the strongest, and the one

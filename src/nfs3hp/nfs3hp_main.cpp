@@ -1081,6 +1081,7 @@ const char* nowPlayingOverride();                     // and the next song, whil
 void nowPlayingSwap(win32::WinApplication* app, x86::CPU& cpu);
 void slipstreamTick(win32::WinApplication* app);      // native_slipstream.cpp, the slipstream's icon
 void standingsTick(win32::WinApplication* app);       // native_standings.cpp, the opponents' list
+void nitroGaugeTick(win32::WinApplication* app);      // native_nitro_gauge.cpp, the bottle of nitro
 
 void musicIndexOpened(win32::WinApplication* app, x86::reg32 path)
 {
@@ -2677,6 +2678,7 @@ void onSwap(win32::WinApplication* app)
     nfs3hp::nowPlayingTick(app);
     nfs3hp::slipstreamTick(app);
     nfs3hp::standingsTick(app);
+    nfs3hp::nitroGaugeTick(app);
 #ifndef __ANDROID__
     scriptTick();
 #endif
