@@ -635,6 +635,12 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     no car in front, not reversing: put back on the road at once (`unstick`,
     `hitObstacleAhead`, `native_ai.cpp`; TECHNICAL.md, "The opponents'
     driving, tuned").
+- [ ] Wall collisions; current collisions of any car with the wall make it stick
+  to the wall. Make collisions more elastic, preventing exessive sticking.
+  Obvious the more normal the direction of the collision to the wall is , the
+  bigger the kick from it. It's colission physics with near-elastic collision.
+  How close to elastic? You can make a NFS_ switch for it and 0 disables this
+  behavior and reverts to old collision mechanics.
 
 ### UI
 - [ ] Figure out how to add/create menu elements without breaking the visual
@@ -838,7 +844,10 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
         `s_speedFov`, and `engineFlames` throws a jet every 0.12 s out of every
         exhaust while it burns (the player's car) -- 2.25 times a flame's length
         and 1.3 times its radius, strung back along the pipe as `throwJet`'s two
-        beads. Sound is not in, nor the camera kick.
+        beads. Held a fifth of a second out and a quarter back rather than for a
+        frame. Sound is in as a placeholder the port makes from noise, as the
+        wind is (`native_mixer.cpp`): a whoosh as it lights, a hiss while it
+        burns. The camera kick is still out.
     - **5. The opponents** (M, after the player's is in).  They never seek to
       refill: a slow trickle plus whatever slipstreams and jumps they happen to
       get.  When to fire: the aim speed it already holds at `car+0x7b0` against

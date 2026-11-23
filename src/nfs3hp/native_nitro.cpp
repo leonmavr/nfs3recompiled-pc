@@ -82,11 +82,12 @@ constexpr float kDriftFull = 4.2f;               // (native_particles.cpp's scru
 constexpr float kDriftLeastSpeed = 6.0f;         // m/s: slower than this is not a drift
 constexpr x86::sreg32 kLeastAir = 8;             // ticks off the ground before a jump counts
 // The view's pull-back when the bottle lights (the projection's tangents, times
-// the speed's own widening): a kick at kKickPull, settling to kHoldPull while it
-// burns, and back to none after.
+// the speed's own widening): a kick to kKickPull, eased out over kKickIn and
+// back to kHoldPull over kKickOut, which it holds while it burns.
 constexpr float kKickPull = 1.3f;
 constexpr float kHoldPull = 1.1f;
-constexpr float kPullEase = 8.0f;                // 1/s: to the settle, and back
+constexpr float kKickIn = 0.2f;                  // s: eased out to the kick
+constexpr float kKickOut = 0.25f;                // s: and eased back to the held pull
 constexpr float kEase = 12.0f;                   // 1/s: how fast burning eases to on or off
 }  // namespace nitro
 
@@ -130,6 +131,8 @@ struct State
     x86::sreg32 traceAt = 0;    // the race tick it last said anything at
     float earned = 0.0f;        // what the race has put in since that, for the trace
     float pull = 1.0f;          // the view's pull-back now, kKickPull down to 1
+    float sinceLit = 0.0f;      // s since it last lit: the kick's own clock
+    unsigned ignitions = 0;     // how many times it has lit: the sound's cue
 };
 State s_state;
 
@@ -186,10 +189,17 @@ float nitroPull()
     return s_state.pull;
 }
 
+unsigned nitroIgnitions()
+{
+    return s_state.ignitions;
+}
+
 void nitroFrame(win32::WinApplication* app, int ticks)
 {
     using namespace nitro;
-    const float setting = settingOf("NFS_NITRO", 1.0f, 3.0f);
+    /* NFS_NITRO, 4 by default -- four times what the push first was, which a
+     * car could hardly feel -- up to twice that again. */
+    const float setting = settingOf("NFS_NITRO", 4.0f, 8.0f);
     const float push = settingOf("NFS_NITRO_PUSH", kPush, kPushMost) * setting;
     const float seconds = settingOf("NFS_NITRO_SECONDS", kSeconds, kMostSeconds);
     const bool test = SDL_getenv("NFS_NITRO_TEST") != nullptr;
@@ -228,7 +238,10 @@ void nitroFrame(win32::WinApplication* app, int ticks)
     const bool keyDown = heldKey(app, nitroKey()) != 0;
     const bool keyHeld = allowed && (test || keyDown);
     if (!s_state.lit && keyHeld && (s_state.charge > kRelight || test))
+    {
         s_state.lit = true;
+        ++s_state.ignitions;
+    }
     if (!keyHeld || !allowed)
         s_state.lit = false;
 
@@ -285,11 +298,15 @@ void nitroFrame(win32::WinApplication* app, int ticks)
     s_state.burning += ((s_state.lit ? 1.0f : 0.0f) - s_state.burning) * SDL_min(1.0f, dt * kEase);
 
     /* The light: the view kicked back as it lights, then held a little wider
-     * while it burns, and back to none after -- eased on the race's clock. */
-    if (s_state.lit && !s_state.wasLit)
-        s_state.pull = kKickPull;
-    const float pullWanted = s_state.lit ? kHoldPull : 1.0f;
-    s_state.pull += (pullWanted - s_state.pull) * SDL_min(1.0f, dt * kPullEase);
+     * while it burns, and back to none after -- eased on the race's clock.  The
+     * kick is a hump of its own, out over a fifth of a second and back over a
+     * quarter -- the whole of it eased in and out, rather than the one frame the
+     * first of it was, which was no more than a flicker. */
+    s_state.sinceLit = (s_state.lit && !s_state.wasLit) ? 0.0f : s_state.sinceLit + dt;
+    const float up = SDL_max(0.0f, SDL_min(1.0f, s_state.sinceLit / kKickIn));
+    const float down = SDL_max(0.0f, SDL_min(1.0f, (s_state.sinceLit - kKickIn) / kKickOut));
+    const float kick = up * up * (3.0f - 2.0f * up) * (1.0f - down * down * (3.0f - 2.0f * down));
+    s_state.pull = 1.0f + (kHoldPull - 1.0f) * s_state.burning + (kKickPull - kHoldPull) * kick;
 
     if (trace && s_state.lit != s_state.wasLit)
         SDL_Log("[NITRO] t %d %s, charge %.2f speed %.1f, the view pulled to %.2f", int(clock),

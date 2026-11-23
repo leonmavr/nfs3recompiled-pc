@@ -1083,6 +1083,7 @@ void slipstreamTick(win32::WinApplication* app);      // native_slipstream.cpp, 
 void standingsTick(win32::WinApplication* app);       // native_standings.cpp, the opponents' list
 void nitroGaugeTick(win32::WinApplication* app);      // native_nitro_gauge.cpp, the bottle of nitro
 float nitroBurning();                                 // native_nitro.cpp, how hard it burns, 0 to 1
+unsigned nitroIgnitions();                            // and how many times it has lit
 
 void musicIndexOpened(win32::WinApplication* app, x86::reg32 path)
 {
@@ -1202,6 +1203,7 @@ x86::reg32 takeArenaPeak();
 }
 
 namespace nfs3hp { void windSpeed(float speed); }   // native_mixer.cpp
+namespace nfs3hp { void nitroSound(float burning, unsigned ignitions); }   // native_mixer.cpp
 
 namespace
 {
@@ -2664,6 +2666,7 @@ void colourGradeTick(win32::WinApplication* app)
         // And whether it is night ([0x6fd4c8]): no motion blur then, and the night lift.
         win32::glide2x::motion(s_speed, app->getMemory<x86::reg32>(0x6fd4c8) != 0, nfs3hp::nitroBurning());
         ::nfs3hp::windSpeed(s_speed);   // and the wind's roar (native_mixer.cpp)
+        ::nfs3hp::nitroSound(nfs3hp::nitroBurning(), nfs3hp::nitroIgnitions());   // its whoosh and hiss
     }
     win32::glide2x::colourGrade(grade.red, grade.green, grade.blue, grade.saturation, grade.contrast);
 }

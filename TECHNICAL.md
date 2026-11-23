@@ -2191,13 +2191,15 @@ the actions they made and the keys held, twice a second.
 
 ### Nitro
 
-The first player's bottle (`native_nitro.cpp`, `NFS_NITRO`, 1): lit by a key of
+The first player's bottle (`native_nitro.cpp`, `NFS_NITRO`, 4): lit by a key of
 its own -- `NFS_NITRO_KEY`, left shift by default, and Controls lists it as
 Nitro among its rows (`native_frontend_controls.cpp`, the second of the port's
 own rows after the game's thirteen). Held down it burns for `NFS_NITRO_SECONDS`
 (3) and pushes the car along its own way, the way the slipstream pushes one: a
 share of the velocity (`+0xa4`, `+0xa8`, `+0xac`) added each tick, the vertical
-one left alone. `NFS_NITRO_PUSH` (5 m/s2) is what it adds at a standstill, and
+one left alone. `NFS_NITRO_PUSH` (5 m/s2, times `NFS_NITRO`'s 4: 20 m/s2 -- the
+default is what `NFS_NITRO=4` first gave, a car can hardly feel 5) is what it adds
+at a standstill, and
 less the faster the car goes -- nothing at 90 m/s (324 km/h) -- so the engine,
 the gears and the air are untouched and the car keeps its own top speed at the
 top while the push is felt low down. Ticked from `surfaceFrame`
@@ -2261,8 +2263,10 @@ It is felt as well as used (`native_nitro.cpp`'s `nitroPull`, `nitroBurning`):
   share for it to double.
 - The view is pulled back with it: `nitroPull` multiplies the projection's
   tangents on top of the speed's own widening (`projectionSet`,
-  `native_effects.cpp`) -- kicked to 1.3 the frame it lights, eased (8 a second)
-  down to 1.1 while it burns, and back to 1 when it goes out.
+  `native_effects.cpp`). Out to 1.3 over a fifth of a second as it lights, back
+  to 1.1 over a quarter, which it holds while it burns, and home to 1 when it
+  goes out -- both halves eased in and out (a smoothstepped hump on the race's
+  clock), rather than the one frame the kick first was.
 - A jet out of every exhaust while it burns (`native_particles.cpp`,
   `throwJet`, from `engineFlames`): one every 0.12 s, drawn out along the pipe
   rather than balled up at its mouth -- two and a quarter times an ordinary
@@ -2272,6 +2276,15 @@ It is felt as well as used (`native_nitro.cpp`'s `nitroPull`, `nitroBurning`):
   laid over the tarmac is a sun, not a glow). Each lives a second, growing,
   trembling and fading, so the ones in the air overlap into a moving stream.
   `NFS_EXHAUSTS_TRACE` says when a car starts burning.
+
+It is heard as well as seen (`native_mixer.cpp`, `NFS_NITRO_SOUND`, 2 by ear;
+the port's own noise, as the wind is, placeholders both until a sound is chosen
+for them): a whoosh as it lights -- noise through a band swept down from 900 Hz
+to 260 over `kWhooshSeconds` (0.55 s) as it fades -- and a hiss while it burns,
+what a low pass at 1.2 kHz leaves above it, eased with the burn. The game thread
+hands the mixer how hard it burns and how many times it has lit
+(`nitroSound`, from `colourGradeTick` as the wind's speed is); the count going up
+is the edge the whoosh starts on. `NFS_NITRO_SOUND_TRACE` says when one starts.
 
 The key is read where the game keeps its keyboard: a byte a scan code at
 `0x564818`, as the next song's key is. A key message's scan code comes from
@@ -3587,13 +3600,14 @@ the next time the game starts.
 | `NFS_SLIPSTREAM` | on (`1`) | `0`/`off`: no slipstream. A number up to 3: how strong the push behind another car (Slipstreaming). |
 | `NFS_SLIPSTREAM_TRAILS` | on (`1`) | `0`/`off`: no air lines round the player's car in a slipstream (Slipstreaming). |
 | `NFS_SLIP_ICON` | on | `0`/`off`: no icon with the slipstream's time at the bottom left (Slipstreaming). |
-| `NFS_NITRO` | on (`1`) | `0`/`off`: no nitro. A number up to 3: how hard it pushes (Nitro). |
+| `NFS_NITRO` | on (`4`) | `0`/`off`: no nitro. A number up to 8: how hard it pushes -- 4 by default, twice the push it first had (Nitro). |
 | `NFS_NITRO_PUSH` | `5` | m/s2 the bottle adds at a standstill, less the faster the car goes; up to 15 (Nitro). |
 | `NFS_NITRO_SECONDS` | `3` | How long a full bottle burns, up to 10 (Nitro). |
 | `NFS_NITRO_KEY` | `0x00002a04` | The key that lights it: a binding's character, scan code and device. Left shift as shipped; Controls writes it (Nitro). |
 | `NFS_NITRO_UI` | on | `0`/`off`: no bottle on the HUD (Nitro). |
 | `NFS_NITRO_FILL` | `1` | How quickly the race fills the bottle, a multiplier on the slipstream's, a drift's and a jump's, up to 5; `0`/`off` for a bottle nothing fills (Nitro). |
 | `NFS_NITRO_CHARGE` | unset | `0` to `1`: pins the bottle's level there, for a look at the gauge (Nitro). |
+| `NFS_NITRO_SOUND` | `2` | `0`/`off`: no nitro sound. A number up to 3: how loud the whoosh as it lights and the hiss while it burns (Nitro). |
 | `NFS_OPPONENT_LIST` | on | `0`/`off`: the game's own standings table instead of the port's list. |
 | `NFS_KNOCK_TREES` | on (`1`) | `0`/`off`: trees and lamp posts stand as the game has them, solid (Trees and lamp posts knocked down). |
 | `NFS_TREE_MASS` | `1` | Times 150 kg: how much a tree slows the car that knocks it down; `0` for none. |

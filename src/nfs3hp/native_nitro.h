@@ -25,8 +25,12 @@ float nitroCharge();
 float nitroBurning();
 
 /* How much wider the view is pulled while it burns: 1 for none, kicked to
- * kKickPull as it lights and held at kHoldPull after. */
+ * kKickPull over a fifth of a second as it lights and held at kHoldPull after. */
 float nitroPull();
+
+/* How many times the bottle has lit: its edge, for the sound (native_mixer.cpp
+ * plays a whoosh each time the count goes up). */
+unsigned nitroIgnitions();
 
 /* The key that lights it, in the game's own shape for a binding: a character,
  * a scan code and the device (4 is the keyboard). */

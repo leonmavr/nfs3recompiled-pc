@@ -219,6 +219,58 @@ struct Wind
 };
 Wind s_wind;
 
+/* The nitro (NFS_NITRO_SOUND, 2 by ear; up to 3, 0 or `off` for none): the
+ * port's own, made from noise as the wind is, since the game has nothing for it
+ * -- a whoosh as the bottle lights, and a hiss that runs for as long as it
+ * burns, both placeholders until a sound is chosen for them.  The hiss is
+ * noise above 1.2 kHz (a low pass taken off the whole of it), eased up and down
+ * with the burn; the whoosh is a band of it swept down from 900 Hz to 260 as it
+ * fades -- the air being shoved aside.  The game thread says how hard it burns
+ * and how many times it has lit (nitroSound, nfs3hp_main.cpp's colourGradeTick),
+ * the count being the edge a whoosh starts on. */
+std::atomic<float> s_nitroBurn{0.0f};
+std::atomic<unsigned> s_nitroLit{0};
+
+namespace nitro
+{
+constexpr float kHiss = 7000.0f;     // the hiss's level at full burn (the accumulator's units; the wind is 7000)
+constexpr float kWhoosh = 9000.0f;   // the whoosh's at its peak
+constexpr float kWhooshSeconds = 0.55f;   // and how long it takes to fade to nothing
+constexpr float kAttack = 0.05f;     // s: up to it before it fades -- a click otherwise
+constexpr float kHissEase = 0.12f;   // s for the hiss's level to follow the burn
+}  // namespace nitro
+
+float nitroSoundSetting()
+{
+    static const float value = [] {
+        const char* text = SDL_getenv("NFS_NITRO_SOUND");
+        if (!text || !*text || SDL_strcasecmp(text, "on") == 0)
+            return 2.0f;
+        if (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0)
+            return 0.0f;
+        const float parsed = float(SDL_atof(text));
+        return parsed > 0.0f ? SDL_min(parsed, 3.0f) : 2.0f;
+    }();
+    return value;
+}
+
+struct Nitro
+{
+    std::uint32_t seed = 0x51ed270bu;
+    float hiss = 0.0f, kick = 0.0f;
+    unsigned lit = 0;
+    float low[2] = {}, band[2] = {}, bandLow[2] = {};
+
+    float noise()
+    {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        return float(seed >> 8) / 8388608.0f - 1.0f;
+    }
+};
+Nitro s_nitro;
+
 struct Mixer
 {
     win32::WinApplication* app;
@@ -1640,6 +1692,63 @@ struct Mixer
             w32(kReverbIdle, 0);
     }
 
+    /* The nitro (s_nitro, above) into the block, dry: a hiss while it burns and
+     * a whoosh as it lights, the two of them noise through filters of their
+     * own.  The whoosh starts when the game thread's count of ignitions has gone
+     * up -- on a thread of its own, so it is caught here rather than there. */
+    void addNitro(u32 frames, u32 accumulator)
+    {
+        Nitro& n = s_nitro;
+        const float setting = nitroSoundSetting();
+        const float burn = s_nitroBurn.load(std::memory_order_relaxed) * setting;
+        const unsigned lit = s_nitroLit.load(std::memory_order_relaxed);
+        if (lit != n.lit)
+        {
+            n.lit = lit;
+            n.kick = 1.0f;
+            if (SDL_getenv("NFS_NITRO_SOUND_TRACE"))
+                SDL_Log("[NITRO] whoosh %u: %.1f Hz down to %.1f over %.2f s",
+                        lit, 900.0, 260.0, double(nitro::kWhooshSeconds));
+        }
+        if (setting <= 0.0f || (burn <= 0.001f && n.hiss <= 0.001f && n.kick <= 0.0f))
+        {
+            n.hiss = n.kick = 0.0f;
+            return;
+        }
+        const float rate = float(SDL_max(gameSoundRate(), 8000));
+        const float ease = 1.0f - std::exp(-1.0f / (rate * nitro::kHissEase));
+        const float lowK = 1.0f - std::exp(-2.0f * 3.14159265f * 1200.0f / rate);
+        const float fade = 1.0f / (rate * nitro::kWhooshSeconds);
+        const float pi = 3.14159265f;
+        for (u32 k = 0; k < frames; ++k)
+        {
+            n.hiss += (burn - n.hiss) * ease;
+            if (n.kick > 0.0f)
+                n.kick = SDL_max(0.0f, n.kick - fade);
+            /* The whoosh's band, swept down as it goes: 900 Hz to 260. */
+            const float centre = 260.0f + 640.0f * n.kick;
+            const float attack = SDL_min(1.0f, (1.0f - n.kick) * nitro::kWhooshSeconds / nitro::kAttack);
+            const float f = 2.0f * std::sin(pi * SDL_min(centre, rate * 0.2f) / rate);
+            const float common = n.noise();
+            float out[2];
+            for (int side = 0; side < 2; ++side)
+            {
+                const float x = 0.85f * common + 0.4f * n.noise();
+                // The hiss: what a low pass at 1.2 kHz leaves above it.
+                n.low[side] += (x - n.low[side]) * lowK;
+                // The whoosh: a band of the same noise (damping 1.4), swept.
+                const float high = x - n.bandLow[side] - 1.4f * n.band[side];
+                n.band[side] += f * high;
+                n.bandLow[side] += f * n.band[side];
+                out[side] = nitro::kHiss * n.hiss * (x - n.low[side]) * 0.6f
+                            + nitro::kWhoosh * n.kick * n.kick * attack * n.band[side] * 2.2f;
+            }
+            const u32 at = accumulator + ((k << (r8(kShift) & 31)) << 2);
+            w16(at, u16(saturate(i32(s16(at)) + i32(out[0]))));
+            w16(at + 2, u16(saturate(i32(s16(at + 2)) + i32(out[1]))));
+        }
+    }
+
     /* sub_5006f8: one block of at most 256 frames. */
     void block(u32 target, u32 frames)
     {
@@ -1666,7 +1775,10 @@ struct Mixer
         }
         const u32 accumulator = r32(kAccumulator);
         if (!checking)
+        {
             addWind(frames, accumulator);
+            addNitro(frames, accumulator);
+        }
         beforeOutput(frames, accumulator);
         if (r32(kOutput) == 0x520920)
             output(frames, accumulator, target);
@@ -1869,6 +1981,15 @@ bool soundMix(win32::WinApplication* app, x86::CPU& cpu)
 void windSpeed(float speed)
 {
     s_windSpeed.store(speed == speed ? speed : 0.0f, std::memory_order_relaxed);
+}
+
+/* How hard the nitro burns, 0 to 1, and how many times it has lit: from the
+ * game thread each frame, as the wind's speed is. */
+void nitroSound(float burning, unsigned ignitions)
+{
+    s_nitroBurn.store(burning == burning ? SDL_max(0.0f, SDL_min(burning, 1.0f)) : 0.0f,
+                      std::memory_order_relaxed);
+    s_nitroLit.store(ignitions, std::memory_order_relaxed);
 }
 
 }
