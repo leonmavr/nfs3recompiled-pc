@@ -2224,14 +2224,19 @@ bottle -- the window shows the liquid, the label tints it, the opaque parts
 hide it, and the second tile goes over the liquid to do so. The liquid rises
 from the bottom by the level (`nitroCharge`, 0 to 1), a straight surface across
 the bottle: both the quad and the texels it reads are cut, so the shape is
-never squashed. Its colour runs across the bottle from `#b8523b` at the left to
-`#47e000` at the right, the right end fading back towards the left as the
-bottle empties -- warm red nearly empty, green full -- in `kSlices` columns of
-one tinted quad each, so no shader is added for it. As tall as the slipstream's
-icon (84 HUD units) and to its right (62 from the left, its bottom 14 from the
-bottom), as a layer of the port's own overlay (`OverlayNitro`); a movable
-element of its own, HUD -> Positions, is still to come. `NFS_NITRO_CHARGE`
-pins the level for a look at it full, half and empty.
+never squashed and the top band is cut by the surface. Its colour runs up the
+bottle, fixed to the bottle and not to the liquid -- `#b8523b` at its bottom,
+`#47e000` at its top -- so the level reads twice over: how high the surface
+stands and what colour it shows, a nearly empty bottle being the red of its own
+bottom. `kBands` bands make the gradient without a new shader: one tinted quad
+of the mask each. As tall as the slipstream's icon (84 HUD units) and to its
+right (62 from the left, its bottom 14 from the bottom), as a layer of the
+port's own overlay (`OverlayNitro`); a movable element of its own, HUD ->
+Positions, is still to come. It keeps out of a pause, as the slipstream's icon
+does (the race's clock stands then), and every race fills the bottle: the one
+the nitro is first lit in, a race restarted from the pause menu, and a new car
+alike. `NFS_NITRO_CHARGE` pins the level for a look at it full, half and
+empty.
 
 The key is read where the game keeps its keyboard: a byte a scan code at
 `0x564818`, as the next song's key is. A key message's scan code comes from

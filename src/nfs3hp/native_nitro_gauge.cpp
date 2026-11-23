@@ -24,11 +24,11 @@
  * How full.  nitroCharge(), 0 to 1: the liquid rises from the bottle's bottom,
  * a straight surface across it, by cutting both the quad's rectangle and its
  * texels -- the mask's bottom `level` of itself, so the shape is never
- * squashed.  Its colour runs across the bottle, #b8523b at the left edge to
- * #47e000 at the right, and the right end fades back towards the left one as
- * the bottle empties, so a nearly-empty bottle is a warm red at a glance and a
- * full one is green through and through (kLow, kHigh).  `kSlices` columns make
- * the gradient without a new shader: each is one tinted quad of the mask.
+ * squashed.  Its colour runs up the bottle: #b8523b at its bottom to #47e000 at
+ * its top, fixed to the bottle rather than to the liquid (kLow, kHigh), so the
+ * level reads twice over -- how high the surface is, and what colour it shows:
+ * a nearly empty bottle is the red of its own bottom.  `kBands` bands make the
+ * gradient without a new shader: each is one tinted quad of the mask.
  *
  * Where.  Right of the slipstream's icon, as tall as it (kHeight, kLeft,
  * kBottom), drawn as a layer of the port's own overlay (lib/overlay.h,
@@ -36,7 +36,8 @@
  * movable element of its own comes later (TODOs.md, the nitro milestone's
  * second step).  Split screen shows none: the bottle there is the game's to
  * give, as its map is.  NFS_NITRO_CHARGE pins the level, to look at the bottle
- * full, half and empty without a race to fill it.
+ * full, half and empty without a race to fill it.  It keeps out of a pause, as
+ * the slipstream's icon and the song's panel do: the clock stands then.
  *
  * The picture is kept white in its mask and as it was drawn in its art, read
  * from beside the executable (the desktop build copies assets/nitro there) or,
@@ -49,6 +50,10 @@ bool raceIsRunning();   // nfs3hp_main.cpp
 namespace
 {
 constexpr x86::reg32 kSplitScreen = 0x6fd3b0;   // 1: two players, and no nitro of the port's
+constexpr x86::reg32 kRaceClock = 0x7d3684;     // 64 ticks a second
+constexpr Uint64 kPausedNs = 150 * SDL_NS_PER_MS;   // the clock standing this long: a pause
+x86::sreg32 s_lastClock = -1;
+Uint64 s_clockMovedNs = 0;
 }
 
 namespace
@@ -71,7 +76,7 @@ constexpr float kV0 = float(kGutter) / float(kAtlasH), kV1 = float(kGutter + kTi
 constexpr float kHeight = 84.0f;
 constexpr float kLeft = 62.0f;
 constexpr float kBottom = 14.0f;
-constexpr int kSlices = 16;                              // the gradient's columns
+constexpr int kBands = 24;                               // the gradient's bands, bottom to top
 constexpr float kLow[3] = { 184.0f / 255.0f, 82.0f / 255.0f, 59.0f / 255.0f };    // #b8523b, nearly empty
 constexpr float kHigh[3] = { 71.0f / 255.0f, 224.0f / 255.0f, 0.0f / 255.0f };    // #47e000, full
 constexpr float kFillAlpha = 0.92f;
@@ -189,26 +194,27 @@ void draw(const Art& a, float charge)
     const float top = bottom - kHeight;
     if (charge > kLeastLevel)
     {
-        /* The liquid: the mask's bottom `charge` of itself, in columns whose
-         * tint runs from kLow at the bottle's left to as much of kHigh as the
-         * level has got to at its right. */
-        const float surface = bottom - kHeight * charge;
-        const float v0 = kV0 + (1.0f - charge) * (kV1 - kV0);
-        for (int i = 0; i < kSlices; ++i)
+        /* The liquid: the mask's bottom `charge` of itself, in bands whose tint
+         * runs from kLow at the bottle's bottom to kHigh at its top, so the
+         * colour the surface shows is the level itself.  The top band is cut by
+         * the surface. */
+        const int bands = kBands;
+        for (int i = 0; i < bands; ++i)
         {
-            const float across = (float(i) + 0.5f) / float(kSlices);
-            const float x0 = left + width * float(i) / float(kSlices);
-            const float x1 = left + width * float(i + 1) / float(kSlices);
-            const float u0 = kMaskU0 + (kMaskU1 - kMaskU0) * float(i) / float(kSlices);
-            const float u1 = kMaskU0 + (kMaskU1 - kMaskU0) * float(i + 1) / float(kSlices);
+            const float low = float(i) / float(bands);          // 0 at the bottom
+            if (low >= charge)
+                break;
+            const float high = SDL_min(float(i + 1) / float(bands), charge);
+            const float y0 = bottom - kHeight * high;
+            const float y1 = bottom - kHeight * low;
+            const float v0 = kV1 - (kV1 - kV0) * high;
+            const float v1 = kV1 - (kV1 - kV0) * low;
+            const float across = 0.5f * (low + high);
             float tint[3];
             for (int c = 0; c < 3; ++c)
-            {
-                const float right = kLow[c] + (kHigh[c] - kLow[c]) * charge;
-                tint[c] = kLow[c] + (right - kLow[c]) * across;
-            }
-            overlay->quads.push_back({ x0, surface, x1, bottom, u0, v0, u1, kV1, tint[0], tint[1], tint[2], kFillAlpha,
-                                       OverlayQuad::Icon });
+                tint[c] = kLow[c] + (kHigh[c] - kLow[c]) * across;
+            overlay->quads.push_back({ left, y0, left + width, y1, kMaskU0, v0, kMaskU1, v1, tint[0], tint[1],
+                                       tint[2], kFillAlpha, OverlayQuad::Icon });
         }
     }
     overlay->quads.push_back({ left, top, left + width, bottom, kArtU0, kV0, kArtU1, kV1, 1.0f, 1.0f, 1.0f, 1.0f,
@@ -218,11 +224,23 @@ void draw(const Art& a, float charge)
 
 }  // namespace
 
-/* Once a frame (onSwap): the bottle, as full as the nitro is. */
+/* Once a frame (onSwap): the bottle, as full as the nitro is.  Nothing while
+ * the race's clock stands -- a pause, its menu over the picture, or the HUD
+ * editor -- as the slipstream's icon and the song's panel keep out of it too. */
 void nitroGaugeTick(win32::WinApplication* app)
 {
     if (!enabled() || !raceIsRunning() || app->getMemory<x86::reg32>(kSplitScreen) == 1)
+    {
+        s_lastClock = -1;
+        s_clockMovedNs = 0;
         return;
+    }
+    const x86::sreg32 clock = x86::sreg32(app->getMemory<x86::reg32>(kRaceClock));
+    if (clock != s_lastClock)
+        s_clockMovedNs = SDL_GetTicksNS();
+    s_lastClock = clock;
+    if (SDL_GetTicksNS() - s_clockMovedNs > kPausedNs)
+        return;   // a pause: the menu is over the picture, and the bottle is not drawn on it
     const Art* a = art();
     if (!a)
         return;

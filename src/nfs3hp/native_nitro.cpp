@@ -75,6 +75,7 @@ float settingOf(const char* name, float otherwise, float most)
 struct State
 {
     x86::reg32 car = 0;         // the car it belongs to: a new one fills the bottle
+    x86::sreg32 lastClock = -1; // the race's clock as last seen: it going back is a new race
     float charge = 1.0f;        // 0 to 1
     float burning = 0.0f;       // 0 to 1, eased
     bool lit = false;           // burning this tick
@@ -141,15 +142,19 @@ void nitroFrame(win32::WinApplication* app, int ticks)
     const char* trace = SDL_getenv("NFS_NITRO_TRACE");
 
     const x86::reg32 car = app->getMemory<x86::reg32>(kPlayerCar);
-    if (car != s_state.car)
+    const x86::sreg32 clock = x86::sreg32(app->getMemory<x86::reg32>(kRaceClock));
+    /* A new car, the clock gone back, or the clock still short of where the
+     * cars are let go -- a race restarted, or another one started -- fills the
+     * bottle again.  All three, because a restart need not raise one of them:
+     * it may keep the car, keep the clock's own running, or start afresh. */
+    if (car != s_state.car || s_state.lastClock < 0 || clock < s_state.lastClock || clock <= kCountdownTo)
     {
         s_state.car = car;
         s_state.charge = 1.0f;
         s_state.burning = 0.0f;
         s_state.lit = false;
     }
-
-    const x86::sreg32 clock = x86::sreg32(app->getMemory<x86::reg32>(kRaceClock));
+    s_state.lastClock = clock;
     const float dt = ticks > 0 ? float(ticks) / 64.0f : 0.0f;
     float speed = 0.0f;
     if (car)
