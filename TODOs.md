@@ -765,6 +765,15 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
       second.  Balance per car can come from its `carp.txt` -- its maximum
       velocity and its acceleration against speed, which tools/car_perf.py
       already reads.
+      - Done (2026-11-23), to be tested: the bottle, the push and the key are in
+        (`native_nitro.cpp`, `NFS_NITRO`, `NFS_NITRO_PUSH`, `NFS_NITRO_SECONDS`,
+        `NFS_NITRO_KEY`), with left shift as the key it ships with and a Nitro
+        row in Controls (`native_frontend_controls.cpp`, now two rows of the
+        port's own).  Left shift reached the game as scan code 0 -- the port's
+        scan-code table stopped at the hundredth, so no modifier had one
+        (`src/lib/window.cpp`, 256 now).  Nothing burns in split screen or while
+        the start's countdown shows, and a bottle starts a race full: how it is
+        earned back is step 3, and the gauge is step 2.
     - **2. The gauge** (M).  A movable element of its own, so HUD -> Positions
       frames, drags and measures the bottle itself: the replay bar's rectangle,
       element 8 of the 23 a player (elements 1, 3, 6 and 8 are the analog

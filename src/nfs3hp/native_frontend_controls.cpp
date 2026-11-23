@@ -1,13 +1,15 @@
 #include "native_frontend.h"
+#include "native_nitro.h"
 #include <cstdint>
 #include <cstring>
 #include <iterator>
 
 /* The Controls screen's list of the keys a player drives with (a widget of
  * the type "controls", 0x14: control1.mnu and the race's pause screen
- * pscntl1.mnu), decompiled to take one row more than the game's thirteen --
- * Next Song, the port's (native_now_playing.cpp, NFS_NEXT_SONG_KEY) -- and to
- * scroll, the list already filling the screen:
+ * pscntl1.mnu), decompiled to take two rows more than the game's thirteen --
+ * Next Song (native_now_playing.cpp, NFS_NEXT_SONG_KEY) and Nitro
+ * (native_nitro.cpp, NFS_NITRO_KEY) -- and to scroll, the list already filling
+ * the screen:
  *
  *   sub_43c900   drawn: the heading, each row's bar, its key and its name, the
  *                row being bound blinking, the prompt while a key is waited for;
@@ -19,7 +21,7 @@
  * at a time as up or down goes past its ends, and a yellow triangle of the
  * menus' own (mmnu.qfs: yup1, ydn1) just right of the first or last row
  * says there is more that way.  The game's thirteen are each player's control
- * set (sub_4904d0); Next Song is kept by the port.  With two players (split
+ * set (sub_4904d0); the port's two are kept by their own modules.  With two players (split
  * screen, [0x6fd3b0] 1) the list has two columns and both stay the game's own:
  * the generated functions run. */
 namespace nfs3hp
@@ -81,9 +83,23 @@ constexpr GuestString kStrings[] = { kHeading };
 // The game's thirteen rows' names, in their order on screen (the jump table at 0x43c8c8).
 constexpr std::uint32_t kRowText[] = { 0x47, 0x46, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4f, 0x4e, 0x51, 0x1bc, 0x50 };
 constexpr int kGameRows = int(std::size(kRowText));
-constexpr int kRows = kGameRows + 1;       // and Next Song
+
+/* The port's own rows, after the game's thirteen: the name the row shows and
+ * the key it keeps, each in its own module.  Nitro's is left shift by default
+ * (no character, its scan code 0x2a, the keyboard). */
+struct PortRow
+{
+    const char* name;
+    x86::reg32 (*key)();
+    void (*setKey)(x86::reg32);
+};
+constexpr PortRow kPortRows[] = {
+    { "Next song", nextSongKey, setNextSongKey },
+    { "Nitro", nitroKey, setNitroKey },
+};
+constexpr int kPortRowCount = int(std::size(kPortRows));
+constexpr int kRows = kGameRows + kPortRowCount;
 constexpr int kShown = kGameRows;          // as many as fill the screen
-constexpr const char* kNextSongName = "Next song";
 // The triangles: the menus' own, at the right of the first and last rows shown.
 constexpr const char* kUpImage = "yup1";
 constexpr const char* kDownImage = "ydn1";
@@ -92,7 +108,7 @@ constexpr int kTriangleGap = 2;            // the triangle's left past the list'
 
 int s_scroll = 0;            // the first row shown
 x86::reg32 s_list = 0;       // the list it is of
-bool s_nextWaiting = false;  // Next Song's key being waited for: shown as none
+int s_waitingPort = -1;      // the port row whose key is waited for: shown as none
 
 std::int32_t signedWord(const Guest& guest, x86::reg32 address)
 {
@@ -122,13 +138,16 @@ x86::reg32 bindingOf(const Guest& guest, x86::reg32 sets, int row)
 {
     if (row < kGameRows)
         return guest.dword(sets + x86::reg32(row) * 4);
-    return s_nextWaiting ? 0 : nextSongKey();
+    const int port = row - kGameRows;
+    return s_waitingPort == port ? 0 : kPortRows[port].key();
 }
 
 void setBinding(Guest& guest, x86::reg32 sets, int row, x86::reg32 binding)
 {
     if (row < kGameRows)
         guest.setDword(sets + x86::reg32(row) * 4, binding);
+    else if (row >= kGameRows && row - kGameRows < kPortRowCount)
+        kPortRows[row - kGameRows].setKey(binding);
 }
 
 /* The pointer to the middle of the row shown `shown`, at the list's right. */
@@ -245,10 +264,11 @@ x86::reg32 draw(Guest& guest, x86::reg32 item, x86::reg32 focused)
         }
         else
         {
-            // The port's row: its name in the frame (0x4c bytes, the heading done with).
+            // A port row: its name in the frame (0x4c bytes, the heading done with).
+            const char* rowName = kPortRows[row - kGameRows].name;
             name = guest.frame();
-            for (std::size_t k = 0; k <= std::strlen(kNextSongName); ++k)
-                guest.setByte(name + x86::reg32(k), std::uint8_t(kNextSongName[k]));
+            for (std::size_t k = 0; k <= std::strlen(rowName); ++k)
+                guest.setByte(name + x86::reg32(k), std::uint8_t(rowName[k]));
         }
         guest.call(kDrawText, fe::args({ name, x86::reg32(x), x86::reg32(y), kFont }, { 0, kTextColour }));
     }
@@ -328,7 +348,7 @@ x86::reg32 key(Guest& guest, x86::reg32 item, std::uint16_t key)
                 guest.call(kSnapshotPads);
                 guest.setDword(kKeptBinding, bindingOf(guest, sets, row));
                 setBinding(guest, sets, row, 0);
-                s_nextWaiting = row >= kGameRows;
+                s_waitingPort = row >= kGameRows ? row - kGameRows : -1;
                 guest.setWord(item + kBinding, std::uint16_t(row));
                 guest.setByte(item + kItemFlags, guest.byte(item + kItemFlags) | kWaiting);
                 guest.setDword(kPadPolled, 0);
@@ -352,12 +372,9 @@ x86::reg32 key(Guest& guest, x86::reg32 item, std::uint16_t key)
         if (waitingRow < kGameRows)
             guest.call(kCheckClash, fe::args({ x86::reg32(waitingRow), binding }));
         guest.setByte(item + kItemFlags, guest.byte(item + kItemFlags) & ~kWaiting);
-        if (waitingRow < kGameRows)
-            setBinding(guest, sets, waitingRow, binding);
-        else
-            setNextSongKey(binding);
+        setBinding(guest, sets, waitingRow, binding);
     }
-    s_nextWaiting = false;
+    s_waitingPort = -1;
     guest.setWord(item + kBinding, 0xffff);
     return 2;
 }

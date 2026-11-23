@@ -105,6 +105,10 @@ each one does.
 # NFS_SLIPSTREAM_TRAILS = 1
 # NFS_SLIP_ICON = on
 # NFS_OPPONENT_LIST = on
+# NFS_NITRO = 1
+# NFS_NITRO_PUSH = 5
+# NFS_NITRO_SECONDS = 3
+# NFS_NITRO_KEY = 0x00002a04
 
 [What you feel of the race]
 # NFS_CRASH_SHAKE = 2

@@ -2189,6 +2189,38 @@ Defaults" and a new settings file take it from there, a settings file already
 written keeps its own. `NFS_CONTROLS_TRACE=1` logs player one's race controls,
 the actions they made and the keys held, twice a second.
 
+### Nitro
+
+The first player's bottle (`native_nitro.cpp`, `NFS_NITRO`, 1): lit by a key of
+its own -- `NFS_NITRO_KEY`, left shift by default, and Controls lists it as
+Nitro among its rows (`native_frontend_controls.cpp`, the second of the port's
+own rows after the game's thirteen). Held down it burns for `NFS_NITRO_SECONDS`
+(3) and pushes the car along its own way, the way the slipstream pushes one: a
+share of the velocity (`+0xa4`, `+0xa8`, `+0xac`) added each tick, the vertical
+one left alone. `NFS_NITRO_PUSH` (5 m/s2) is what it adds at a standstill, and
+less the faster the car goes -- nothing at 90 m/s (324 km/h) -- so the engine,
+the gears and the air are untouched and the car keeps its own top speed at the
+top while the push is felt low down. Ticked from `surfaceFrame`
+(`native_surface.cpp`) on the race's clock: a pause neither burns it nor fills
+it.
+
+Nothing burns in split screen, nor while the start's countdown shows -- the
+game draws it while the race's clock is up to 0x220 (`sub_482620`), which is
+where the cars are let go -- so a car held on the line is not pushed out from
+under it. The bottle starts a race full; how it is earned back (slipstreaming,
+air time, drifting) is the next step of the milestone (`TODOs.md`).
+`NFS_NITRO_TEST` keeps it full and skips the key, so a run with no hands can
+watch the push, and `NFS_NITRO_TRACE` says what it is doing once a second, and
+as it lights and goes out.
+
+The key is read where the game keeps its keyboard: a byte a scan code at
+`0x564818`, as the next song's key is. A key message's scan code comes from
+SDL's scancode through `s_scancodeTable` (`src/lib/window.cpp`), which covered
+only the first hundred scancodes -- the letters, digits, arrows and function
+keys -- so the modifiers all came out as scan code 0 and were lost to the game.
+It holds 256 now, the left and right ctrl, shift and alt among them, so a
+binding can name one.
+
 ### Slipstreaming
 
 A car close behind another meets less air (`slipstream`, `native_surface.cpp`).
@@ -3495,6 +3527,10 @@ the next time the game starts.
 | `NFS_SLIPSTREAM` | on (`1`) | `0`/`off`: no slipstream. A number up to 3: how strong the push behind another car (Slipstreaming). |
 | `NFS_SLIPSTREAM_TRAILS` | on (`1`) | `0`/`off`: no air lines round the player's car in a slipstream (Slipstreaming). |
 | `NFS_SLIP_ICON` | on | `0`/`off`: no icon with the slipstream's time at the bottom left (Slipstreaming). |
+| `NFS_NITRO` | on (`1`) | `0`/`off`: no nitro. A number up to 3: how hard it pushes (Nitro). |
+| `NFS_NITRO_PUSH` | `5` | m/s2 the bottle adds at a standstill, less the faster the car goes; up to 15 (Nitro). |
+| `NFS_NITRO_SECONDS` | `3` | How long a full bottle burns, up to 10 (Nitro). |
+| `NFS_NITRO_KEY` | `0x00002a04` | The key that lights it: a binding's character, scan code and device. Left shift as shipped; Controls writes it (Nitro). |
 | `NFS_OPPONENT_LIST` | on | `0`/`off`: the game's own standings table instead of the port's list. |
 | `NFS_KNOCK_TREES` | on (`1`) | `0`/`off`: trees and lamp posts stand as the game has them, solid (Trees and lamp posts knocked down). |
 | `NFS_TREE_MASS` | `1` | Times 150 kg: how much a tree slows the car that knocks it down; `0` for none. |

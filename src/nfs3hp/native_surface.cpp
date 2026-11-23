@@ -1,4 +1,5 @@
 #include <nfs3hp.h>
+#include "native_nitro.h"
 #include <SDL3/SDL.h>
 #include <cmath>
 
@@ -700,6 +701,7 @@ void surfaceFrame(win32::WinApplication* app)
         airSteer(app, ticks);
         airPitch(app, ticks);
         slipstream(app, ticks);
+        nitroFrame(app, ticks);
         gyroscope(app, ticks);
     }
     if (!player || ticks <= 0 || setting() <= 0.0f || app->getMemory<x86::reg32>(0x6fd3b0) == 1)
