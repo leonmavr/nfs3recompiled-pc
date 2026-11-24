@@ -2249,8 +2249,9 @@ of the mask each. As tall as the slipstream's icon (84 HUD units), as a layer of
 the port's own overlay (`OverlayNitro`).
 
 It is an element of the HUD's own layout, so HUD -> Positions frames, drags and
-measures the bottle itself: element 8 -- the replay bar's, which a race never
-draws -- standing on that box's bottom-left corner, with the element's pixel
+measures the bottle itself -- the recipe for any element of the port's own, and
+the one to follow for the next: element 8, the replay bar's, which a race never
+draws, standing on that box's bottom-left corner, with the element's pixel
 rectangle written from the bottle's bounds every race frame (as the opponents'
 list writes its own rectangle), so what the editor frames is the bottle. On a
 wide screen element 8 is drawn as laid out, not narrowed as the gauges are: a
@@ -2297,6 +2298,10 @@ It is felt as well as used (`native_nitro.cpp`'s `nitroPull`, `nitroBurning`):
   the one at the mouth alone throwing light on the road (a whole jet of them
   laid over the tarmac is a sun, not a glow). Each lives a second, growing,
   trembling and fading, so the ones in the air overlap into a moving stream.
+  Nothing is thrown while the race's clock stands -- a pause, the HUD editor over
+  the frozen picture -- and what was burning then is put out: a flame lit on a
+  still clock would never age (`move` is not called), so every frame of it would
+  leave one more at the pipe's mouth for good, a speck a pixel wide.
   `NFS_EXHAUSTS_TRACE` says when a car starts burning.
 
 It is heard as well as seen (`native_mixer.cpp`, `NFS_NITRO_SOUND`, 2 by ear;

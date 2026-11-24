@@ -993,6 +993,16 @@ x86::reg32 playerCar(win32::WinApplication* app)
  * record of its own. */
 void engineFlames(win32::WinApplication* app, float dt)
 {
+    /* The clock standing -- a pause, the HUD editor over the frozen picture --
+     * throws nothing: a flame lit then would never age (move is not called), so
+     * every frame of it would leave one more of them at the pipe's mouth, a
+     * speck drawn as a pixel and never put out.  What was burning when the
+     * clock stopped goes with it, rather than standing frozen there. */
+    if (!(dt > 0.0f))
+    {
+        s_flames.clear();
+        return;
+    }
     auto f = [app](x86::reg32 address) { return app->getMemory<float>(address); };
     const bool trace = tracing();
     const x86::reg32 player = playerCar(app);
