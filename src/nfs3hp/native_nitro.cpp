@@ -89,6 +89,7 @@ constexpr float kHoldPull = 1.1f;
 constexpr float kKickIn = 0.2f;                  // s: eased out to the kick
 constexpr float kKickOut = 0.25f;                // s: and eased back to the held pull
 constexpr float kEase = 12.0f;                   // 1/s: how fast burning eases to on or off
+constexpr float kOut = 0.005f;                   // under this on the way out, it is out
 }  // namespace nitro
 
 float settingOf(const char* name, float otherwise, float most)
@@ -219,11 +220,27 @@ void nitroFrame(win32::WinApplication* app, int ticks)
     const float setting = settingOf("NFS_NITRO", 4.0f, 8.0f);
     const float push = nitroPush();
     const float seconds = nitroSeconds();
-    const bool test = SDL_getenv("NFS_NITRO_TEST") != nullptr;
     const char* trace = SDL_getenv("NFS_NITRO_TRACE");
 
     const x86::reg32 car = app->getMemory<x86::reg32>(kPlayerCar);
     const x86::sreg32 clock = x86::sreg32(app->getMemory<x86::reg32>(kRaceClock));
+    bool test = SDL_getenv("NFS_NITRO_TEST") != nullptr;
+    if (test)
+    {
+        /* Test only: NFS_NITRO_TEST_SECONDS burn for that long and no more, so
+         * that letting go of it can be watched with no hands on the keys. */
+        static const float seconds = [] {
+            const char* text = SDL_getenv("NFS_NITRO_TEST_SECONDS");
+            return text && *text ? float(SDL_atof(text)) : 0.0f;
+        }();
+        static x86::sreg32 s_first = -1;
+        if (seconds > 0.0f && clock > kCountdownTo)
+        {
+            if (s_first < 0 || clock < s_first)
+                s_first = clock;
+            test = float(clock - s_first) / 64.0f < seconds;
+        }
+    }
     /* A new car, the clock gone back, or the clock still short of where the
      * cars are let go -- a race restarted, or another one started -- fills the
      * bottle again.  All three, because a restart need not raise one of them:
@@ -313,6 +330,10 @@ void nitroFrame(win32::WinApplication* app, int ticks)
     }
 
     s_state.burning += ((s_state.lit ? 1.0f : 0.0f) - s_state.burning) * SDL_min(1.0f, dt * kEase);
+    /* Easing out is exponential, so it only ever approaches nought: whatever
+     * reads "is it burning" would go on reading yes for ever.  Out is out. */
+    if (!s_state.lit && s_state.burning < kOut)
+        s_state.burning = 0.0f;
 
     /* The light: the view kicked back as it lights, then held a little wider
      * while it burns, and back to none after -- eased on the race's clock.  The

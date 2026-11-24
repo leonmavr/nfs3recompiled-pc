@@ -132,6 +132,7 @@ struct Flame
     float age, life;   // seconds; a second
     float size;        // the radius it grows to, metres
     float light;       // how much light it throws on the road, 0 to 1
+    bool jet;          // one of the nitro's, not a shift's or an overrun's
     float seed;
     float colour[3];
 };
@@ -147,6 +148,11 @@ constexpr float kNitroEvery = 0.12f;    // s between two jets out of a tip
 constexpr float kNitroLength = 2.25f;   // times an ordinary flame's length, at full burn
 constexpr float kNitroRadius = 1.3f;    // times an ordinary flame's radius
 constexpr int kNitroBeads = 2;          // flames strung out along the one jet
+/* How hard the bottle must burn for a jet to be lit: its burn eases out over
+ * about a fifth of a second when it goes out, and below this the flames it
+ * would throw are a pixel at the pipe's mouth and nothing more -- lit forever
+ * after, as the burn never quite reaches nought. */
+constexpr float kJetLeast = 0.2f;
 constexpr float kNitroPool = 0.5f;      // the light the jet throws, times an ordinary flame's
 constexpr float kNitroDim = 0.7f;       // a bead's colour, times the car's flame
 std::vector<Flame> s_flames;
@@ -154,6 +160,7 @@ x86::reg32 s_gear[16];   // each car's gear, as last seen: a shift up is a flame
 float s_pop[16];         // seconds until a car revving at rest pops its next flame
 float s_crackle[16];     // seconds until an engine on the overrun pops its next
 float s_jet[16];         // seconds until a car burning nitro throws its next jet
+bool s_jetLit[16];       // and whether it was when the frame before last looked
 float s_revs[16];        // each car's revs a frame ago: rising fast is being revved
 bool s_revsKnown[16];
 float s_saidRevs[16];    // the revs NFS_EXHAUSTS_TRACE last said of a car at rest
@@ -892,14 +899,17 @@ void throwFlames(const CarExhausts& exhausts, x86::reg32 car)
 /* The nitro's jet out of one of a car's exhausts: kNitroBeads flames, each
  * kNitroRadius times an ordinary flame's radius, strung back along the pipe so
  * the whole is kNitroLength times as long -- tip to tail exactly that, the row
- * of them spaced to just overlap.  `strength` is how hard the bottle burns. */
+ * of them spaced to just overlap.  `strength` is how hard the bottle burns, and
+ * it is how much light the jet throws, not how big it is: a jet drawn at the
+ * last ember of a burn would be a speck a pixel wide at the pipe's mouth, and
+ * flames are only lit above kJetLeast anyway. */
 void throwJet(const CarExhausts& exhausts, x86::reg32 car, std::size_t tip, float strength)
 {
     /* An ordinary flame's own two measures: its radius, and the whole of it
      * (a diameter).  The jet is so many of each. */
     const float ordinary = SDL_clamp(exhausts.tips[tip].radius * 2.6f, 0.05f, 0.16f);
-    const float radius = ordinary * kNitroRadius * strength;
-    const float length = 2.0f * ordinary * kNitroLength * strength;
+    const float radius = ordinary * kNitroRadius;
+    const float length = 2.0f * ordinary * kNitroLength;
     const float step = (length - 2.0f * radius) / float(SDL_max(1, kNitroBeads - 1));
     for (int bead = 0; bead < kNitroBeads; ++bead)
     {
@@ -911,6 +921,7 @@ void throwJet(const CarExhausts& exhausts, x86::reg32 car, std::size_t tip, floa
         flame.at[2] = exhausts.tips[tip].z - 0.06f - (radius + step * float(bead));
         flame.life = 1.0f;
         flame.size = radius;
+        flame.jet = true;
         /* Only the bead at the pipe's mouth lights the road: a whole jet of them
          * laid over the tarmac is a sun, not a glow. */
         flame.light = bead == 0 ? kNitroRadius * strength * kNitroPool : 0.0f;
@@ -1016,6 +1027,7 @@ void engineFlames(win32::WinApplication* app, float dt)
             s_pop[k] = 0.0f;
             s_crackle[k] = 0.0f;
             s_jet[k] = 0.0f;
+            s_jetLit[k] = false;
             s_revsKnown[k] = false;
             s_saidRevs[k] = 0.0f;
             s_traced[k] = 0;
@@ -1123,8 +1135,17 @@ void engineFlames(win32::WinApplication* app, float dt)
          * (aiNitroBurn, native_ai.cpp). */
         {
             const float nitro = car == player ? nfs3hp::nitroBurning() : nfs3hp::aiNitroBurn(car);
-            s_jet[k] = nitro > 0.0f ? SDL_max(0.0f, s_jet[k] - dt) : 0.0f;
-            if (nitro > 0.0f && s_jet[k] <= 0.0f)
+            const bool burning = nitro > kJetLeast;
+            s_jet[k] = burning ? SDL_max(0.0f, s_jet[k] - dt) : 0.0f;
+            /* Out is out: the flames of a jet that has gone out go with it,
+             * rather than hanging about the pipes for the rest of their
+             * second.  Nothing of the nitro's is left once the key is let go. */
+            if (!burning && s_jetLit[k])
+                s_flames.erase(std::remove_if(s_flames.begin(), s_flames.end(),
+                                              [car](const Flame& flame) { return flame.jet && flame.car == car; }),
+                               s_flames.end());
+            s_jetLit[k] = burning;
+            if (burning && s_jet[k] <= 0.0f)
             {
                 for (std::size_t tip = 0; tip < exhausts->tips.size(); ++tip)
                     throwJet(*exhausts, car, tip, nitro);
@@ -1239,6 +1260,24 @@ void move(float dt)
     }
     for (Flame& flame : s_flames)
         flame.age += dt;
+    /* NFS_FLAME_TRACE: once a second, how many flames are in the air and how
+     * many of them are the nitro's -- what a jet left behind would show up in. */
+    if (SDL_getenv("NFS_FLAME_TRACE"))
+    {
+        static float s_said = 0.0f;
+        s_said += dt;
+        if (s_said >= 1.0f)
+        {
+            s_said = 0.0f;
+            int jets = 0, tiny = 0;
+            for (const Flame& flame : s_flames)
+            {
+                jets += flame.jet ? 1 : 0;
+                tiny += flame.size < 0.02f ? 1 : 0;
+            }
+            SDL_Log("[FLAME] %zu alive (%d of them the nitro's), %d under 2 cm", s_flames.size(), jets, tiny);
+        }
+    }
     s_flames.erase(std::remove_if(s_flames.begin(), s_flames.end(),
                                   [](const Flame& flame) { return flame.age >= flame.life; }),
                    s_flames.end());

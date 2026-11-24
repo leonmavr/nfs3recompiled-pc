@@ -2298,11 +2298,21 @@ It is felt as well as used (`native_nitro.cpp`'s `nitroPull`, `nitroBurning`):
   the one at the mouth alone throwing light on the road (a whole jet of them
   laid over the tarmac is a sun, not a glow). Each lives a second, growing,
   trembling and fading, so the ones in the air overlap into a moving stream.
-  Nothing is thrown while the race's clock stands -- a pause, the HUD editor over
-  the frozen picture -- and what was burning then is put out: a flame lit on a
-  still clock would never age (`move` is not called), so every frame of it would
-  leave one more at the pipe's mouth for good, a speck a pixel wide.
-  `NFS_EXHAUSTS_TRACE` says when a car starts burning.
+  A jet is a jet's size whatever the burn is doing -- the burn only says how
+  much light it throws: drawn smaller by the last ember of a burn, a bead was a
+  pixel at the pipe's mouth and nothing more.  And the burn itself is only
+  thrown above `kJetLeast` (0.2), because easing out is exponential and never
+  quite reaches nought: below it the bottle *is* out (`nitroBurning` is snapped
+  to nought), and a jet's flames are put out with it rather than hanging about
+  the pipes for the rest of their second.  Nothing is thrown while the race's
+  clock stands either -- a pause, the HUD editor over the frozen picture -- and
+  what was burning then goes with it: a flame lit on a still clock would never
+  age (`move` is not called), so every frame of it would leave one more speck
+  at the pipe's mouth for good.  `NFS_EXHAUSTS_TRACE` says when a car starts
+  burning, `NFS_FLAME_TRACE` how many flames are in the air each second and how
+  many of them are the nitro's.  `NFS_NITRO_TEST_SECONDS` burns a test bottle
+  for that many seconds and no more, so letting go can be watched with no hands
+  on the keys.
 
 It is heard as well as seen (`native_mixer.cpp`, `NFS_NITRO_SOUND`, 2 by ear;
 the port's own noise, as the wind is, placeholders both until a sound is chosen
