@@ -112,6 +112,8 @@ each one does.
 # NFS_NITRO_UI = on
 # NFS_NITRO_FILL = 1
 # NFS_NITRO_SOUND = 2
+# NFS_NITRO_AI = on
+# NFS_NITRO_AI_FILL = 30
 
 [What you feel of the race]
 # NFS_CRASH_SHAKE = 2

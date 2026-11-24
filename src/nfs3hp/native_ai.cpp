@@ -1,4 +1,5 @@
 #include "native_ai.h"
+#include "native_nitro.h"
 #include <nfs3hp.h>
 #include <SDL3/SDL.h>
 #include <cmath>
@@ -77,6 +78,44 @@ constexpr float kCrookedSpeed = 6.0f;    // m/s, 22 km/h
 constexpr float kCrookedSeconds = 3.0f;  // of that before the car is put back
 constexpr float kRecoveredSpeed = 8.0f;  // m/s: driving again, so it came round
 constexpr float kRecoveredTurns = 0.1f;  // and pointing along the road (36 degrees)
+/* The opponents' bottle (aiNitro, NFS_NITRO_AI and NFS_NITRO_AI_FILL): it fills
+ * at a steady rate, a full one every kAiFill seconds, and each use takes a sip
+ * of kSip of it where the road runs straight and clear ahead.  The bends are
+ * read from the track's own nodes: the worst turn within kLookLong metres of a
+ * car, in turns of a circle, has to be under kRunBend for a straight (and under
+ * kShortBend within kLookShort for a crawl out of a corner); a bend over
+ * kStopBend within kStopLook puts out a bottle already burning.  Nothing within
+ * kClearAhead metres ahead, and the car has to be pointing along the road
+ * (kLitHeading, and kStopHeading once burning) -- which is what keeps an
+ * opponent from lighting it into a wall it cannot see round. */
+constexpr float kAiFill = 30.0f;         // s for a full bottle, NFS_NITRO_AI_FILL
+constexpr float kSip = 0.2f;             // of the bottle, one use
+constexpr float kCooldown = 6.0f;        // s between two sips: a fifth a bottle is a
+                                         // bottle every 6 s at most, the refill's own rate
+constexpr float kSettle = 3.0f;          // s off the line before any of it is spent, and
+constexpr float kStagger = 0.6f;         // s more for each slot: no field of them all
+                                         // lighting it on the same frame at the start
+constexpr x86::sreg32 kGo = 0x220;       // the clock the cars are let go at (sub_482620)
+constexpr float kRunBend = 0.055f;       // turns within kLookLong: 20 degrees
+constexpr float kFastRunBend = 0.03f;    // and 11 for a car at speed (kAtSpeed)
+constexpr float kLookLong = 70.0f;       // m of road to be straight ahead
+constexpr float kShortBend = 0.03f;      // turns within kLookShort: 11 degrees
+constexpr float kLookShort = 25.0f;
+constexpr float kStopBend = 0.09f;       // turns within kStopLook puts it out
+constexpr float kStopLook = 40.0f;
+constexpr float kClearAhead = 18.0f;     // m: no other car this close in front
+constexpr float kLeastSpeed = 8.0f;      // m/s: a car just away from the line has the engine's own
+constexpr float kTooFast = 0.95f;        // of its aim: nothing left to gain
+constexpr float kAtSpeed = 35.0f;        // m/s: a car this quick is racing, not crawling,
+                                         // and has to have kLookLong of straight -- a
+                                         // field let go together is not all one road
+constexpr float kCrawlSpeed = 25.0f;     // m/s: 90 km/h, a hairpin's exit -- out of a
+                                         // corner, where the push is worth the most, and
+constexpr float kSlowShare = 0.6f;       // under this share of its aim too; not a car
+                                         // three seconds off the line at 30 m/s
+constexpr float kLitHeading = 0.08f;     // turns off the road it may light it on
+constexpr float kStopHeading = 0.14f;    // and stay lit under
+
 /* Going at speed and stopped dead, nose into a wall or a track object (not
  * another car): put back on the road at once (unstick).  From kSuddenFrom to
  * under kSuddenStop inside kSuddenWithin is over 2 g -- no brakes do that, only
@@ -136,6 +175,12 @@ struct Opponent
     x86::sreg32 flashFrom = -1;  // since when it has been flashing its lights, or -1
     x86::reg32 flashKept = 0;    // its lights, [+0x660], as they were before
     float behindWait = 2.0f;     // seconds held up before it flashes
+    float nitro = 1.0f;          // its bottle of nitro, 0 (empty) to 1 (full)
+    float sip = 0.0f;            // how much of it what it is burning now may take
+    float burn = 0.0f;           // how hard it burns, 0 to 1, eased: for the flames
+    bool lit = false;            // burning this frame
+    x86::sreg32 nitroAt = 0;     // the tick its bottle was last filled at
+    x86::sreg32 nitroRest = 0;   // the tick it may light it again
 };
 Opponent s_opponents[kMaxCars];
 
@@ -275,6 +320,83 @@ Surroundings around(win32::WinApplication* app, x86::reg32 car, int self)
             result.blockedBehind = true;
     }
     return result;
+}
+
+constexpr x86::reg32 kNodes = 0x5dd948, kNodeCount = 0x5dd940, kNodeSize = 0x24;
+
+/* One of the track's nodes ([0x5dd948], 0x24 bytes each), a place of it in
+ * metres: axis 0 x, 1 height, 2 z, each 16.16 (the map reads them the same). */
+float nodeAt(win32::WinApplication* app, x86::reg32 node, int axis)
+{
+    const x86::reg32 base = app->getMemory<x86::reg32>(kNodes);
+    return float(x86::sreg32(app->getMemory<x86::reg32>(base + node * kNodeSize + x86::reg32(axis) * 4))) / 65536.0f;
+}
+
+/* How far off straight the road runs ahead of a car: the biggest angle, in
+ * turns of a circle, between the way the track goes at its own node and the way
+ * it goes at any node within `metres` of it (0.25 a right angle).  One when
+ * there is no track to read, so that no bottle is lit on it. */
+float bendAhead(win32::WinApplication* app, x86::sreg32 node, float metres)
+{
+    const x86::reg32 base = app->getMemory<x86::reg32>(kNodes);
+    const x86::sreg32 count = x86::sreg32(app->getMemory<x86::reg32>(kNodeCount));
+    /* Where the port maps guest memory (memmap.cpp): anything else is not the
+     * track, and reading it would fault. */
+    if (base < 0x400000 || base >= 0x11000000 || count < 8 || count > 50000 || node < 0 || node >= count)
+        return 1.0f;
+    auto along = [&](x86::sreg32 k, int axis) { return nodeAt(app, x86::reg32(k % count), axis); };
+    const float x0 = along(node + 1, 0) - along(node, 0), z0 = along(node + 1, 2) - along(node, 2);
+    if (!(x0 * x0 + z0 * z0 > 1e-4f))
+        return 1.0f;
+    float walked = 0.0f, worst = 0.0f;
+    for (x86::sreg32 k = node; k < node + count; ++k)
+    {
+        const float dx = along(k + 1, 0) - along(k, 0), dz = along(k + 1, 2) - along(k, 2);
+        walked += std::sqrt(dx * dx + dz * dz);
+        if (walked > metres)
+            break;
+        const float cross = x0 * dz - z0 * dx, dot = x0 * dx + z0 * dz;
+        worst = SDL_max(worst, SDL_fabsf(std::atan2(cross, dot)) / 6.28318531f);
+    }
+    return worst;
+}
+
+/* Whether another car is nose to tail in front of this one within `metres`, the
+ * width around() looks in: what its nitro must not be lit into. */
+bool carAhead(win32::WinApplication* app, x86::reg32 car, int self, float metres)
+{
+    const float px = app->getMemory<float>(car + 0x98), py = app->getMemory<float>(car + 0x9c),
+                pz = app->getMemory<float>(car + 0xa0);
+    const float fx = app->getMemory<float>(car + 0xd8), fy = app->getMemory<float>(car + 0xdc),
+                fz = app->getMemory<float>(car + 0xe0);
+    const float rx = app->getMemory<float>(car + 0xc0), ry = app->getMemory<float>(car + 0xc4),
+                rz = app->getMemory<float>(car + 0xc8);
+    for (int k = 0; k < carsInRace(app); ++k)
+    {
+        if (k == self)
+            continue;
+        const x86::reg32 other = kCars + kCarSize * x86::reg32(k);
+        const float dx = app->getMemory<float>(other + 0x98) - px;
+        const float dy = app->getMemory<float>(other + 0x9c) - py;
+        const float dz = app->getMemory<float>(other + 0xa0) - pz;
+        const float along = dx * fx + dy * fy + dz * fz;
+        const float across = dx * rx + dy * ry + dz * rz;
+        if (along > 0.0f && along < metres && across > -2.6f && across < 2.6f)
+            return true;
+    }
+    return false;
+}
+
+/* Whether this is a player's own car ([0x5efa48], one for each player racing,
+ * [0x6fd518]): those drive themselves, with their own bottle (native_nitro.cpp),
+ * and are given nothing here. */
+bool playersCar(win32::WinApplication* app, x86::reg32 car)
+{
+    const x86::sreg32 players = x86::sreg32(app->getMemory<x86::reg32>(0x6fd518));
+    for (x86::sreg32 p = 0; p < players && p < 2; ++p)
+        if (app->getMemory<x86::reg32>(0x5efa48 + x86::reg32(p) * 4) == car)
+            return true;
+    return false;
 }
 
 /* The game's own reverse (sub_405fd0, way 0), with a time to stop at so that
@@ -724,6 +846,110 @@ void unstick(win32::WinApplication* app, x86::reg32 car, int i)
     }
 }
 
+/* Port: the opponents' nitro (NFS_NITRO_AI, on; `0` or `off` for none;
+ * NFS_NITRO_AI_FILL, 30 s for a full bottle).  They never go looking for a
+ * refill: theirs fills at a steady rate, whoever they are and however the race
+ * has gone, so a car that has spun and lost half a minute still has one to
+ * spend.  Each use is a sip -- kSip of the bottle -- taken where it does some
+ * good and no harm:
+ *
+ * - The push is the player's own (nitroPush, less the faster the car goes), so
+ *   it is worth most low down: a car crawling out of a corner (under
+ *   kCrawlSpeed and under kSlowShare of the speed it aims for, [+0x7b0]) spends
+ *   one where the road runs kLookShort metres straight, and a car already at
+ *   speed spends one on the straight it is on, which must run kLookLong metres
+ *   straight.
+ * - Never into a corner, a car or a wall: the bends are the track's own nodes
+ *   (bendAhead), the other cars are looked for kClearAhead metres ahead, and the
+ *   car must be pointing along the road ([0x56ec60], the way it wants to go
+ *   against the way it points, aiHeading), off the ground (+0x164), out of
+ *   reverse (+0x7d4) and not touching anything (+0x170).  A bend coming up
+ *   within kStopLook puts out a bottle already burning, so a sip taken on the
+ *   straight does not go into the corner with it.
+ *
+ * How hard it burns is left for the flames (aiNitroBurn, native_particles.cpp).
+ * Racers only, and never a player's own car; network races are left alone. */
+void aiNitro(win32::WinApplication* app, x86::reg32 car, int i)
+{
+    static const bool on = [] {
+        const char* value = SDL_getenv("NFS_NITRO_AI");
+        return !(value && (SDL_strcmp(value, "0") == 0 || SDL_strcasecmp(value, "off") == 0));
+    }();
+    static const float fill = [] {
+        const char* value = SDL_getenv("NFS_NITRO_AI_FILL");
+        const float parsed = value && *value ? float(SDL_atof(value)) : kAiFill;
+        return parsed >= 2.0f && parsed <= 300.0f ? parsed : kAiFill;
+    }();
+    if (!on)
+        return;
+    Opponent& o = s_opponents[i];
+    const x86::sreg32 tick = x86::sreg32(app->getMemory<x86::reg32>(kRaceClock));
+    /* The bottle fills at a steady rate, a full one every `fill` seconds -- on
+     * the race's clock, so a pause fills nothing.  A new race (the clock gone
+     * back) starts from where it is, and full: Opponent()'s own bottle. */
+    if (tick < o.nitroAt || tick - o.nitroAt > 2 * kTicksPerSecond)
+        o.nitroAt = tick;
+    const float dt = float(tick - o.nitroAt) / kTicksPerSecond;
+    o.nitroAt = tick;
+    if (tick < kGo + x86::sreg32((kSettle + kStagger * float(i)) * kTicksPerSecond))
+        return;   // the start's countdown and a moment after: no field of them off the line with it
+    o.nitro = SDL_min(1.0f, o.nitro + dt / fill);
+
+    const x86::sreg32 node = x86::sreg32(app->getMemory<x86::reg32>(car + 0x1c));
+    const float forward = app->getMemory<float>(car + 0x4f4);
+    const float speed = forward < 0.0f ? -forward : forward;
+    const float aim = app->getMemory<float>(car + 0x7b0);
+    const bool air = app->getMemory<x86::reg16>(car + 0x164) != 0;
+    const bool reversing = app->getMemory<x86::reg32>(car + 0x7d4) == 1;
+    const bool touching = app->getMemory<x86::reg32>(car + kCarTouch) != 0;
+    const float turned = SDL_fabsf(o.heading);
+    const bool clear = !carAhead(app, car, i, kClearAhead);
+    const float bend = bendAhead(app, node, o.lit ? kStopLook : kLookLong);
+    const bool overAim = aim > 0.0f && speed > kTooFast * aim;
+    const bool wasLit = o.lit;
+
+    if (o.lit)
+    {
+        if (o.sip <= 0.0f || o.nitro <= 0.0f || air || reversing || touching || turned > kStopHeading
+            || bend > kStopBend || !clear)
+            o.lit = false;
+    }
+    else if (o.nitro >= kSip && tick >= o.nitroRest && !air && !reversing && !touching && clear && !overAim
+             && speed > kLeastSpeed && turned < kLitHeading)
+    {
+        const bool crawling = speed < kCrawlSpeed && aim > 0.0f && speed < kSlowShare * aim
+                              && bendAhead(app, node, kLookShort) < kShortBend;
+        const bool straight = bend < (speed < kAtSpeed ? kRunBend : kFastRunBend);
+        if (crawling || straight)
+        {
+            o.lit = true;
+            o.sip = kSip;
+            o.nitroRest = tick + x86::sreg32(kCooldown * kTicksPerSecond);
+        }
+    }
+    if (o.lit)
+    {
+        /* Its share of the bottle, at the player's own rate (nitroSeconds), and
+         * the push along its own way -- x and z only, never the vertical. */
+        const float share = dt / SDL_max(nitroSeconds(), 0.1f);
+        o.nitro = SDL_max(0.0f, o.nitro - share);
+        o.sip -= share;
+        const float taper = SDL_clamp(1.0f - speed / nitroTaper(), 0.0f, 1.0f);
+        const float step = nitroPush() * taper * dt;
+        for (int k = 0; k < 3; k += 2)
+        {
+            const x86::reg32 at = car + 0xa4 + 4 * x86::reg32(k);
+            app->getMemory<float>(at) = app->getMemory<float>(at)
+                                        + app->getMemory<float>(car + 0xd8 + 4 * x86::reg32(k)) * step;
+        }
+    }
+    o.burn += ((o.lit ? 1.0f : 0.0f) - o.burn) * SDL_min(1.0f, dt * 12.0f);
+    if (aiTracing() && o.lit != wasLit)
+        SDL_Log("[AI] car %d (%s) %s its nitro: t %d, %.0f m/s of an aim of %.0f, road bend %.3f, bottle %.2f, sip %.2f",
+                i, driverOf(app, car).character, o.lit ? "lights" : "puts out", int(tick), double(speed),
+                double(aim), double(bend), double(o.nitro), double(SDL_max(o.sip, 0.0f)));
+}
+
 }  // namespace
 
 /* The skill level (Skill Level: Beginner 1, Expert 0, [0x6fd4f0]) as sub_407fa0
@@ -886,6 +1112,10 @@ bool aiDrive(win32::WinApplication* app, x86::CPU& cpu)
         unstick(app, car, i);
         signal(app, car, i);
     }
+    /* After the unstick, which starts a new race's state over (a full bottle
+     * with it). */
+    if (!networkRace(app) && racer && !playersCar(app, car))
+        aiNitro(app, car, i);
     if (aiTracing())
     {
         Opponent& o = s_opponents[i];
@@ -921,6 +1151,15 @@ bool aiDrive(win32::WinApplication* app, x86::CPU& cpu)
         }
     }
     return false;
+}
+
+/* How hard an opponent's nitro burns, 0 to 1 (aiNitro, above): for the flames
+ * out of its exhausts (native_particles.cpp's engineFlames).  The player's own
+ * bottle is not one of these (nitroBurning, native_nitro.cpp). */
+float aiNitroBurn(x86::reg32 car)
+{
+    const int i = opponentIndex(car);
+    return i >= 0 ? s_opponents[i].burn : 0.0f;
 }
 
 bool aiPull(win32::WinApplication* app, x86::CPU& cpu)

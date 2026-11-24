@@ -21,6 +21,11 @@
 
 namespace nfs3hp
 {
+
+/* native_ai.cpp: how hard an opponent's bottle of nitro burns, 0 to 1 (the
+ * player's own is native_nitro.h's), for the flames out of its exhausts. */
+float aiNitroBurn(x86::reg32 car);
+
 namespace ai
 {
 

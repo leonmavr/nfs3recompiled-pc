@@ -1,5 +1,6 @@
 #include <nfs3hp.h>
 #include "native_guest.h"
+#include "native_ai.h"
 #include "native_exhausts.h"
 #include "native_nitro.h"
 #include <winapi/glide2x.h>
@@ -1108,10 +1109,10 @@ void engineFlames(win32::WinApplication* app, float dt)
             }
         }
         /* The nitro burning: a jet out of every exhaust, kept up while it burns
-         * (the player's own car -- no opponent is given the bottle yet). */
-        if (car == player)
+         * -- the player's own car of its own bottle, an opponent of its own
+         * (aiNitroBurn, native_ai.cpp). */
         {
-            const float nitro = nfs3hp::nitroBurning();
+            const float nitro = car == player ? nfs3hp::nitroBurning() : nfs3hp::aiNitroBurn(car);
             s_jet[k] = nitro > 0.0f ? SDL_max(0.0f, s_jet[k] - dt) : 0.0f;
             if (nitro > 0.0f && s_jet[k] <= 0.0f)
             {

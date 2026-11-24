@@ -32,6 +32,14 @@ float nitroPull();
  * plays a whoosh each time the count goes up). */
 unsigned nitroIgnitions();
 
+/* What the bottle pushes with, m/s2 before the taper by speed, the speed it is
+ * gone by, m/s, and how long a full one burns, s: the player's switches
+ * (NFS_NITRO, NFS_NITRO_PUSH, NFS_NITRO_SECONDS), which the opponents' own
+ * (native_ai.cpp) burns and pushes with too. */
+float nitroPush();
+float nitroTaper();
+float nitroSeconds();
+
 /* The key that lights it, in the game's own shape for a binding: a character,
  * a scan code and the device (4 is the keyboard). */
 x86::reg32 nitroKey();

@@ -848,7 +848,7 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
         frame. Sound is in as a placeholder the port makes from noise, as the
         wind is (`native_mixer.cpp`): a whoosh as it lights, a hiss while it
         burns. The camera kick is still out.
-    - **5. The opponents** (M, after the player's is in).  They never seek to
+    - **5. The opponents** (M, done 2026-11-24).  They never seek to
       refill: a slow trickle plus whatever slipstreams and jumps they happen to
       get.  When to fire: the aim speed it already holds at `car+0x7b0` against
       its own speed at `car+0x4f4` (the game's aim already carries the corner's
@@ -856,6 +856,19 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
       at `car+0x7b8` steady, nothing within a dozen metres ahead (the "held up"
       test, native_ai.cpp:521), not crooked and not in the air.  Who uses it
       early and who saves it is `kDrivers`' business (native_ai.cpp:104).
+      - Done: `aiNitro` in `native_ai.cpp` -- a bottle that fills at a steady
+        rate (`NFS_NITRO_AI_FILL`, 30 s) and is spent a fifth at a time, at most
+        every 6 s, only out of a corner (under 25 m/s and 3/5 of its aim, with
+        25 m of straight) or on a straight (70 m of it, under 20 degrees of bend
+        -- 11 once it is doing over 35 m/s); never with a car 18 m ahead,
+        crooked, in the air, reversing or touching something, and a bend within
+        40 m puts it out again.  Nothing until 3 s after the countdown, then a
+        slot at a time, so the field does not all light one at once.  The bends
+        are the track's own nodes (`bendAhead`).  Their exhausts throw the same
+        jets as the player's (`aiNitroBurn`, native_particles.cpp).
+        `NFS_NITRO_AI` turns it off; `NFS_AI_TRACE` says each light and put-out.
+        Differing per-driver appetites (a bully spending sooner than a cautious
+        driver) are not in.
     - **6. Switches, docs and the TODO** (S).  The six switches in the ini's
       defaults (native_settings.cpp), a "Nitro" section in TECHNICAL.md with the
       numbers the port settled on, and this entry ticked with what is left.

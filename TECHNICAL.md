@@ -2286,6 +2286,36 @@ hands the mixer how hard it burns and how many times it has lit
 (`nitroSound`, from `colourGradeTick` as the wind's speed is); the count going up
 is the edge the whoosh starts on. `NFS_NITRO_SOUND_TRACE` says when one starts.
 
+The opponents have a bottle of their own (`native_ai.cpp`'s `aiNitro`), and they
+never go looking for a refill: theirs fills at a steady rate -- a full one every
+`NFS_NITRO_AI_FILL` (30) seconds on the race's clock, so a pause fills nothing --
+and each use is a sip of a fifth of it, no more often than every 6 s. They push
+with the player's own switches (`nitroPush`, `nitroTaper`, `nitroSeconds` from
+this file), so the bottle is worth most low down.
+
+Where they spend a sip, and never anywhere else:
+
+- Out of a corner: under 25 m/s and under 3/5 of the speed they aim for
+  (`+0x7b0`) -- a hairpin's exit, and not a car three seconds off the line --
+  where the road runs 25 m straight (the worst turn within it under 11 degrees).
+- On a straight, at any speed: where the road runs 70 m straight -- the worst
+  turn within it under 20 degrees, and under 11 once the car is over 35 m/s
+  (a car at racing speed has further to hit something).
+- Never into a corner, a car or a wall: the bends come from the track's own
+  nodes (`bendAhead` on `[0x5dd948]`), the other cars are looked for 18 m ahead,
+  and the car must be pointing along the road (its heading error under 0.08
+  turns, `[0x56ec60]`), off the ground, out of reverse and touching nothing.
+  A bend within 40 m (over 32 degrees) puts a bottle already burning out again,
+  so a sip taken on a straight does not go into the corner with it.
+
+Not off the line: nothing is spent until three seconds after the countdown
+(`0x220`, where the cars are let go), and then half a second later for each slot,
+so the whole field does not dump one on the same frame at the start. Racers only, never a player's own car, and never in a network
+race. How hard an opponent's burns is `aiNitroBurn` (its ease out to the
+flames', `native_particles.cpp`, as the player's own is). `NFS_AI_TRACE` says
+each time one lights it or puts it out, with its speed, its aim, the road's bend
+and what is left in the bottle.
+
 The key is read where the game keeps its keyboard: a byte a scan code at
 `0x564818`, as the next song's key is. A key message's scan code comes from
 SDL's scancode through `s_scancodeTable` (`src/lib/window.cpp`), which covered
@@ -3608,6 +3638,8 @@ the next time the game starts.
 | `NFS_NITRO_FILL` | `1` | How quickly the race fills the bottle, a multiplier on the slipstream's, a drift's and a jump's, up to 5; `0`/`off` for a bottle nothing fills (Nitro). |
 | `NFS_NITRO_CHARGE` | unset | `0` to `1`: pins the bottle's level there, for a look at the gauge (Nitro). |
 | `NFS_NITRO_SOUND` | `2` | `0`/`off`: no nitro sound. A number up to 3: how loud the whoosh as it lights and the hiss while it burns (Nitro). |
+| `NFS_NITRO_AI` | on | `0`/`off`: the opponents have no nitro of their own (Nitro). |
+| `NFS_NITRO_AI_FILL` | `30` | Seconds for a full bottle of an opponent's, from 2 to 300 (Nitro). |
 | `NFS_OPPONENT_LIST` | on | `0`/`off`: the game's own standings table instead of the port's list. |
 | `NFS_KNOCK_TREES` | on (`1`) | `0`/`off`: trees and lamp posts stand as the game has them, solid (Trees and lamp posts knocked down). |
 | `NFS_TREE_MASS` | `1` | Times 150 kg: how much a tree slows the car that knocks it down; `0` for none. |

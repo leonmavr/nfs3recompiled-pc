@@ -194,14 +194,31 @@ unsigned nitroIgnitions()
     return s_state.ignitions;
 }
 
-void nitroFrame(win32::WinApplication* app, int ticks)
+float nitroPush()
 {
     using namespace nitro;
     /* NFS_NITRO, 4 by default -- four times what the push first was, which a
      * car could hardly feel -- up to twice that again. */
     const float setting = settingOf("NFS_NITRO", 4.0f, 8.0f);
-    const float push = settingOf("NFS_NITRO_PUSH", kPush, kPushMost) * setting;
-    const float seconds = settingOf("NFS_NITRO_SECONDS", kSeconds, kMostSeconds);
+    return settingOf("NFS_NITRO_PUSH", kPush, kPushMost) * setting;
+}
+
+float nitroTaper()
+{
+    return nitro::kTaper;
+}
+
+float nitroSeconds()
+{
+    return settingOf("NFS_NITRO_SECONDS", nitro::kSeconds, nitro::kMostSeconds);
+}
+
+void nitroFrame(win32::WinApplication* app, int ticks)
+{
+    using namespace nitro;
+    const float setting = settingOf("NFS_NITRO", 4.0f, 8.0f);
+    const float push = nitroPush();
+    const float seconds = nitroSeconds();
     const bool test = SDL_getenv("NFS_NITRO_TEST") != nullptr;
     const char* trace = SDL_getenv("NFS_NITRO_TRACE");
 
