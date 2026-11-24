@@ -284,9 +284,20 @@ static float shakeSetting(const char* name, float otherwise, float least, float 
     return parsed >= least && parsed <= most ? parsed : otherwise;
 }
 
-/* How far the camera is moved up (down when less than 0) this frame; `passed`
- * the race's ticks (64 a second) since the last frame, < 0 or over 64 for a
- * new race. */
+/* How big a bump is at this car's speed, m: `size` times kSize, and half again
+ * from kFrom to kFull.  The nitro's rumble is the same measure. */
+static float shakeHeight(win32::WinApplication* app, x86::reg32 car, float size)
+{
+    const float speed = SDL_fabsf(app->getMemory<float>(car + 0xb8));
+    const float share = speed == speed
+                            ? SDL_clamp((speed - speedshake::kFrom) / (speedshake::kFull - speedshake::kFrom), 0.0f, 1.0f)
+                            : 0.0f;
+    return size * speedshake::kSize * (1.0f + share);
+}
+
+/* Speed you can feel, 4, continued: how far the camera is moved up (down when
+ * less than 0) this frame; `passed` the race's ticks (64 a second) since the
+ * last frame, < 0 or over 64 for a new race. */
 static float speedShake(win32::WinApplication* app, x86::reg32 car, x86::sreg32 passed)
 {
     static const float size = shakeSetting("NFS_SPEED_SHAKE", 2.5f, 0.0f, 5.0f);
@@ -310,7 +321,7 @@ static float speedShake(win32::WinApplication* app, x86::reg32 car, x86::sreg32 
     const float share = speed == speed ? SDL_clamp((speed - speedshake::kFrom) / (speedshake::kFull - speedshake::kFrom), 0.0f, 1.0f) : 0.0f;
     const bool fast = speed >= speedshake::kFrom;
     const float quick = rate * (1.0f + 0.5f * share);
-    const float height = size * speedshake::kSize * (1.0f + share);
+    const float height = shakeHeight(app, car, size);
     const x86::reg32 gear = app->getMemory<x86::reg8>(car + 0x50b);
     const bool shifted = s_gear >= 1 && s_gear <= 0x63 && gear > s_gear && gear >= 2;
     s_gear = gear;
@@ -345,6 +356,39 @@ static float speedShake(win32::WinApplication* app, x86::reg32 car, x86::sreg32 
     }
     const float window = SDL_sinf(SDL_PI_F * u);   // soft at both ends
     return s_height * SDL_sinf(2.0f * SDL_PI_F * u) * window;
+}
+
+/* Speed you can feel, 5: the bottle of nitro's rumble (NFS_NITRO_SHAKE, how
+ * big: 1.5 -- against the bumps at speed, so a bottle burning shakes the camera
+ * half again as hard as a 150 km/h car bumps it, and up to 5; 0 or off for
+ * none.  NFS_NITRO_SHAKE_RATE, how quick the rumble is: 9 a second, from 1 to
+ * 30 -- a shaking of the body rather than a bump).
+ *
+ * Not a bump now and then but a steady up and down for as long as it burns,
+ * one sine a turn -- the engine's own vibration through the camera -- eased in
+ * and out with the burn (nitroBurning), and by the race's clock, so a pause
+ * holds it.  Its size follows the bumps' own by the speed of the car, so a car
+ * already over 150 km/h shakes half again as much as one getting up to speed;
+ * a standing car still rumbles, which is where the bottle is worth the most. */
+namespace nitrorumble
+{
+constexpr float kSize = 1.5f;      // times the bumps at speed's own size, NFS_NITRO_SHAKE
+constexpr float kRate = 9.0f;      // a second, NFS_NITRO_SHAKE_RATE
+}  // namespace nitrorumble
+
+/* How far the camera is moved up (down when less than 0) by the bottle this
+ * frame; 0 when it is not burning. */
+static float nitroRumble(win32::WinApplication* app, x86::reg32 car, x86::sreg32 tick)
+{
+    static const float size = shakeSetting("NFS_SPEED_SHAKE", 2.5f, 0.0f, 5.0f);   // the bumps' own
+    static const float share = shakeSetting("NFS_NITRO_SHAKE", nitrorumble::kSize, 0.0f, 5.0f);
+    static const float rate = shakeSetting("NFS_NITRO_SHAKE_RATE", nitrorumble::kRate, 1.0f, 30.0f);
+    const float burning = nitroBurning();
+    if (size <= 0.0f || share <= 0.0f || rate <= 0.0f || burning <= 0.001f || tick < 0)
+        return 0.0f;
+    const float height = shakeHeight(app, car, size) * share;
+    const float phase = float(tick) / 64.0f * rate * 2.0f * SDL_PI_F;
+    return height * burning * SDL_sinf(phase);
 }
 
 bool cameraToView(win32::WinApplication* app, x86::CPU& cpu)
@@ -404,8 +448,26 @@ bool cameraToView(win32::WinApplication* app, x86::CPU& cpu)
             place[k] = place[k] - forward[k] * s_pull + up[k] * s_pull * 0.25f;
     // A crash's shake, in any of the player's own views (native_crash.cpp).
     crashShake(app, place, right, up);
-    // And the bumps at speed (speedShake).
-    const float bump = speedShake(app, car, passed);
+    // The bumps at speed (speedShake), and the bottle of nitro's rumble under them.
+    const float rumble = nitroRumble(app, car, tick);
+    /* NFS_NITRO_SHAKE_TRACE: how far the rumble has swung each second, and at
+     * what speed -- what to tune the two switches by. */
+    if (SDL_getenv("NFS_NITRO_SHAKE_TRACE"))
+    {
+        static float s_least = 0.0f, s_most = 0.0f;
+        static x86::sreg32 s_said = -1000;
+        s_least = SDL_min(s_least, rumble);
+        s_most = SDL_max(s_most, rumble);
+        if (tick - s_said >= 64 || tick < s_said)
+        {
+            s_said = tick;
+            if (s_most > 0.0f || s_least < 0.0f)
+                SDL_Log("[NITRO] the rumble %.1f to %.1f cm at %.0f m/s", double(s_least * 100.0f),
+                        double(s_most * 100.0f), double(SDL_fabsf(app->getMemory<float>(car + 0xb8))));
+            s_least = s_most = 0.0f;
+        }
+    }
+    const float bump = speedShake(app, car, passed) + rumble;
     for (int k = 0; k < 3; ++k)
         place[k] += up[k] * bump;
     for (int k = 0; k < 3; ++k)

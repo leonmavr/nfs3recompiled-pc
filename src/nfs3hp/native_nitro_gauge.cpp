@@ -30,14 +30,20 @@
  * a nearly empty bottle is the red of its own bottom.  `kBands` bands make the
  * gradient without a new shader: each is one tinted quad of the mask.
  *
- * Where.  Right of the slipstream's icon, as tall as it (kHeight, kLeft,
- * kBottom), drawn as a layer of the port's own overlay (lib/overlay.h,
- * OverlayNitro) set again for each frame it is in.  Fixed there for now: a
- * movable element of its own comes later (TODOs.md, the nitro milestone's
- * second step).  Split screen shows none: the bottle there is the game's to
- * give, as its map is.  NFS_NITRO_CHARGE pins the level, to look at the bottle
- * full, half and empty without a race to fill it.  It keeps out of a pause, as
- * the slipstream's icon and the song's panel do: the clock stands then.
+ * Where.  An element of the HUD's own layout, so HUD -> Positions frames,
+ * drags and measures the bottle itself: element 8 of the 23 a player's layout
+ * has -- the replay bar's, which draws nothing in a race.  The bottle stands on
+ * the box's bottom-left corner, as tall as the slipstream's icon (kHeight), and
+ * the box's rectangle is written from the bottle's bounds every race frame as
+ * the opponents' list writes its own (native_standings.cpp's writeRect), so what
+ * the editor frames is the bottle and not the box around it.  With no box to
+ * read it falls back to kLeft and kBottom, in HUD units, right of the
+ * slipstream's icon.  Drawn as a layer of the port's own overlay
+ * (lib/overlay.h, OverlayNitro) set again for each frame it is in.  Split
+ * screen shows none: the bottle there is the game's to give, as its map is.
+ * NFS_NITRO_CHARGE pins the level, to look at the bottle full, half and empty
+ * without a race to fill it.  It keeps out of a pause, as the slipstream's icon
+ * and the song's panel do: the clock stands then.
  *
  * The picture is kept white in its mask and as it was drawn in its art, read
  * from beside the executable (the desktop build copies assets/nitro there) or,
@@ -50,6 +56,14 @@ bool raceIsRunning();   // nfs3hp_main.cpp
 namespace
 {
 constexpr x86::reg32 kSplitScreen = 0x6fd3b0;   // 1: two players, and no nitro of the port's
+constexpr x86::reg32 kPlayerIndex = 0x6fd4f4;   // the player whose HUD is on the screen
+constexpr x86::reg32 kLayout = 0x6fbc74;        // the elements' place as fractions, 16 bytes each
+constexpr x86::reg32 kLayoutStride = 0x348;     // a player's layouts, 0x1a4 each: the racer's and the cop's
+constexpr x86::reg32 kHudRects = 0x749758;      // the elements' pixel rectangles, 23 of four ints a player
+constexpr x86::reg32 kHudRectsPerPlayer = 23;
+constexpr x86::reg32 kHudWidth = 0x7cdac8;      // the HUD's own, in pixels
+constexpr x86::reg32 kHudHeight = 0x7cdacc;
+constexpr x86::reg32 kElement = 8;              // the replay bar's, which a race never draws
 constexpr x86::reg32 kRaceClock = 0x7d3684;     // 64 ticks a second
 constexpr Uint64 kPausedNs = 150 * SDL_NS_PER_MS;   // the clock standing this long: a pause
 x86::sreg32 s_lastClock = -1;
@@ -71,8 +85,9 @@ constexpr float kMaskU1 = float(kGutter + kTileW) / float(kAtlasW);
 constexpr float kArtU0 = float(kGutter * 2 + kTileW) / float(kAtlasW);
 constexpr float kArtU1 = float(kGutter * 2 + kTileW * 2) / float(kAtlasW);
 constexpr float kV0 = float(kGutter) / float(kAtlasH), kV1 = float(kGutter + kTileH) / float(kAtlasH);
-// Where it stands, HUD units: right of the slipstream's icon (12 and 84 tall
-// there, 40 wide), its bottom on the same line.
+// How big it is, HUD units: as tall as the slipstream's icon (84 there, 40
+// wide).  Where it stands comes from the HUD's layout; with none to read, right
+// of that icon, its bottom on the same line.
 constexpr float kHeight = 84.0f;
 constexpr float kLeft = 62.0f;
 constexpr float kBottom = 14.0f;
@@ -90,6 +105,8 @@ struct Art
 
 std::unique_ptr<Art> s_art;
 bool s_artTried = false;
+float s_left = gauge::kLeft;              // where it is drawn, HUD units
+float s_bottom = kOverlayUnits - gauge::kBottom;
 
 bool enabled()
 {
@@ -183,14 +200,58 @@ float level()
     return pinned >= 0.0f ? pinned : SDL_clamp(nitroCharge(), 0.0f, 1.0f);
 }
 
+/* Where the bottle stands, HUD units, from the HUD's own layout: the bottom-left
+ * corner of element 8's box in the racer's layout -- always the racer's, even
+ * with the player in a cop's car, since the cop's layout numbers its elements
+ * differently (the standings' table is its 20th, the map its 22nd) and what its
+ * 8th is is not known.  False when there is no box to read, which leaves it at
+ * kLeft, kBottom. */
+bool place(win32::WinApplication* app, float& left, float& bottom)
+{
+    using namespace gauge;
+    const x86::sreg32 hudW = x86::sreg32(app->getMemory<x86::reg32>(kHudWidth));
+    const x86::sreg32 hudH = x86::sreg32(app->getMemory<x86::reg32>(kHudHeight));
+    if (hudW <= 0 || hudH <= 0)
+        return false;
+    const x86::reg32 player = app->getMemory<x86::reg32>(kPlayerIndex);
+    if (player > 1)
+        return false;
+    const x86::reg32 at = kLayout + player * kLayoutStride + kElement * 16;
+    const float top = app->getMemory<float>(at), boxLeft = app->getMemory<float>(at + 4);
+    const float boxBottom = app->getMemory<float>(at + 8), right = app->getMemory<float>(at + 12);
+    if (!(right > boxLeft) || !(boxBottom > top))
+        return false;
+    const float unit = kOverlayUnits / float(hudH);
+    left = boxLeft * float(hudW) * unit;
+    bottom = boxBottom * float(hudH) * unit;
+    return true;
+}
+
+/* The element's rectangle made the bottle's, for the editor to frame and drag
+ * (as native_standings.cpp's writeRect does for the list's panel). */
+void writeRect(win32::WinApplication* app, float x0, float y0, float x1, float y1)
+{
+    using namespace gauge;
+    const x86::sreg32 hudH = x86::sreg32(app->getMemory<x86::reg32>(kHudHeight));
+    const x86::reg32 player = app->getMemory<x86::reg32>(kPlayerIndex);
+    if (hudH <= 0 || player > 1)
+        return;
+    const float toPixels = float(hudH) / kOverlayUnits;
+    const x86::reg32 rect = kHudRects + player * kHudRectsPerPlayer * 16 + kElement * 16;
+    app->getMemory<x86::reg32>(rect) = x86::reg32(SDL_lround(x0 * toPixels));
+    app->getMemory<x86::reg32>(rect + 4) = x86::reg32(SDL_lround(y0 * toPixels));
+    app->getMemory<x86::reg32>(rect + 8) = x86::reg32(SDL_lround(x1 * toPixels));
+    app->getMemory<x86::reg32>(rect + 12) = x86::reg32(SDL_lround(y1 * toPixels));
+}
+
 void draw(const Art& a, float charge)
 {
     using namespace gauge;
     auto overlay = std::make_shared<Overlay>();
     overlay->art = a.pictures;
     const float width = kHeight * float(kTileW) / float(kTileH);
-    const float left = kLeft;
-    const float bottom = kOverlayUnits - kBottom;
+    const float left = s_left;
+    const float bottom = s_bottom;
     const float top = bottom - kHeight;
     if (charge > kLeastLevel)
     {
@@ -244,6 +305,18 @@ void nitroGaugeTick(win32::WinApplication* app)
     const Art* a = art();
     if (!a)
         return;
+    /* Its place from the HUD's layout, and the element's rectangle made the
+     * bottle's, so the editor frames what is on the screen. */
+    if (!place(app, s_left, s_bottom))
+    {
+        s_left = gauge::kLeft;
+        s_bottom = kOverlayUnits - gauge::kBottom;
+    }
+    else
+    {
+        const float width = gauge::kHeight * float(gauge::kTileW) / float(gauge::kTileH);
+        writeRect(app, s_left, s_bottom - gauge::kHeight, s_left + width, s_bottom);
+    }
     draw(*a, level());
 }
 

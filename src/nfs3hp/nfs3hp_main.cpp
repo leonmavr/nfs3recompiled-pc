@@ -601,7 +601,10 @@ static bool widescreenHudScale(win32::WinApplication* app, x86::reg32 element, b
     if (!height || width * 3 <= height * 4)
         return false;
     const double narrow = double(height) * 4.0 / (double(width) * 3.0);
-    if (element == 1 || element == 3 || element == 6 || element == 8)
+    /* Element 8 -- the replay bar, which the port's bottle of nitro takes the
+     * place of -- is drawn as laid out: a bottle has a shape of its own, and
+     * the bottle is drawn in the box the editor shows. */
+    if (element == 1 || element == 3 || element == 6)
     {
         across = true;
         scale = narrow;
@@ -621,11 +624,12 @@ static bool widescreenHudScale(win32::WinApplication* app, x86::reg32 element, b
  * element out as a fraction of the screen -- the DashHud .POS files, kept in
  * config.dat -- and sub_480910 turns that into pixels by the screen's width and
  * height, so on 16:9 each came out a third wider than it was drawn.  The analog
- * speedometer and tachometer, the tutorial icon and the replay bar (elements 1,
- * 3, 6 and 8 of the 23 a .POS file lists) are narrowed about their centre by as
- * much as the screen is wider than 4:3, and the spike belt indicator (21) is
- * made taller by as much instead: the elements, and the ways, the Modern Patch
- * settled on.  Everything else keeps its layout, still a fraction of the screen.
+ * speedometer and tachometer and the tutorial icon (elements 1, 3 and 6 of the
+ * 23 a .POS file lists) are narrowed about their centre by as much as the
+ * screen is wider than 4:3, and the spike belt indicator (21) is made taller by
+ * as much instead: the elements, and the ways, the Modern Patch settled on.
+ * Element 8 -- the replay bar's, which the port's bottle of nitro takes the
+ * place of -- is not one of them: a bottle has its own shape and keeps it.  Everything else keeps its layout, still a fraction of the screen.
  * The layout itself stays as laid out, so a 4:3 screen finds the HUD as it was;
  * the HUD editor is told the difference (hudLayoutDesigned, hudLayoutsDrawn).
  * `slot` is the element's offset in the table of pixel rectangles at 0x749758:

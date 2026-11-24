@@ -2267,6 +2267,12 @@ It is felt as well as used (`native_nitro.cpp`'s `nitroPull`, `nitroBurning`):
   to 1.1 over a quarter, which it holds while it burns, and home to 1 when it
   goes out -- both halves eased in and out (a smoothstepped hump on the race's
   clock), rather than the one frame the kick first was.
+- The camera rumbles while it burns (`native_effects.cpp`'s `nitroRumble`,
+  `NFS_NITRO_SHAKE` 1.5, `NFS_NITRO_SHAKE_RATE` 9 a second): a steady up and
+  down, one sine a turn, not the occasional bumps the speed gives -- half again
+  the size of a 150 km/h bump (and following them by the speed of the car), eased
+  in and out with the burn, by the race's clock so a pause holds it.
+  `NFS_NITRO_SHAKE_TRACE` says how far it swings each second.
 - A jet out of every exhaust while it burns (`native_particles.cpp`,
   `throwJet`, from `engineFlames`): one every 0.12 s, drawn out along the pipe
   rather than balled up at its mouth -- two and a quarter times an ordinary
@@ -3637,6 +3643,8 @@ the next time the game starts.
 | `NFS_NITRO_UI` | on | `0`/`off`: no bottle on the HUD (Nitro). |
 | `NFS_NITRO_FILL` | `1` | How quickly the race fills the bottle, a multiplier on the slipstream's, a drift's and a jump's, up to 5; `0`/`off` for a bottle nothing fills (Nitro). |
 | `NFS_NITRO_CHARGE` | unset | `0` to `1`: pins the bottle's level there, for a look at the gauge (Nitro). |
+| `NFS_NITRO_SHAKE` | `1.5` | `0`/`off`: no rumble of the camera while it burns. A number up to 5: how big, against the bumps at speed (Nitro). |
+| `NFS_NITRO_SHAKE_RATE` | `9` | How quick the rumble is, a second, from 1 to 30 (Nitro). |
 | `NFS_NITRO_SOUND` | `2` | `0`/`off`: no nitro sound. A number up to 3: how loud the whoosh as it lights and the hiss while it burns (Nitro). |
 | `NFS_NITRO_AI` | on | `0`/`off`: the opponents have no nitro of their own (Nitro). |
 | `NFS_NITRO_AI_FILL` | `30` | Seconds for a full bottle of an opponent's, from 2 to 300 (Nitro). |
