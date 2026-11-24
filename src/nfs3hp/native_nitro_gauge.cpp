@@ -95,7 +95,7 @@ constexpr float kBottom = 14.0f;
 constexpr int kBands = 24;                               // the gradient's bands, bottom to top
 constexpr float kLow[3] = { 184.0f / 255.0f, 82.0f / 255.0f, 59.0f / 255.0f };    // #b8523b, nearly empty
 constexpr float kHigh[3] = { 71.0f / 255.0f, 224.0f / 255.0f, 0.0f / 255.0f };    // #47e000, full
-constexpr float kFillAlpha = 0.92f;
+constexpr float kFillAlpha = 0.65f;                      // 35% see-through: the bottle's own art shows through the liquid
 constexpr float kLeastLevel = 0.004f;                    // below this nothing is drawn
 }  // namespace gauge
 

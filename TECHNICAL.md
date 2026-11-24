@@ -2245,7 +2245,8 @@ bottle, fixed to the bottle and not to the liquid -- `#b8523b` at its bottom,
 `#47e000` at its top -- so the level reads twice over: how high the surface
 stands and what colour it shows, a nearly empty bottle being the red of its own
 bottom. `kBands` bands make the gradient without a new shader: one tinted quad
-of the mask each. As tall as the slipstream's icon (84 HUD units), as a layer of
+of the mask each, at `kFillAlpha` -- 0.65, so the liquid is a third see-through
+and the bottle's own art and the road behind it show through it. As tall as the slipstream's icon (84 HUD units), as a layer of
 the port's own overlay (`OverlayNitro`).
 
 It is an element of the HUD's own layout, so HUD -> Positions frames, drags and
