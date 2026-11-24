@@ -4,6 +4,8 @@
 namespace nfs3hp
 {
 // Port (tools/apply_hud_editor.py): defined in nfs3hp_main.cpp.
+x86::reg32 hudEditorShown(x86::reg32 shown, x86::reg32 element);
+bool hudEditorDraws(win32::WinApplication* app, x86::reg32 object);
 void hudLayoutDesigned(win32::WinApplication* app, x86::reg32 rect, x86::reg32 element);
 void hudLayoutsDrawn(win32::WinApplication* app, x86::CPU& cpu, bool drawn);
 x86::sreg32 hudDragSlack(win32::WinApplication* app, x86::reg32 object, x86::reg32 side);
@@ -12895,8 +12897,12 @@ L_0x0045bcc1:
     // 0045bcc3  e868eeffff             -call 0x45ab30
     cpu.esp -= 4;
     hudEditorDraw(app, cpu.ecx, true); /* port: measure what the element draws */
-    sub_45ab30(app, cpu.sync());
-    cpu.reload();
+    if (hudEditorDraws(app, cpu.ecx)) /* port: element 8 draws nothing, the bottle is the port's */
+    {
+        cpu.esp -= 4;
+        sub_45ab30(app, cpu.sync());
+        cpu.reload();
+    }
     hudEditorDraw(app, cpu.ecx, false);
     if (cpu.terminate) return;
     // 0045bcc8  8b413c                 -mov eax, dword ptr [ecx + 0x3c]
@@ -12924,6 +12930,7 @@ L_0x0045bcc1:
     cpu.reload();
     if (cpu.terminate) return;
     // 0045bce0  85c0                   +test eax, eax
+    cpu.eax = x86::reg32(hudEditorShown(cpu.eax, cpu.edx)); /* port: the bottle's element is shown even where a race draws nothing */
     cpu.clear_co();
     cpu.set_szp(static_cast<x86::reg32>(cpu.eax & cpu.eax));
     // 0045bce2  7514                   -jne 0x45bcf8

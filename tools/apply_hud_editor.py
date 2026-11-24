@@ -152,7 +152,10 @@ SITES = [
      " /* port: was 0 */",
      ""),
     # sub_45bcb0: the element drawn in the editor, ecx the element's item, which
-    # sub_45ab30 keeps.
+    # sub_45ab30 keeps.  The port's own element draws nothing of the game's:
+    # element 8 is the replay bar's, and the bottle of nitro takes its place
+    # (native_nitro_gauge.cpp), so the editor frames the box the bottle stands in
+    # and not a bar there is no bottle in.
     ("nfs3hp.16.cpp", "0045bcc3  e868eeffff",
      "    cpu.esp -= 4;\n"
      "    sub_45ab30(app, cpu.sync());\n"
@@ -163,6 +166,36 @@ SITES = [
      "    cpu.reload();\n"
      "    hudEditorDraw(app, cpu.ecx, false);",
      "void hudEditorDraw(win32::WinApplication* app, x86::reg32 object, bool begin);\n"),
+    # The port's own element draws nothing of the game's: element 8 is the replay
+    # bar's, and the bottle of nitro takes its place (native_nitro_gauge.cpp), so
+    # the editor frames the box the bottle stands in, and no bar there is no
+    # bottle in.  After the site above, on the code it leaves.
+    ("nfs3hp.16.cpp", "0045bcc3  e868eeffff",
+     "    hudEditorDraw(app, cpu.ecx, true); /* port: measure what the element draws */\n"
+     "    sub_45ab30(app, cpu.sync());\n"
+     "    cpu.reload();\n"
+     "    hudEditorDraw(app, cpu.ecx, false);",
+     "    hudEditorDraw(app, cpu.ecx, true); /* port: measure what the element draws */\n"
+     "    if (hudEditorDraws(app, cpu.ecx)) /* port: element 8 draws nothing, the bottle is the port's */\n"
+     "    {\n"
+     "        cpu.esp -= 4;\n"
+     "        sub_45ab30(app, cpu.sync());\n"
+     "        cpu.reload();\n"
+     "    }\n"
+     "    hudEditorDraw(app, cpu.ecx, false);",
+     "bool hudEditorDraws(win32::WinApplication* app, x86::reg32 object);\n"),
+    # sub_45bcb0: whether the element is shown, asked of the game (sub_47bc20,
+    # eax) with the element in edx.  A hidden element gets no frame and cannot
+    # be moved at all, and the port's bottle of nitro is element 8 -- the replay
+    # bar's, which a race never draws -- so it is shown in the editor always.
+    ("nfs3hp.16.cpp", "0045bce0  85c0",
+     "    cpu.clear_co();\n"
+     "    cpu.set_szp(static_cast<x86::reg32>(cpu.eax & cpu.eax));",
+     "    cpu.eax = x86::reg32(hudEditorShown(cpu.eax, cpu.edx));"
+     " /* port: the bottle's element is shown even where a race draws nothing */\n"
+     "    cpu.clear_co();\n"
+     "    cpu.set_szp(static_cast<x86::reg32>(cpu.eax & cpu.eax));",
+     "x86::reg32 hudEditorShown(x86::reg32 shown, x86::reg32 element);\n"),
     # sub_45bcb0: the frame about it, eax and ebx the item, which sub_459440
     # keeps in ebx.
     ("nfs3hp.16.cpp", "0045bd0c  e82fd7ffff",
@@ -216,12 +249,20 @@ def apply(root):
             return eol.join(s.split("\n"))
 
         sites = [site for site in SITES if site[0] == name]
-        declarations = native(HEADER + "".join(site[4] for site in sites))
-        if declarations not in text:
+        # A declaration at a time, so that a site added later does not have the
+        # whole list put in again.
+        for site in sites:
+            declaration = native(site[4])
+            if not declaration or declaration in text:
+                continue
+            header = native(HEADER)
+            if header in text:
+                text = text.replace(header, header + declaration, 1)
+                continue
             namespace = native(NAMESPACE)
             if text.count(namespace) != 1:
                 raise RuntimeError("%s: namespace opening changed" % name)
-            text = text.replace(namespace, namespace + declarations, 1)
+            text = text.replace(namespace, namespace + header + declaration, 1)
 
         for _, instruction, old, new, _ in sites:
             old, new = native(old), native(new)

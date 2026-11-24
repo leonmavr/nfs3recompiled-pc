@@ -52,6 +52,7 @@ namespace nfs3hp
 {
 
 bool raceIsRunning();   // nfs3hp_main.cpp
+bool hudEditorUp();     // and whether the HUD editor is on the screen
 
 namespace
 {
@@ -300,8 +301,9 @@ void nitroGaugeTick(win32::WinApplication* app)
     if (clock != s_lastClock)
         s_clockMovedNs = SDL_GetTicksNS();
     s_lastClock = clock;
-    if (SDL_GetTicksNS() - s_clockMovedNs > kPausedNs)
+    if (SDL_GetTicksNS() - s_clockMovedNs > kPausedNs && !hudEditorUp())
         return;   // a pause: the menu is over the picture, and the bottle is not drawn on it
+                  // -- but the HUD editor is shown it, that it may be placed
     const Art* a = art();
     if (!a)
         return;

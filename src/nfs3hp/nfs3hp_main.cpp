@@ -765,8 +765,30 @@ void hudQueueQuad(win32::WinApplication* app, x86::reg32 list, x86::reg32 a, x86
     }
 }
 
+/* When the HUD editor last drew an element's frame: it draws all of them every
+ * frame it is open, so a moment ago is one. */
+static Uint64 s_hudEditorNs = 0;
+
+/* Whether the HUD editor is on the screen.  The port's own elements are drawn
+ * while it is, though the race stands with it, so that what the editor frames
+ * and drags is what the player sees. */
+bool hudEditorUp()
+{
+    return s_hudEditorNs && SDL_GetTicksNS() - s_hudEditorNs < 100 * SDL_NS_PER_MS;
+}
+
+/* Whether the game has an element of its own to draw in the editor: the bottle
+ * of nitro is element 8, the replay bar's, and a race draws nothing there --
+ * that is, the bar is not drawn in the editor either, which is where it would
+ * only be in the way of the bottle standing in it. */
+bool hudEditorDraws(win32::WinApplication* app, x86::reg32 object)
+{
+    return app->getMemory<x86::reg32>(object + 0x3c) % 23 != 8;
+}
+
 void hudEditorDraw(win32::WinApplication* app, x86::reg32 object, bool begin)
 {
+    s_hudEditorNs = SDL_GetTicksNS();
     if (begin)
     {
         s_hudMeasuring = true;
@@ -813,6 +835,17 @@ void hudEditorDraw(win32::WinApplication* app, x86::reg32 object, bool begin)
     drawn.top = top;
     drawn.right = right;
     drawn.bottom = bottom;
+}
+
+/* Whether the HUD editor shows an element at all -- the game's answer (from
+ * sub_47bc20, told the element), for the port's own: the bottle of nitro is
+ * element 8, the replay bar's, and a race draws nothing there, so the game
+ * would never frame it and it could not be moved.  Shown always, so that
+ * HUD -> Positions has it among the elements as the map and the list have
+ * theirs. */
+x86::reg32 hudEditorShown(x86::reg32 shown, x86::reg32 element)
+{
+    return element == 8 ? 1 : shown;
 }
 
 /* How far an element's box reaches past what it draws, on one side -- 0 left,

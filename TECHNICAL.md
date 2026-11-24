@@ -2245,10 +2245,26 @@ bottle, fixed to the bottle and not to the liquid -- `#b8523b` at its bottom,
 `#47e000` at its top -- so the level reads twice over: how high the surface
 stands and what colour it shows, a nearly empty bottle being the red of its own
 bottom. `kBands` bands make the gradient without a new shader: one tinted quad
-of the mask each. As tall as the slipstream's icon (84 HUD units) and to its
-right (62 from the left, its bottom 14 from the bottom), as a layer of the
-port's own overlay (`OverlayNitro`); a movable element of its own, HUD ->
-Positions, is still to come. It keeps out of a pause, as the slipstream's icon
+of the mask each. As tall as the slipstream's icon (84 HUD units), as a layer of
+the port's own overlay (`OverlayNitro`).
+
+It is an element of the HUD's own layout, so HUD -> Positions frames, drags and
+measures the bottle itself: element 8 -- the replay bar's, which a race never
+draws -- standing on that box's bottom-left corner, with the element's pixel
+rectangle written from the bottle's bounds every race frame (as the opponents'
+list writes its own rectangle), so what the editor frames is the bottle. On a
+wide screen element 8 is drawn as laid out, not narrowed as the gauges are: a
+bottle has its own shape. It is the racer's layout that is read even with the
+player in a cop's car, the cop's layout numbering its elements differently (its
+table is the 20th, its map the 22nd). Three patches make the editor able to use
+it: the editor frames only the elements the game says are shown, and element 8
+is always answered as shown (`hudEditorShown`); the game's own drawing of it --
+a replay bar's -- is left out there (`hudEditorDraws`), so nothing is measured
+and the frame is the bottle's rectangle; and the bottle is drawn while the
+editor is up (`hudEditorUp`), though the race stands, so what is being moved is
+in sight.
+
+It keeps out of a pause, as the slipstream's icon
 does (the race's clock stands then), and every race fills the bottle: the one
 the nitro is first lit in, a race restarted from the pause menu, and a new car
 alike. `NFS_NITRO_CHARGE` pins the level for a look at it full, half and

@@ -809,7 +809,12 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
         is left here is its own element, so HUD -> Positions can move it: done
         -- it is element 8's, the replay bar's, with the element's rectangle
         written from the bottle's bounds each frame, and it is not narrowed on a
-        wide screen (widescreenHudScale, nfs3hp_main.cpp).
+        wide screen (widescreenHudScale, nfs3hp_main.cpp).  The editor frames
+        only elements the game says are shown, so element 8 is always shown
+        there (hudEditorShown), the game's replay bar is not drawn in it
+        (hudEditorDraws), and the bottle is drawn in the editor while the race
+        stands (hudEditorUp) -- all three in nfs3hp_main.cpp, patched by
+        tools/apply_hud_editor.py.
     - **3. Earning it back** (M).  Three sources first, each a rate in the ini,
       all of them data the port already computes: the slipstream
       (`slipstreamOf()`, native_surface.cpp:478 -- the strongest, and the one
