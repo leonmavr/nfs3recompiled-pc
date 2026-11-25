@@ -1529,9 +1529,9 @@ player's own row.
   is that car's own copy of the name (`+0x1e4`). The folder's `fedata.eng` names
   it: its text holds the car's code, then a header, then its strings -- make,
   model, its full name, its figures -- each ending at a NUL with a u32 offset to
-  it from `0x2f` on (`kFedataStrings`). The first three letters of its make and
-  its model, the two cut to twelve characters in all -- "Jag XK8", "Lam Diablo
-  S", "Mer CLK-GTR". A text whose table does not read is taken as runs of
+  it from `0x2f` on (`kFedataStrings`). The first four letters of its make and
+  its model, the two cut to thirteen characters in all -- "Jagu XK8", "Lamb
+  Diablo S", "Merc CLK-GTR". A text whose table does not read is taken as runs of
   letters between the header's bytes (as `tools/import_car.py` does, which reads
   the table the same way), and a folder with no text at all is shown as it is.
   Each half is shown for `kColumnSeconds` of the race's clock.
@@ -1551,6 +1551,8 @@ player's own row.
   element's rectangle, so the table lagged a frame behind a drag. The port's
   panel and rows are both worked out from the box each frame, so the list is
   drawn exactly where the editor's frame stands at every moment of a drag.
+- **Size.** The panel, its rows and its padding are `kListScale` (1.175) times
+  what they were, and the letters `kLetterScale` (1.2) times the size they had.
 - **Drawn** as a layer of the overlay set for one frame at a time
   (`glide2x::overlayFrame`, `OverlayStandings`), in the HUD's own font
   (`native_hud_font.cpp`) -- the place and the gap right-aligned, the name as
@@ -2343,11 +2345,19 @@ It is felt as well as used (`native_nitro.cpp`'s `nitroPull`, `nitroBurning`):
   for that many seconds and no more, so letting go can be watched with no hands
   on the keys.
 
-It is heard as well as seen (`native_mixer.cpp`, `NFS_NITRO_SOUND`, 2 by ear;
-the port's own noise, as the wind is, placeholders both until a sound is chosen
-for them): a whoosh as it lights -- noise through a band swept down from 900 Hz
-to 260 over `kWhooshSeconds` (0.55 s) as it fades -- and a hiss while it burns,
-what a low pass at 1.2 kHz leaves above it, eased with the burn. The game thread
+It is heard as well as seen (`native_mixer.cpp`, `NFS_NITRO_SOUND`, 2 by ear):
+`assets/nitro/nitro_ignition.wav` plays once as it lights and
+`assets/nitro/nitro_loop.wav` loops for as long as it burns, its level eased
+with the burn (`kLoopEase`). They are read once, from the game thread, the first
+time the nitro is heard from (`loadNitroSamples`: beside the executable, or from
+an Android build's assets, as the art is), turned to stereo floats, normalised
+to a peak of 1 and resampled linearly to the game's sound rate as they are
+mixed (`addNitroSamples`; `kIgnitionLevel`, `kLoopLevel`). The ignition plays
+through whatever happens to the burn, the loop fades with it. If either file is
+missing the port's own noise stays, as before: a whoosh as it lights -- noise
+through a band swept down from 900 Hz to 260 over `kWhooshSeconds` (0.55 s) as
+it fades -- and a hiss while it burns, what a low pass at 1.2 kHz leaves above
+it, eased with the burn. The game thread
 hands the mixer how hard it burns and how many times it has lit
 (`nitroSound`, from `colourGradeTick` as the wind's speed is); the count going up
 is the edge the whoosh starts on. `NFS_NITRO_SOUND_TRACE` says when one starts.

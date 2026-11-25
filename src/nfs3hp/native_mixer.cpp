@@ -3,6 +3,7 @@
 #include "native_thrash.h"
 #include <SDL3/SDL.h>
 #include <cstdint>
+#include <string>
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -260,6 +261,7 @@ struct Nitro
     float hiss = 0.0f, kick = 0.0f;
     unsigned lit = 0;
     float low[2] = {}, band[2] = {}, bandLow[2] = {};
+    double ignitionAt = -1.0, loopAt = 0.0;   // the samples' places, in their own frames (-1: not playing)
 
     float noise()
     {
@@ -270,6 +272,92 @@ struct Nitro
     }
 };
 Nitro s_nitro;
+
+/* The nitro's own sounds, where there are files for them: nitro_ignition.wav
+ * plays once as the bottle lights, nitro_loop.wav loops for as long as it burns
+ * (its level eased with the burn, as the hiss's is).  Read from the game
+ * thread the first time the nitro is heard from (nitroSound) -- beside the
+ * executable, or in an Android build's assets, as the art is -- and turned to
+ * stereo floats, peak 1; the mixer resamples them as it plays.  With either
+ * missing the noise above stays, the whoosh and the hiss. */
+namespace nitro
+{
+constexpr const char* kIgnitionFile = "assets/nitro/nitro_ignition.wav";   // beside the executable
+constexpr const char* kIgnitionAsset = "nitro/nitro_ignition.wav";         // in an Android build's assets
+constexpr const char* kLoopFile = "assets/nitro/nitro_loop.wav";
+constexpr const char* kLoopAsset = "nitro/nitro_loop.wav";
+constexpr float kIgnitionLevel = 11000.0f;   // the ignition's peak (the accumulator's units)
+constexpr float kLoopLevel = 7000.0f;        // the loop's, at full burn
+constexpr float kSettingDefault = 2.0f;      // NFS_NITRO_SOUND's default, where these levels are as written
+constexpr float kLoopEase = 0.12f;           // s for the loop's level to follow the burn
+}  // namespace nitro
+
+struct NitroSample
+{
+    std::vector<float> frames;   // interleaved left, right
+    int rate = 0;
+};
+NitroSample s_nitroIgnition, s_nitroLoop;
+std::atomic<bool> s_nitroSamplesReady{false};
+
+bool loadNitroSample(const char* file, const char* asset, NitroSample& out)
+{
+    const char* base = SDL_GetBasePath();
+    const std::string beside = std::string(base ? base : "") + file;
+    const char* tries[] = { beside.c_str(), asset };
+    SDL_AudioSpec spec;
+    Uint8* data = nullptr;
+    Uint32 length = 0;
+    bool read = false;
+    for (const char* path : tries)
+        if ((read = SDL_LoadWAV(path, &spec, &data, &length)))
+            break;
+    if (!read)
+    {
+        SDL_Log("[NITRO] the sound %s not read (%s)", beside.c_str(), SDL_GetError());
+        return false;
+    }
+    SDL_AudioSpec want = {};
+    want.format = SDL_AUDIO_F32;
+    want.channels = 2;
+    want.freq = spec.freq;
+    Uint8* converted = nullptr;
+    int convertedBytes = 0;
+    const bool ok = SDL_ConvertAudioSamples(&spec, data, int(length), &want, &converted, &convertedBytes);
+    SDL_free(data);
+    if (!ok || !converted || convertedBytes < int(2 * sizeof(float)))
+    {
+        SDL_Log("[NITRO] the sound %s not converted (%s)", beside.c_str(), SDL_GetError());
+        SDL_free(converted);
+        return false;
+    }
+    const std::size_t count = std::size_t(convertedBytes) / (2 * sizeof(float)) * 2;
+    out.frames.assign(reinterpret_cast<const float*>(converted), reinterpret_cast<const float*>(converted) + count);
+    SDL_free(converted);
+    float peak = 0.0f;
+    for (const float v : out.frames)
+        peak = SDL_max(peak, SDL_fabsf(v));
+    if (peak > 0.0f)
+        for (float& v : out.frames)
+            v /= peak;
+    out.rate = spec.freq;
+    SDL_Log("[NITRO] the sound %s read: %.2f s at %d Hz", beside.c_str(), double(out.frames.size() / 2) / double(spec.freq), spec.freq);
+    return true;
+}
+
+/* Once, from the game thread. */
+void loadNitroSamples()
+{
+    static bool tried = false;
+    if (tried)
+        return;
+    tried = true;
+    if (nitroSoundSetting() <= 0.0f)
+        return;
+    if (loadNitroSample(nitro::kIgnitionFile, nitro::kIgnitionAsset, s_nitroIgnition)
+        && loadNitroSample(nitro::kLoopFile, nitro::kLoopAsset, s_nitroLoop))
+        s_nitroSamplesReady.store(true, std::memory_order_release);
+}
 
 struct Mixer
 {
@@ -1692,6 +1780,67 @@ struct Mixer
             w32(kReverbIdle, 0);
     }
 
+    /* The nitro's two sounds (s_nitroIgnition and s_nitroLoop, above) into the
+     * block, dry, a linear resample each: the ignition once from where the
+     * bottle lit, the loop round and round with its level following the burn. */
+    void addNitroSamples(u32 frames, u32 accumulator, float setting, float burn)
+    {
+        Nitro& n = s_nitro;
+        if (setting <= 0.0f)
+        {
+            n.hiss = 0.0f;
+            n.ignitionAt = -1.0;
+            n.loopAt = 0.0;
+            return;
+        }
+        const float rate = float(SDL_max(gameSoundRate(), 8000));
+        const float ease = 1.0f - std::exp(-1.0f / (rate * nitro::kLoopEase));
+        const float scale = setting / nitro::kSettingDefault;
+        const std::vector<float>& ignition = s_nitroIgnition.frames;
+        const std::vector<float>& loop = s_nitroLoop.frames;
+        const double ignitionFrames = double(ignition.size() / 2), loopFrames = double(loop.size() / 2);
+        const double ignitionStep = double(s_nitroIgnition.rate) / double(rate);
+        const double loopStep = double(s_nitroLoop.rate) / double(rate);
+        for (u32 k = 0; k < frames; ++k)
+        {
+            n.hiss += (burn - n.hiss) * ease;
+            float out[2] = {};
+            if (n.hiss > 0.001f)
+            {
+                const std::size_t i = std::size_t(n.loopAt);
+                const std::size_t j = i + 1 < std::size_t(loopFrames) ? i + 1 : 0;
+                const float t = float(n.loopAt - double(i));
+                const float gain = nitro::kLoopLevel * (n.hiss / nitro::kSettingDefault);
+                for (int side = 0; side < 2; ++side)
+                    out[side] += gain * (loop[i * 2 + side] * (1.0f - t) + loop[j * 2 + side] * t);
+                n.loopAt += loopStep;
+                if (n.loopAt >= loopFrames)
+                    n.loopAt -= loopFrames;
+            }
+            else
+                n.loopAt = 0.0;
+            if (n.ignitionAt >= 0.0)
+            {
+                const std::size_t i = std::size_t(n.ignitionAt);
+                if (i + 1 >= std::size_t(ignitionFrames))
+                    n.ignitionAt = -1.0;
+                else
+                {
+                    const float t = float(n.ignitionAt - double(i));
+                    for (int side = 0; side < 2; ++side)
+                        out[side] += nitro::kIgnitionLevel * scale
+                                     * (ignition[i * 2 + side] * (1.0f - t) + ignition[(i + 1) * 2 + side] * t);
+                    n.ignitionAt += ignitionStep;
+                }
+            }
+            if (out[0] == 0.0f && out[1] == 0.0f)
+                continue;
+            const u32 at = accumulator + ((k << (r8(kShift) & 31)) << 2);
+            w16(at, u16(saturate(i32(s16(at)) + i32(out[0]))));
+            w16(at + 2, u16(saturate(i32(s16(at + 2)) + i32(out[1]))));
+        }
+    }
+
     /* The nitro (s_nitro, above) into the block, dry: a hiss while it burns and
      * a whoosh as it lights, the two of them noise through filters of their
      * own.  The whoosh starts when the game thread's count of ignitions has gone
@@ -1706,9 +1855,15 @@ struct Mixer
         {
             n.lit = lit;
             n.kick = 1.0f;
+            n.ignitionAt = 0.0;
             if (SDL_getenv("NFS_NITRO_SOUND_TRACE"))
                 SDL_Log("[NITRO] whoosh %u: %.1f Hz down to %.1f over %.2f s",
                         lit, 900.0, 260.0, double(nitro::kWhooshSeconds));
+        }
+        if (s_nitroSamplesReady.load(std::memory_order_acquire))
+        {
+            addNitroSamples(frames, accumulator, setting, burn);
+            return;
         }
         if (setting <= 0.0f || (burn <= 0.001f && n.hiss <= 0.001f && n.kick <= 0.0f))
         {
@@ -1987,6 +2142,7 @@ void windSpeed(float speed)
  * game thread each frame, as the wind's speed is. */
 void nitroSound(float burning, unsigned ignitions)
 {
+    loadNitroSamples();
     s_nitroBurn.store(burning == burning ? SDL_max(0.0f, SDL_min(burning, 1.0f)) : 0.0f,
                       std::memory_order_relaxed);
     s_nitroLit.store(ignitions, std::memory_order_relaxed);

@@ -570,6 +570,14 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     player) and `NFS_PURSUIT_GRID` (Hot Pursuit's full grid: six opponents,
     the most the cops' radio banks allow). The opponents' tuning no longer
     pushes traffic and cops about.
+- [ ] Cops EMP: cops have an EMP mechanism in their AI - if they stay behind a
+  driver and aligned for too long, they can attach with EMP. To the player, this
+  is shown as a brief flash post-processing visual affect. This intriduces
+  handling glitches for some duration, not only to player, but whatever opponent
+  they do it on. Bonus: this should be able to be implemented if player chooses
+  to be a cop (have a hotkey for it to), incl. its visual effect and HUD -
+  should be an EMP charger that replenishes with time and if we driving behind
+  someone (like slip streaming but less strict) for some time we can use EMP. 
 - [ ] Better police AI; based on chased player's style, how far he is, whether
   he is in their vision or not, adjust number of vehicles, strategy (e.g. rush
   to catch up, ram from side, trap from sides like a block, brake/drift in front
@@ -648,8 +656,6 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     hit, at most 1.2 m/s, so no hard rebounds (`wallFriction`,
     `native_effects.cpp`; TECHNICAL.md, "Walls a car slides along"). An
     earlier try today (`NFS_WALL_BOUNCE`, turning the velocity) was removed.
-
-### UI
 - [ ] Figure out how to add/create menu elements without breaking the visual
   style, make them seamless with the style of the game. Can you find any menu
   assets?
@@ -730,12 +736,24 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     list cannot be drawn a drag behind it: the shift is gone. No personality
     column for now. `NFS_OPPONENT_LIST=off` keeps the game's (TECHNICAL.md,
     "The opponents' list").
+- [ ] Opponent list small fixes: 4 silver cornersare fine. However behind the
+  list, another additional metallic-like rectangle appears - remove it. Also
+  scale it up by 1.175x and increase letter size by 1.2x. Also shorten card
+  brands to 4 letters, not 3.
+  - Partly done (2026-11-25), to be tested: the list is 1.175x, its letters
+    1.2x, and a car's make four letters (`kListScale`, `kLetterScale`,
+    `kMakeLetters` in `native_standings.cpp`). The extra rectangle is NOT
+    removed yet: it is not the port's own panel (`draw` queues one navy
+    rectangle and four corners), and the game's table and rows are skipped
+    while the list is drawn, so it needs a look at a running race to find.
 - [x] Rear view mirror: recently we increased ambience at night since night used
   to be too dark. However the rear-view mirror still shows what's behind me very
   dark, as if these changes have not been reflected on the rear-view mirror.
   - Done (2026-11-22), to be tested: the world's shader lifts the mirror's
     world at night as the whole-picture pass lifts the main view
     (`u_nightLift`; TECHNICAL.md, "Night").
+- [ ] Digital speed gauge: implement a segment-LED-like gauge instead of current that glows green
+  at night. It gets red near top speed.
 
 ### Driving/Gameplay
 - [x] Tire grip by surface: less on snow, sand and grass than on asphalt. Each
@@ -1065,6 +1083,28 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
   overlay is temporarily remove and have simply an overlay on bottom right
   explaining the keys: Arrows: rotate camera (new line) Space: take photo (new
   line) p: return to settings (new line) +/-: change distance.
+- [ ] Opponents: can u investigate if increased opponent skill/AI pull violates
+  opponent car performance (torque curve, transmission, acceleration, top speed
+  etc.). It shouldn't if that'sthe case. I think top speed is respected.
+  - Investigated (2026-11-25), nothing changed yet: opponents are not driven
+    through the torque curve or the gears at all -- `aiPull` reads the car's
+    own `AI ACC0..7` acceleration table from `carp.txt` (112 floats, one per
+    m/s), which already bakes those in. Top speed IS respected: the table
+    falls to 0 at the car's own maximum velocity (the Chevrolet's at 77 m/s,
+    its maximum 76.4), and scaling a force that is 0 there leaves it 0, so the
+    pace multiplier cannot lift the ceiling. Acceleration is NOT: every value
+    of the table is times `NFS_AI_PACE` (1.06) times the driver's pull
+    (0.98 to 1.05), times `NFS_AI_BEGINNER` (1.23) at Beginner -- up to about
+    +4% to +11% on Expert and +28% to +37% at Beginner at every speed, the
+    curve's shape and gear dips kept. The aim speed `+0x7b0` is also times
+    the driver's corners and half the pace, which only matters in corners
+    (the table stops them at the top speed). Making acceleration stock would
+    need `aiPull`'s scale dropped to 1, leaving the aim and the drivers'
+    behaviour to carry the difficulty.
+- [ ] Think about nitro thrust (high depretion rate, bigger acceleration )vs duration
+  (low depletion, smaller acceleration) trade of confugrable via a NFS_ switch.
+  Follow up: be able to configure it from a slider in the peformance tuning of
+  each car.
 
 ### Music/Sound
 - [x] Sound quality is great and sound works well but volume is still too

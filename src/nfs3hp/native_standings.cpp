@@ -102,13 +102,16 @@ constexpr float kTicksPerSecond = 64.0f;
 // The look.
 constexpr float kPanelAlpha = 0.62f;     // the minimap's own (native_minimap.cpp's kPanelAlpha)
 constexpr float kGrid = 12.0f;           // HUD units between its grid's lines, 0 for none
-constexpr float kPad = 5.0f;             // HUD units inside it
-constexpr float kRowUnits = 13.0f;       // a row's height, HUD units at most
-constexpr float kCapMost = 8.0f;         // a capital's height, HUD units
-constexpr float kRowFill = 0.55f;        // of its height a capital takes
-constexpr float kLeastWidth = 84.0f;     // HUD units, the panel's at least
+constexpr float kListScale = 1.175f;     // the whole list (panel, rows, padding) times this
+constexpr float kLetterScale = 1.2f;     // and its letters times this on top of the size they had
+constexpr float kPad = 5.0f * kListScale;   // HUD units inside it
+constexpr float kRowUnits = 13.0f * kListScale;   // a row's height, HUD units at most
+constexpr float kCapMost = 8.0f * kLetterScale;   // a capital's height, HUD units
+constexpr float kRowFill = 0.55f * kLetterScale / kListScale;   // of its height a capital takes
+constexpr float kLeastWidth = 84.0f * kListScale;   // HUD units, the panel's at least
 constexpr float kColumnSeconds = 3.2f;   // how long each of the two columns is shown
-constexpr int kCarNameMost = 12;         // characters of a car's make and model
+constexpr int kMakeLetters = 4;          // letters of a car's make
+constexpr int kCarNameMost = 13;         // characters of a car's make and model
 constexpr float kTintLeast = 0.55f;   // a dark name's brightest channel lifted to this
 constexpr float kWhite[3] = { 1.0f, 1.0f, 1.0f };
 constexpr float kDashes[3] = { 0.62f, 0.62f, 0.72f };
@@ -250,7 +253,7 @@ const std::string& carName(const std::string& folder)
         SDL_free(loaded);
         if (!make.empty())
         {
-            made = make.substr(0, 3);
+            made = make.substr(0, std::size_t(kMakeLetters));
             while (!made.empty() && made.back() == ' ')
                 made.pop_back();
             if (!made.empty() && !model.empty())
@@ -360,7 +363,7 @@ bool panelOf(win32::WinApplication* app, float& x0, float& y0, float& x1, float&
     const float rowH = SDL_clamp(room, 3.0f, kRowUnits);
     const float height = float(rows) * rowH + 2.0f * kPad;
     const float tableW = float(x86::sreg32(app->getMemory<x86::reg32>(kTableWidth))) * unit;
-    float width = tableW > 0 ? tableW + 2.0f * kPad : bx1 - bx0;
+    float width = tableW > 0 ? (tableW + 2.0f * kPad / kListScale) * kListScale : bx1 - bx0;
     width = SDL_min(width, bx1 - bx0);
     width = SDL_max(width, SDL_min(kLeastWidth, bx1 - bx0));
     const x86::reg8 flags = app->getMemory<x86::reg8>(kRacerFlags + player * 92);
