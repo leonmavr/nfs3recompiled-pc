@@ -405,6 +405,34 @@ point of a tail light's trail had marked the road under it as car -- left out
 of the motion blur and these shadows, so a sharp piece of the car's own shadow
 stood in each, two broken shadows behind the rear wheels.
 
+### Walls a car slides along
+
+A car's walls are tested by `sub_4304b0`: the first corner of its box found in
+a wall goes to `sub_42ee10`, which pushes the car out, takes the corner's speed
+into the wall away -- no bounce, the impulse only stops it -- and calls
+`sub_42e9c0` with the wall's normal (level: `sub_4304b0` zeroes its height).
+That last step is what held cars to the walls. In the car's own frame (its
+matrix at `+0xc0`) it keeps the velocity and the spin along the normal, and
+every tick of the 64 a second that the car touches it multiplies the rest of
+the spin by 0.958 (`[0x5537b4]`) -- the yaw with it, so a car on a wall could
+hardly turn off it -- and every other velocity component over 22 m/s
+(`[0x5537b8]`) by the same: a scrape at 40 m/s was down to 22 in under half a
+second. (Its other branch, the normal along the car's up over 0.9, is a surface
+under the car: a landing, a car on its roof.)
+
+`NFS_WALL_SLIDE` (0.8; `0`/`off` the game's) takes that share of each damping
+away: the spin keeps 0.992 a tick instead of 0.958, and a long scrape still
+costs some speed. And the car is eased off the wall rather than left resting
+on it: 0.12 (`kGive`) of the speed its centre was going into the wall before
+the hit, at most 1.2 m/s (`kGiveMost`), nothing under 1.5 (`kGiveLeast`) -- a
+nudge, never a rebound, bigger the squarer the hit; a car steered on into the
+wall presses it slower than that each tick and keeps against it. Both are
+hooks at the top of the two functions (`wallTest`, `wallFriction` in
+`native_effects.cpp`, `tools/apply_native_effects.py`): the first notes the car
+and its velocity, the second does the game's step with the port's numbers for
+that car's wall only -- ground contacts, track objects and network races are
+the game's. `NFS_WALL_TRACE=1` logs each hit's nudge.
+
 ### Sparks off walls
 
 A car's collision effects come each frame from `sub_42ac40`. What the car
@@ -3702,6 +3730,7 @@ the next time the game starts.
 | `NFS_COP_PACE` | on (`1`) | `0`/`off`: the cops' cars as the game has them. A number up to 3: how much of the tuning (Traffic lighter, cops heavier and faster). |
 | `NFS_SPIKE_STRIPS` | off | `1`: cops lay spike strips (in the making; Spike strips). |
 | `NFS_CAMERA_PULL` | `1.2` | How far back, in metres, the chase camera eases under full throttle; `0`/`off` for none. |
+| `NFS_WALL_SLIDE` | `0.8` | How much less a wall holds a car that touches it -- its spin and its speed over 22 m/s damped that much less each tick -- and a small nudge off it after a hit (at most 1.2 m/s), 0 to 1; `0`/`off` the game's own (Walls a car slides along). |
 | `NFS_SPARKS` | `2` | How many times the sparks of a burst, and whether walls throw them on hits and scrapes; `0`/`off`: the game's own (Sparks off walls). |
 | `NFS_CAR_SHADOW` | on | `0`/`off`: no shadow under the cars (Car shadows). |
 | `NFS_CAR_SUN` | on (`1`) | `0`/`off`: no sunlight on the cars' paint. A number up to 3: how strong the smeared sheen of the sun on the bodies, by how each part faces it, none where the sun is blocked (The sun on the cars' paint). |

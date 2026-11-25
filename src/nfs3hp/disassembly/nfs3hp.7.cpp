@@ -3,6 +3,10 @@
 
 namespace nfs3hp
 {
+// Port (tools/apply_native_effects.py): defined in native_effects.cpp.
+bool wallFriction(win32::WinApplication* app, x86::CPU& cpu);
+// Port (tools/apply_native_effects.py): defined in native_effects.cpp.
+bool wallTest(win32::WinApplication* app, x86::CPU& cpu);
 // Port (tools/apply_object_knock.py): defined in native_objects.cpp.
 void objectHitBefore(win32::WinApplication* app, x86::reg32 car, x86::reg32 index);
 void objectHitAfter(win32::WinApplication* app, x86::reg32 answer);
@@ -7875,6 +7879,11 @@ void Application::sub_42e9c0(WinApplication* __restrict app, x86::CPU& cpu_)
   x86::Local cpu(cpu_);
   NFS2_USE(cpu);
   NFS2_USE(app);
+    if (wallFriction(app, cpu.sync())) /* port: native (tools/apply_native_effects.py) */
+    {
+        cpu.reload();
+        return;
+    }
     // 0042e9c0  53                     -push ebx
     app->getMemory<x86::reg32>(cpu.esp-4) = cpu.ebx;
     cpu.esp -= 4;
@@ -14736,6 +14745,11 @@ void Application::sub_4304b0(WinApplication* __restrict app, x86::CPU& cpu_)
   x86::Local cpu(cpu_);
   NFS2_USE(cpu);
   NFS2_USE(app);
+    if (wallTest(app, cpu.sync())) /* port: native (tools/apply_native_effects.py) */
+    {
+        cpu.reload();
+        return;
+    }
     // 004304b0  53                     -push ebx
     app->getMemory<x86::reg32>(cpu.esp-4) = cpu.ebx;
     cpu.esp -= 4;

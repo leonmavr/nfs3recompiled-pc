@@ -58,6 +58,155 @@ x86::reg32 asBits(float value)
 }  // namespace
 
 bool crashHit(win32::WinApplication* app, x86::CPU& cpu, x86::reg32 car);   // native_crash.cpp
+
+/* Walls a car slides along instead of sticking to (NFS_WALL_SLIDE).
+ *
+ * A wall is tested for each car by sub_4304b0: the first corner of its box in
+ * a wall is handed to sub_42ee10, which pushes the car out, takes the corner's
+ * speed into the wall away (no bounce: the impulse only stops it) and then
+ * calls sub_42e9c0 with the wall's normal.  That last one is what glued cars
+ * to walls.  In the car's own frame it keeps the speed and the spin along the
+ * normal and, every tick of the race's 64 a second that the car touches,
+ * multiplies the rest of the spin by kGameDamping (0.958) -- the yaw included,
+ * so a car on a wall all but cannot turn off it -- and every other component
+ * of its velocity over kGameFast (22 m/s) by the same, a 4% bleed of the speed
+ * a tick: from 40 m/s to the 22 in under half a second of scraping.
+ *
+ * Here, for a wall only -- the car sub_4304b0 is testing, a level normal
+ * (sub_4304b0 zeroes its height) and the car upright against it, the game's
+ * other branch being a surface under the car -- that step is the port's:
+ * the same, but each damping takes off (1 - NFS_WALL_SLIDE) of what the
+ * game's did: 0.8 by default, so the spin keeps 0.992 a tick instead of 0.958
+ * and a long scrape still costs some speed.  And the car is eased off the
+ * wall rather than left resting on it: kGive of the speed its centre was going
+ * into the wall before the hit, at most kGiveMost m/s and nothing under
+ * kGiveLeast -- a nudge, never a rebound, larger the squarer the hit.  Pushing
+ * on into the wall each tick, slower than kGiveLeast, adds none, so a car
+ * steered into a wall keeps against it.  0/off: the game's own.  Not in a
+ * network race, where every machine must drive alike.  NFS_WALL_TRACE logs
+ * each hit's nudge. */
+namespace
+{
+
+constexpr x86::reg32 kRaceKind = 0x6fd3b0;   // 2: a network race
+constexpr x86::reg32 kCarVelocity = 0xa4;    // three floats, the world's
+constexpr x86::reg32 kCarMatrix = 0xc0;      // three rows: right, up, forward
+constexpr x86::reg32 kCarSpin = 0xe4;        // three floats, the world's
+constexpr float kGameDamping = 0.958f;       // [0x5537b4]
+constexpr float kGameFast = 22.0f;           // [0x5537b8], m/s
+constexpr float kGameUnder = 0.9f;           // [0x5373cc]: up . normal over this is a surface under the car
+constexpr float kSlideDefault = 0.8f;        // NFS_WALL_SLIDE's
+constexpr float kGive = 0.12f;               // of the speed into the wall it is eased off by
+constexpr float kGiveMost = 1.2f;            // m/s, at most
+constexpr float kGiveLeast = 1.5f;           // m/s into the wall under which nothing is given
+
+float wallSlideSetting()
+{
+    static const float value = [] {
+        const char* text = SDL_getenv("NFS_WALL_SLIDE");
+        if (!text || !*text || SDL_strcasecmp(text, "on") == 0)
+            return kSlideDefault;
+        if (SDL_strcmp(text, "0") == 0 || SDL_strcasecmp(text, "off") == 0)
+            return 0.0f;
+        const float parsed = float(SDL_atof(text));
+        return parsed > 0.0f ? SDL_min(parsed, 1.0f) : kSlideDefault;
+    }();
+    return value;
+}
+
+/* The car sub_4304b0 is testing, and its velocity before the wall acted. */
+x86::reg32 s_wallCar = 0;
+float s_wallBefore[3] = {};
+
+}  // namespace
+
+/* sub_4304b0 (eax: the car), its top: noted, and the game's test runs. */
+bool wallTest(win32::WinApplication* app, x86::CPU& cpu)
+{
+    s_wallCar = 0;
+    if (wallSlideSetting() <= 0.0f || app->getMemory<x86::reg32>(kRaceKind) == 2)
+        return false;
+    s_wallCar = cpu.eax;
+    for (int k = 0; k < 3; ++k)
+        s_wallBefore[k] = app->getMemory<float>(cpu.eax + kCarVelocity + 4 * k);
+    return false;
+}
+
+/* sub_42e9c0 (eax: the car, edx: the normal, one float on the stack): for a
+ * wall, the port's (above); anything else is the game's. */
+bool wallFriction(win32::WinApplication* app, x86::CPU& cpu)
+{
+    const x86::reg32 car = cpu.eax;
+    if (!car || car != s_wallCar)
+        return false;
+    s_wallCar = 0;
+    const float slide = wallSlideSetting();
+    float n[3], up[3];
+    for (int k = 0; k < 3; ++k)
+    {
+        n[k] = app->getMemory<float>(cpu.edx + 4 * k);
+        up[k] = app->getMemory<float>(car + kCarMatrix + 12 + 4 * k);
+    }
+    if (slide <= 0.0f || n[1] != 0.0f || n[0] * up[0] + n[1] * up[1] + n[2] * up[2] > kGameUnder)
+        return false;
+    float m[3][3], v[3], w[3];
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c)
+            m[r][c] = app->getMemory<float>(car + kCarMatrix + 12 * r + 4 * c);
+    for (int k = 0; k < 3; ++k)
+    {
+        v[k] = app->getMemory<float>(car + kCarVelocity + 4 * k);
+        w[k] = app->getMemory<float>(car + kCarSpin + 4 * k);
+    }
+    // Into the car's frame, as the game does: the matrix times each.
+    auto local = [&](const float a[3], float out[3]) {
+        for (int r = 0; r < 3; ++r)
+            out[r] = m[r][0] * a[0] + m[r][1] * a[1] + m[r][2] * a[2];
+    };
+    auto world = [&](const float a[3], float out[3]) {
+        for (int c = 0; c < 3; ++c)
+            out[c] = a[0] * m[0][c] + a[1] * m[1][c] + a[2] * m[2][c];
+    };
+    float vl[3], wl[3], nl[3];
+    local(v, vl);
+    local(w, wl);
+    local(n, nl);
+    const float damping = 1.0f - (1.0f - kGameDamping) * (1.0f - slide);
+    const float vn = vl[0] * nl[0] + vl[1] * nl[1] + vl[2] * nl[2];
+    const float wn = wl[0] * nl[0] + wl[1] * nl[1] + wl[2] * nl[2];
+    for (int k = 0; k < 3; ++k)
+    {
+        float tangent = vl[k] - nl[k] * vn;
+        if (SDL_fabsf(tangent) > kGameFast)
+            tangent *= damping;
+        vl[k] = tangent + nl[k] * vn;
+        wl[k] = (wl[k] - nl[k] * wn) * damping + nl[k] * wn;
+    }
+    world(vl, v);
+    world(wl, w);
+    // Eased off the wall: by how fast its centre was going into it.
+    const float into = -(s_wallBefore[0] * n[0] + s_wallBefore[1] * n[1] + s_wallBefore[2] * n[2]);
+    if (into > kGiveLeast)
+    {
+        const float give = SDL_min(kGive * into, kGiveMost) * slide / kSlideDefault;
+        const float away = v[0] * n[0] + v[1] * n[1] + v[2] * n[2];
+        const float add = give - SDL_clamp(away, 0.0f, give);
+        if (add > 0.0f)
+            for (int k = 0; k < 3; ++k)
+                v[k] += n[k] * add;
+        if (SDL_getenv("NFS_WALL_TRACE"))
+            SDL_Log("[WALL] car %08x into the wall at %.1f m/s, eased off by %.2f", unsigned(car), double(into),
+                    double(add));
+    }
+    for (int k = 0; k < 3; ++k)
+    {
+        app->getMemory<float>(car + kCarVelocity + 4 * k) = v[k];
+        app->getMemory<float>(car + kCarSpin + 4 * k) = w[k];
+    }
+    cpu.esp += 4 + 4;   // ret 4: the return address and the hit's speed
+    return true;
+}
+
 bool skidPedals(win32::WinApplication* app, x86::CPU& cpu, x86::reg32 car);   // native_skids.cpp
 
 bool collisionEffects(win32::WinApplication* app, x86::CPU& cpu)

@@ -20,6 +20,10 @@ SITES = [
     # A particle made (its kind in eax): the dust, dirt, snow and sparks taken
     # over by the port's own (native_particles.cpp).
     ("nfs3hp", "sub_4ca850", "particleSpawn"),
+    # A car's walls tested (the car noted), and the wall's grip on it after a
+    # hit: walls a car slides along (NFS_WALL_SLIDE).
+    ("nfs3hp", "sub_4304b0", "wallTest"),
+    ("nfs3hp", "sub_42e9c0", "wallFriction"),
 ]
 
 

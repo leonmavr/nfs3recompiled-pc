@@ -635,12 +635,19 @@ low-cost solutions. We want the game to be playable on low-end CPUs too.
     no car in front, not reversing: put back on the road at once (`unstick`,
     `hitObstacleAhead`, `native_ai.cpp`; TECHNICAL.md, "The opponents'
     driving, tuned").
-- [ ] Wall collisions; current collisions of any car with the wall make it stick
+- [x] Wall collisions; current collisions of any car with the wall make it stick
   to the wall. Make collisions more elastic, preventing exessive sticking.
   Obvious the more normal the direction of the collision to the wall is , the
   bigger the kick from it. It's colission physics with near-elastic collision.
   How close to elastic? You can make a NFS_ switch for it and 0 disables this
   behavior and reverts to old collision mechanics.
+  - Done (2026-11-25), tested: the stick was the game's wall friction
+    (`sub_42e9c0`) damping the car's spin -- yaw included -- and its speed
+    over 22 m/s by 4% every tick it touched. `NFS_WALL_SLIDE` (0.8; `0`/`off`
+    the game's) takes most of that away and gives a small nudge off after a
+    hit, at most 1.2 m/s, so no hard rebounds (`wallFriction`,
+    `native_effects.cpp`; TECHNICAL.md, "Walls a car slides along"). An
+    earlier try today (`NFS_WALL_BOUNCE`, turning the velocity) was removed.
 
 ### UI
 - [ ] Figure out how to add/create menu elements without breaking the visual
